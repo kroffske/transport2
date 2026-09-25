@@ -1,5 +1,170 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-25T18:39:36.509Z",
-  "tasks": []
+  "generated_at": "2026-09-25T19:49:29.202Z",
+  "tasks": [
+    {
+      "id": "T-3",
+      "title": "Получить первую валидную ML-модель и submission",
+      "status": "planned",
+      "type": "feature",
+      "priority": "p0",
+      "owner": "manager",
+      "created_at": "2026-09-25T19:32:16.466Z",
+      "updated_at": "2026-09-25T19:47:13.634Z",
+      "stream": "T",
+      "path": "T-3-2026-09-25-ml-submission",
+      "work_items_total": 5,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "T-3/data-audit — аудит данных и EDA",
+        "T-3/baseline — split и обязательные baseline",
+        "T-3/modeling — ограниченное сравнение моделей",
+        "T-3/evaluation — locked evaluation и submission",
+        "Независимая QA модельного пути"
+      ],
+      "subtask_count": 4,
+      "last_event": "2026-09-25T19:47:13.639Z",
+      "latest_status_note": {
+        "ts": "2026-09-25T19:32:16.476Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "workflow profile 'feature' selected (type-profile)",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
+      "parent_id": "",
+      "subtasks": [
+        {
+          "id": "T-3-baseline",
+          "title": "Зафиксировать point-in-time split и baseline",
+          "status": "planned",
+          "type": "feature",
+          "priority": "p0",
+          "owner": "manager",
+          "created_at": "2026-09-25T19:32:30.856Z",
+          "updated_at": "2026-09-25T19:47:13.908Z",
+          "stream": "T",
+          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-baseline-point-in-time-split-baseline",
+          "work_items_total": 2,
+          "work_items_done": 0,
+          "work_items_remaining": [
+            "Реализовать split manifest и evaluator",
+            "Рассчитать baseline table"
+          ],
+          "subtask_count": 0,
+          "last_event": "2026-09-25T19:47:13.913Z",
+          "latest_status_note": null,
+          "parent_id": "T-3",
+          "subtasks": []
+        },
+        {
+          "id": "T-3-data-audit",
+          "title": "Провести аудит данных и EDA",
+          "status": "planned",
+          "type": "research",
+          "priority": "p0",
+          "owner": "manager",
+          "created_at": "2026-09-25T19:32:30.710Z",
+          "updated_at": "2026-09-25T19:47:13.772Z",
+          "stream": "T",
+          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-data-audit-eda",
+          "work_items_total": 2,
+          "work_items_done": 0,
+          "work_items_remaining": [
+            "Создать data-quality evidence и EDA notebook",
+            "Передать split recommendations"
+          ],
+          "subtask_count": 0,
+          "last_event": "2026-09-25T19:47:13.777Z",
+          "latest_status_note": null,
+          "parent_id": "T-3",
+          "subtasks": []
+        },
+        {
+          "id": "T-3-evaluation",
+          "title": "Провести финальную оценку и собрать submission",
+          "status": "planned",
+          "type": "feature",
+          "priority": "p0",
+          "owner": "manager",
+          "created_at": "2026-09-25T19:32:31.173Z",
+          "updated_at": "2026-09-25T19:47:14.171Z",
+          "stream": "T",
+          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-evaluation-submission",
+          "work_items_total": 3,
+          "work_items_done": 0,
+          "work_items_remaining": [
+            "Выполнить зафиксированную локальную оценку",
+            "Собрать и проверить submission",
+            "Подготовить result handoff"
+          ],
+          "subtask_count": 0,
+          "last_event": "2026-09-25T19:47:14.176Z",
+          "latest_status_note": null,
+          "parent_id": "T-3",
+          "subtasks": []
+        },
+        {
+          "id": "T-3-modeling",
+          "title": "Сравнить модели и выбрать финальный кандидат",
+          "status": "planned",
+          "type": "feature",
+          "priority": "p0",
+          "owner": "manager",
+          "created_at": "2026-09-25T19:32:31.020Z",
+          "updated_at": "2026-09-25T19:47:14.039Z",
+          "stream": "T",
+          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-modeling",
+          "work_items_total": 3,
+          "work_items_done": 0,
+          "work_items_remaining": [
+            "Сравнить direct и residual CatBoost",
+            "Проверить оправданную дополнительную модель",
+            "Зафиксировать финального кандидата"
+          ],
+          "subtask_count": 0,
+          "last_event": "2026-09-25T19:47:14.044Z",
+          "latest_status_note": null,
+          "parent_id": "T-3",
+          "subtasks": []
+        }
+      ]
+    },
+    {
+      "id": "T-4",
+      "title": "Собрать системный контур Backend, dashboard и infra",
+      "status": "draft",
+      "type": "feature",
+      "priority": "p1",
+      "owner": "manager",
+      "created_at": "2026-09-25T19:32:16.620Z",
+      "updated_at": "2026-09-25T19:32:16.620Z",
+      "stream": "T",
+      "path": "T-4-2026-09-25-backend-dashboard-infra",
+      "work_items_total": 6,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "Backend и NDTP ingest",
+        "Политика алертов и раннее предупреждение",
+        "ML serving seam",
+        "Диспетчерский dashboard",
+        "Docker, документация и end-to-end runbook",
+        "Performance и reliability"
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-25T19:32:16.631Z",
+      "latest_status_note": {
+        "ts": "2026-09-25T19:32:16.631Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "workflow profile 'feature' selected (type-profile)",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
+      "parent_id": "",
+      "subtasks": []
+    }
+  ]
 }
