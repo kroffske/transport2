@@ -157,11 +157,10 @@ def replay(args: argparse.Namespace) -> dict:
     try:
         for row in rows.itertuples(index=False):
             target_elapsed = (row.receive_time - first_receive).total_seconds() / args.speedup
-            wait = start_monotonic + target_elapsed - time.monotonic()
+            target_send = start_monotonic + target_elapsed
+            wait = target_send - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
-            lateness = max(0.0, time.monotonic() - start_monotonic - target_elapsed)
-            max_lateness = max(max_lateness, lateness)
             unit_id = int(row.unit_id)
             if unit_id not in sockets:
                 sock = socket.create_connection((args.host, args.port), timeout=args.timeout)
@@ -181,10 +180,15 @@ def replay(args: argparse.Namespace) -> dict:
                 prior_revision = int(advance["processed_revision"])
             packet, quantization = navigation(pd.Series(row._asdict()), request_ids[unit_id],
                                               dataset_origin, args.epoch_origin)
+            send_unix_ns = time.time_ns()
+            send_monotonic_ns = time.monotonic_ns()
+            max_lateness = max(max_lateness, max(0.0, send_monotonic_ns / 1e9 - target_send))
             sockets[unit_id].sendall(packet)
             acknowledged = (wait_for_ack(args.backend_url, prior_revision, unit_id,
                                          request_ids[unit_id], args.timeout)
                             if args.backend_url else None)
+            ack_monotonic_ns = time.monotonic_ns() if acknowledged else None
+            ack_unix_ns = time.time_ns() if acknowledged else None
             if acknowledged and acknowledged["outcome"] == "duplicate":
                 duplicate += 1
             sent += 1
@@ -194,7 +198,10 @@ def replay(args: argparse.Namespace) -> dict:
                                         "event_time": row.event_time.isoformat(),
                                         "source_receive_time": row.receive_time.isoformat(),
                                         "ndtp_request_id": request_ids[unit_id],
-                                        "send_monotonic_ns": time.monotonic_ns(),
+                                        "send_monotonic_ns": send_monotonic_ns,
+                                        "ack_monotonic_ns": ack_monotonic_ns,
+                                        "send_unix_ns": send_unix_ns,
+                                        "ack_unix_ns": ack_unix_ns,
                                         "ack": acknowledged,
                                         "quantization": quantization},
                                        ensure_ascii=False, allow_nan=False) + "\n")

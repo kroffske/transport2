@@ -1,16 +1,80 @@
 services:
   ml:
     build: .
+    command: ["uvicorn", "transport_ml.service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      MODEL_DIR: /models
+    volumes:
+      - ${MODEL_DIR:-./.local/validate-tuning-2026-09-26}:/models:ro
     ports:
       - "8000:8000"
-    environment:
-      MODEL_DIR: /models/context
-      FALLBACK_MODEL_DIR: /models/core
-    volumes:
-      - ./artifacts:/models:ro
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
-      interval: 20s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=2)"]
+      interval: 5s
       timeout: 3s
-      retries: 3
+      retries: 6
+
+  backend:
+    build: .
+    command: ["uvicorn", "transport_backend.service:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+    environment:
+      DATA_DIR: /data
+      MODEL_URL: http://ml:8000
+      SOURCE_CLOCK: ${SOURCE_CLOCK:-dataset_wall}
+      NDTP_HOST: 0.0.0.0
+      NDTP_PORT: "9201"
+    volumes:
+      - ${DATA_DIR:-./data}:/data:ro
+    ports:
+      - "8001:8001"
+      - "9201:9201"
+    depends_on:
+      ml:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  consumer:
+    build: .
+    command: ["uvicorn", "consumer.service:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "1"]
+    environment:
+      BACKEND_URL: http://backend:8001
+    ports:
+      - "8002:8002"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  replay:
+    profiles: ["demo"]
+    build: .
+    command:
+      - python
+      - scripts/replay_ndtp.py
+      - --traffic
+      - /data/validate/traffic.csv
+      - --host
+      - backend
+      - --port
+      - "9201"
+      - --backend-url
+      - http://backend:8001
+      - --start
+      - "2026-01-06 03:20:00"
+      - --end
+      - "2026-01-06 03:45:00"
+      - --speedup
+      - "30"
+    volumes:
+      - ${DATA_DIR:-./data}:/data:ro
+    depends_on:
+      consumer:
+        condition: service_healthy
