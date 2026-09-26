@@ -16,6 +16,7 @@ from .data import POINT_COLUMNS, file_manifest, prepare_plan, prepare_traffic, v
 from .features import FeatureBuilder
 
 SCHEMA_VERSION = "transport.ml-prediction.v1"
+ORIGINS_SHA256 = "cb5d80f1546a793494c80e108642418d330d675ddf616ec9f56815206eb1f3f8"
 MODEL_CLOCK_ORIGIN = pd.Timestamp("2026-01-06")
 SUPPORTED_PREDICTION_START = pd.Timestamp("2026-01-06 00:00:00")
 SUPPORTED_PREDICTION_END = pd.Timestamp("2026-01-07 00:30:00")
@@ -39,7 +40,10 @@ class FinalModel:
                 raise ValueError("MODEL_DIR does not contain the selected final model")
             if self.metadata["selected_candidate"] != "canonical_rmse_d8" or self.metadata["target"] != "direct":
                 raise ValueError("Unsupported final model metadata")
-            origins = pd.read_csv(self.directory / "vehicle_origins.csv", dtype={"tr_id": str, "origin_vehicle": str})
+            origins_path = self.directory / "vehicle_origins.csv"
+            if file_manifest([origins_path])[0]["sha256"] != ORIGINS_SHA256:
+                raise ValueError("vehicle_origins.csv differs from selected origin mapping")
+            origins = pd.read_csv(origins_path, dtype={"tr_id": str, "origin_vehicle": str})
             if origins.duplicated("tr_id").any() or origins[["tr_id", "origin_vehicle", "shift_ns"]].isna().any().any():
                 raise ValueError("Invalid vehicle_origins.csv")
             shifts = pd.to_numeric(origins["shift_ns"], errors="raise")

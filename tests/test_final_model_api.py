@@ -189,3 +189,20 @@ def test_missing_and_corrupt_artifact_fail_readiness(inputs, tmp_path):
             assert client.get("/ready").status_code == 503
             request = request_for(inputs[0].iloc[0], inputs[1], inputs[2])
             assert client.post("/v1/predict", json=request).status_code == 503
+
+
+def test_alternate_valid_origin_mapping_fails_readiness(inputs, tmp_path):
+    (tmp_path / "final_model.json").write_bytes((MODEL / "final_model.json").read_bytes())
+    (tmp_path / "final_model.cbm").symlink_to(MODEL / "final_model.cbm")
+    origins = pd.read_csv(MODEL / "vehicle_origins.csv", dtype={"tr_id": str, "origin_vehicle": str})
+    vehicle = inputs[0].iloc[0].tr_id
+    original = origins.loc[origins.tr_id == vehicle, "origin_vehicle"].iloc[0]
+    replacement = origins.loc[origins.origin_vehicle != original, "origin_vehicle"].iloc[0]
+    origins.loc[origins.tr_id == vehicle, "origin_vehicle"] = replacement
+    origins.to_csv(tmp_path / "vehicle_origins.csv", index=False)
+    with TestClient(create_app(tmp_path)) as client:
+        ready = client.get("/ready")
+        assert ready.status_code == 503
+        assert "vehicle_origins.csv differs" in ready.json()["detail"]
+        request = request_for(inputs[0].iloc[0], inputs[1], inputs[2])
+        assert client.post("/v1/predict", json=request).status_code == 503
