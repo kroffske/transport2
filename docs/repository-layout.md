@@ -24,8 +24,11 @@ description: "Текущая раскладка репозитория и вла
 ```text
 transport2/
 ├── README.md
-├── transport_ml/                  # существующее ML-ядро и FastAPI-сервис
-├── tests/                         # тесты исходного решения
+├── transport_ml/                  # ML features, выбранный artifact и stateless API
+├── transport_backend/             # NDTP/state/schedule и HTTP orchestration
+├── consumer/                      # минимальный live HTTP consumer
+├── scripts/                       # historical NDTP sender и измерения
+├── tests/                         # ML, NDTP, Backend и consumer contracts
 ├── artifacts/                     # исходные модели, метрики и результаты
 ├── Dockerfile
 ├── compose.yaml
@@ -43,8 +46,9 @@ transport2/
 │   └── emulator/                  # локальный Docker-образ эмулятора
 ├── docs/
 │   ├── source/official/           # исходная постановка и критерии
-│   ├── api/                       # существующая OpenAPI-спецификация
-│   ├── pydoc/                     # существующая PyDoc-документация
+│   ├── api/                       # текущие OpenAPI и Backend v1 contract
+│   ├── pydoc/                     # исторический PyDoc snapshot
+│   ├── runbooks/                  # текущий Docker demo и model provenance
 │   ├── repository-layout.md
 │   └── source-map.md
 ├── reference/
@@ -53,10 +57,12 @@ transport2/
 └── dashboard/                     # будущий диспетчерский интерфейс
 ```
 
-## Владение будущими компонентами
+## Владение компонентами
 
-- `transport_ml/` владеет подготовкой признаков, обучением, схемой модели и инференсом. Текущий `service.py` остаётся здесь как часть исходного решения; выделение самостоятельного ML-сервиса требует отдельного изменения.
-- Будущий Backend должен владеть приёмом NDTP, состоянием потока, сопоставлением `unit_id` и `tr_id`, расписанием, оркестрацией прогнозов и API для дашборда. Для него пока не создан фиктивный кодовый каркас.
+- `transport_ml/` владеет подготовкой признаков, обучением, схемой модели и инференсом. `service.py` обслуживает выбранный final artifact отдельным stateless HTTP API; NDTP state ему не принадлежит.
+- `transport_backend/` владеет NDTP TCP boundary, bounded telemetry, unit mapping, source clocks, планом, computed current deviation и HTTP orchestration. Оно передаёт ML только разрешённые point/telemetry/plan поля.
+- `consumer/` владеет минимальным polling view и возрастом последнего HTTP snapshot. Оно читает Backend API, не model/data files, и не заменяет полный BI.
+- `scripts/` владеет source replay transport: CSV читается sender, а Backend узнаёт данные через NDTP по одному подтверждённому кадру.
 - `dashboard/` предназначен для карты, риска, карточек инцидентов и метрик. README в каталоге фиксирует контракт, но не изображает готовую реализацию.
 - `notebooks/` предназначен для аудита данных, экспериментов и воспроизводимого обучения. Производственный код не должен жить только в ноутбуках.
 - `data/` — локальный неизменяемый вход. Производные таблицы и кэши в будущем должны получить отдельные подкаталоги и правила воспроизводимости.

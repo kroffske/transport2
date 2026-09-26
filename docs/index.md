@@ -24,11 +24,13 @@ description: "Навигация дополнена PRD, scorecard и проек
 - [Спецификация NDTP и эмулятора](../data/docs/Emulator-and-Telematic-Packets-Specification.md) — потоковый протокол и запуск эмулятора.
 - [Передача текущей модели и интеграции](runbooks/integration-handoff.md) — актуальный ML-кандидат, локальные зависимости и границы следующего этапа.
 - [Backend v1](api/backend-v1.md) — контракт часов, NDTP readback и live consumer для T-4.
+- [Локальный NDTP demo](runbooks/local-demo.md) — Docker-запуск, historical replay, официальный эмулятор и актуальные API/PyDoc команды.
 
 ## Generated reference
 
-- [OpenAPI](api/openapi.json) — снимок спецификации начального решения.
-- `pydoc/` — снимок сгенерированной Python-документации.
+- [ML OpenAPI](api/openapi.json) — спецификация текущей точечной модели и readiness.
+- [Backend OpenAPI](api/backend-openapi.json) и [Consumer OpenAPI](api/consumer-openapi.json) — текущие HTTP seams.
+- `pydoc/` — исторический снимок Python-документации; актуальные команды находятся в runbook.
 
 ## Preserved sources
 
@@ -36,10 +38,9 @@ description: "Навигация дополнена PRD, scorecard и проек
 
 ## Gaps
 
-- Локальное ML-обучение и submission проверены; актуальный кандидат пока не интегрирован в сервис.
-- Нет отдельного Backend для NDTP-потока.
-- BI-дашборд ещё не реализован.
-- Импорты, пути и Docker-конфигурация после объединения ещё не проверены и не исправлены.
+- Текущий кандидат подключён к отдельному ML API; NDTP Backend и минимальный live consumer прошли Docker readback.
+- BI-дашборд и карта ещё не реализованы; consumer не закрывает C4.
+- Platform score и независимое onset/lead-time evidence отсутствуют. Общая QA и performance evidence ведутся в T-4.
 
 ## Project direction
 

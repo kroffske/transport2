@@ -61,4 +61,6 @@ updated: "2026-09-26T00:00:00Z"
 
 Backend отправляет ML только восемь разрешённых полей telemetry: `tr_id`, `event_time`, `receive_time`, `location_valid`, `lon`, `lat`, `speed`, `heading`. Внутренние `unit_id`, `packet_id`, `session_id`, `source_clock` и host clock в строгий `POST /v1/predict` не передаются. План ограничен `tt_action_item_id`, `tr_id`, `time_begin`, `geom`. Фактическое расписание не входит в runtime inference.
 
+Для измерений row дополнительно содержит `input_frame_id`, `input_request_id`, `input_session_id`, `input_received_at_utc` и `published_unix_ns`. Новый прогноз сохраняет `prediction_input_frame_id` и `prediction_published_unix_ns`; при сбое эти поля остаются у прежнего success. Publication timestamps относятся к реальному Unix wall clock, а не к dataset/replay time. Monotonic clocks разных host/container domains напрямую не вычитаются; измеритель проверяет wall-clock alignment и отдельно хранит локальные monotonic интервалы.
+
 Источник: [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md), [NDTP spec](../../data/docs/Emulator-and-Telematic-Packets-Specification.md), `transport_ml.data.TRAFFIC_COLUMNS`, W1/W2 commits `b67af516`/`e009861c`.

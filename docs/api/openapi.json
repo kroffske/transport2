@@ -1,14 +1,14 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Transport Delay ML",
-    "version": "0.1.0"
+    "title": "Transport Final Model API",
+    "version": "transport.ml-prediction.v1"
   },
   "paths": {
-    "/health": {
+    "/ready": {
       "get": {
-        "summary": "Health",
-        "operationId": "health_health_get",
+        "summary": "Ready",
+        "operationId": "ready_ready_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -40,7 +40,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PredictionResponse"
+                }
               }
             }
           },
@@ -77,23 +79,29 @@
         "properties": {
           "sample_id": {
             "type": "string",
+            "minLength": 1,
             "title": "Sample Id"
           },
           "tr_id": {
             "type": "string",
+            "minLength": 1,
             "title": "Tr Id"
           },
           "T": {
             "type": "string",
-            "title": "T"
+            "title": "T",
+            "description": "Naive dataset-wall prediction time; no timezone conversion"
           },
           "target_stop_id": {
             "type": "string",
-            "title": "Target Stop Id"
+            "minLength": 1,
+            "title": "Target Stop Id",
+            "description": "tt_action_item_id of the planned arrival"
           },
           "target_time_begin": {
             "type": "string",
-            "title": "Target Time Begin"
+            "title": "Target Time Begin",
+            "description": "Naive dataset-wall planned arrival in (T+600s, T+900s]"
           },
           "cur_dev_s": {
             "type": "number",
@@ -119,29 +127,225 @@
           },
           "telemetry": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/Telemetry"
             },
             "type": "array",
             "maxItems": 2000,
-            "title": "Telemetry"
+            "title": "Telemetry",
+            "description": "Last 900 seconds of event/receive-time telemetry; may be empty"
           },
           "schedule_plan": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ScheduleArrival"
             },
             "type": "array",
             "maxItems": 2000,
-            "title": "Schedule Plan"
+            "minItems": 1,
+            "title": "Schedule Plan",
+            "description": "Known planned arrivals for this vehicle, including the exact target and predecessor; facts are ignored"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "point"
+          "point",
+          "telemetry",
+          "schedule_plan"
         ],
         "title": "PredictionRequest"
+      },
+      "PredictionResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "artifact_sha256": {
+            "type": "string",
+            "title": "Artifact Sha256"
+          },
+          "sample_id": {
+            "type": "string",
+            "title": "Sample Id"
+          },
+          "prediction_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prediction S"
+          },
+          "predicted_arrival": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predicted Arrival"
+          },
+          "applicability": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "unavailable"
+            ],
+            "title": "Applicability"
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "degraded",
+              "unavailable"
+            ],
+            "title": "Quality"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "unsupported_vehicle",
+                  "unsupported_day",
+                  "stale_or_missing_telemetry"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schema_version",
+          "model_version",
+          "artifact_sha256",
+          "sample_id",
+          "prediction_s",
+          "predicted_arrival",
+          "applicability",
+          "quality",
+          "reason"
+        ],
+        "title": "PredictionResponse"
+      },
+      "ScheduleArrival": {
+        "properties": {
+          "tt_action_item_id": {
+            "type": "string",
+            "title": "Tt Action Item Id"
+          },
+          "tr_id": {
+            "type": "string",
+            "title": "Tr Id"
+          },
+          "time_begin": {
+            "type": "string",
+            "title": "Time Begin"
+          },
+          "geom": {
+            "type": "string",
+            "title": "Geom"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tt_action_item_id",
+          "tr_id",
+          "time_begin",
+          "geom"
+        ],
+        "title": "ScheduleArrival"
+      },
+      "Telemetry": {
+        "properties": {
+          "tr_id": {
+            "type": "string",
+            "title": "Tr Id"
+          },
+          "event_time": {
+            "type": "string",
+            "title": "Event Time"
+          },
+          "receive_time": {
+            "type": "string",
+            "title": "Receive Time"
+          },
+          "location_valid": {
+            "type": "boolean",
+            "title": "Location Valid"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          },
+          "heading": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heading"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tr_id",
+          "event_time",
+          "receive_time",
+          "location_valid",
+          "lon",
+          "lat",
+          "speed",
+          "heading"
+        ],
+        "title": "Telemetry"
       },
       "ValidationError": {
         "properties": {
