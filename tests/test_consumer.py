@@ -1,0 +1,158 @@
+"""Exercise live consumer polling against an actual local Backend HTTP server."""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from threading import Thread
+import time
+
+from fastapi.testclient import TestClient
+
+from consumer.service import create_app
+
+
+def vehicle(prediction: float | None, revision: int, status: str = "normal") -> dict:
+    return {
+        "tr_id": "131672", "unit_id": 123, "lon": 37.6, "lat": 55.7,
+        "location_valid": True, "event_time": "2026-01-06T03:34:55",
+        "receive_time": "2026-01-06T03:35:00", "gps_age_s": 5.0,
+        "target_stop_id": "53700172828", "target_time_begin": "2026-01-06T03:50:00",
+        "cur_dev_s": 95.0, "cur_dev_source": "computed_stop",
+        "prediction_s": prediction, "predicted_arrival": "2026-01-06T03:52:00" if prediction is not None else None,
+        "model_version": "canonical_rmse_d8" if prediction is not None else None,
+        "status": status, "reason": None if status == "normal" else "ml_timeout",
+        "last_success_at": "2026-01-06T03:35:00", "revision": revision,
+    }
+
+
+def snapshot(revision: int, prediction: float | None, status: str = "normal") -> dict:
+    return {
+        "schema_version": "transport.backend-vehicles.v1", "revision": revision,
+        "source_clock": "dataset_wall", "clock_time": "2026-01-06T03:35:00",
+        "vehicles": [vehicle(prediction, revision, status)],
+        "ingest": {"accepted": revision, "dropped": 0, "errors": 0, "queue_depth": 0},
+    }
+
+
+@contextmanager
+def fake_backend():
+    class Backend(ThreadingHTTPServer):
+        mode = "ok"
+        payload = snapshot(12, 120.0)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            assert self.path == "/v1/vehicles"
+            if self.server.mode == "timeout":
+                time.sleep(0.2)
+            status = 503 if self.server.mode == "unavailable" else 200
+            body = json.dumps(self.server.payload).encode()
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except BrokenPipeError:
+                pass
+
+        def log_message(self, *args):
+            pass
+
+    server = Backend(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server, f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+
+def test_revisions_predictions_outages_and_recovery_over_http():
+    with fake_backend() as (backend, url), TestClient(create_app(url, timeout_s=0.05)) as consumer:
+        page = consumer.get("/")
+        assert page.status_code == 200
+        assert "fetch('/api/snapshot'" in page.text
+        assert "id=\"vehicles\"" in page.text
+        assert consumer.get("/ready").json() == {"status": "ready"}
+
+        first = consumer.get("/api/snapshot").json()
+        assert first["status"] == "online"
+        assert first["snapshot"]["revision"] == 12
+        assert first["snapshot"]["vehicles"][0]["prediction_s"] == 120.0
+        assert first["age_s"] == 0
+
+        backend.payload = snapshot(13, 187.5)
+        second = consumer.get("/api/snapshot").json()
+        assert second["status"] == "online"
+        assert second["snapshot"]["revision"] == 13
+        assert second["snapshot"]["vehicles"][0]["prediction_s"] == 187.5
+
+        backend.mode = "timeout"
+        time.sleep(0.02)
+        timed_out = consumer.get("/api/snapshot").json()
+        assert timed_out["status"] == "offline"
+        assert "timed out" in timed_out["reason"].lower()
+        assert timed_out["snapshot"] == second["snapshot"]
+        assert timed_out["fetched_at"] == second["fetched_at"]
+        assert timed_out["age_s"] > 0
+
+        backend.mode = "unavailable"
+        unavailable = consumer.get("/api/snapshot").json()
+        assert unavailable["status"] == "offline"
+        assert "503" in unavailable["reason"]
+        assert unavailable["snapshot"]["revision"] == 13
+        assert unavailable["fetched_at"] == second["fetched_at"]
+        assert unavailable["age_s"] >= timed_out["age_s"]
+
+        backend.mode = "ok"
+        backend.payload = snapshot(14, 213.0)
+        recovered = consumer.get("/api/snapshot").json()
+        assert recovered["status"] == "online"
+        assert recovered["snapshot"]["revision"] == 14
+        assert recovered["snapshot"]["vehicles"][0]["prediction_s"] == 213.0
+        assert recovered["fetched_at"] != second["fetched_at"]
+        assert recovered["age_s"] == 0
+
+
+def test_backend_degraded_and_missing_values_are_not_replaced():
+    with fake_backend() as (backend, url), TestClient(create_app(url)) as consumer:
+        backend.payload = snapshot(15, 187.5, "degraded")
+        backend.payload["vehicles"][0].update({
+            "lon": None, "lat": None, "location_valid": False,
+            "cur_dev_s": None, "model_version": None,
+        })
+        result = consumer.get("/api/snapshot").json()
+        assert result["status"] == "online"
+        row = result["snapshot"]["vehicles"][0]
+        assert row["status"] == "degraded"
+        assert row["reason"] == "ml_timeout"
+        assert row["cur_dev_s"] is None
+        assert row["location_valid"] is False
+        assert row["prediction_s"] == 187.5
+        assert "последний известный" in consumer.get("/").text
+
+
+def test_initial_failure_and_bad_schema_do_not_claim_fresh_data():
+    with fake_backend() as (backend, url), TestClient(create_app(url)) as consumer:
+        backend.mode = "unavailable"
+        failed = consumer.get("/api/snapshot").json()
+        assert failed["status"] == "offline"
+        assert failed["snapshot"] is None
+        assert failed["fetched_at"] is None
+        assert failed["age_s"] is None
+        assert consumer.get("/ready").json() == {"status": "ready"}
+
+        backend.mode = "ok"
+        backend.payload = snapshot(16, None)
+        online = consumer.get("/api/snapshot").json()
+        assert online["snapshot"]["vehicles"][0]["prediction_s"] is None
+        backend.payload = {"schema_version": "unexpected", "revision": 17, "vehicles": []}
+        bad_schema = consumer.get("/api/snapshot").json()
+        assert bad_schema["status"] == "offline"
+        assert "schema_version" in bad_schema["reason"]
+        assert bad_schema["snapshot"] == online["snapshot"]
