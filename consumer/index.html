@@ -81,10 +81,18 @@
       for (const vehicle of snapshot.vehicles) {
         const row = document.createElement('tr');
         const stale = offline || vehicle.status !== 'normal';
+        const gpsAge = vehicle.gps_age_s == null ? 'unknown' : known(vehicle.gps_age_s) + ' s';
+        const hasCoordinates = vehicle.lon != null && vehicle.lat != null;
+        let coordinates = 'unknown';
+        if (hasCoordinates) {
+          coordinates = known(vehicle.lon) + ' / ' + known(vehicle.lat);
+          if (vehicle.location_valid === false) coordinates += ' (последняя достоверная; возраст GPS: ' + gpsAge + ')';
+          else if (vehicle.location_valid !== true) coordinates += ' (валидность unknown)';
+        }
         cell(row, known(vehicle.tr_id) + ' / ' + known(vehicle.unit_id));
-        cell(row, vehicle.location_valid === true ? known(vehicle.lon) + ' / ' + known(vehicle.lat) : 'unknown (location invalid)');
+        cell(row, coordinates, stale || vehicle.location_valid !== true);
         cell(row, known(vehicle.event_time) + ' / ' + known(vehicle.receive_time));
-        cell(row, known(vehicle.gps_age_s) + ' s');
+        cell(row, gpsAge);
         cell(row, known(vehicle.target_stop_id) + ' / ' + known(vehicle.target_time_begin));
         cell(row, known(vehicle.cur_dev_s) + ' / ' + known(vehicle.cur_dev_source));
         const prediction = known(vehicle.prediction_s) + ' / ' + known(vehicle.model_version);

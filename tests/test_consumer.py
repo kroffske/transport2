@@ -137,6 +137,22 @@ def test_backend_degraded_and_missing_values_are_not_replaced():
         assert "последний известный" in consumer.get("/").text
 
 
+def test_invalid_latest_location_keeps_last_valid_coordinates_and_age():
+    with fake_backend() as (backend, url), TestClient(create_app(url)) as consumer:
+        backend.payload = snapshot(16, 187.5, "degraded")
+        backend.payload["vehicles"][0].update({
+            "location_valid": False, "lon": 37.6, "lat": 55.7, "gps_age_s": 42.0,
+            "reason": "invalid_latest_gps",
+        })
+        result = consumer.get("/api/snapshot").json()
+        row = result["snapshot"]["vehicles"][0]
+        assert result["status"] == "online"
+        assert (row["lon"], row["lat"], row["gps_age_s"]) == (37.6, 55.7, 42.0)
+        assert row["location_valid"] is False
+        assert row["status"] == "degraded"
+        assert "последняя достоверная; возраст GPS" in consumer.get("/").text
+
+
 def test_initial_failure_and_bad_schema_do_not_claim_fresh_data():
     with fake_backend() as (backend, url), TestClient(create_app(url)) as consumer:
         backend.mode = "unavailable"
