@@ -29,10 +29,16 @@ class Arrival:
 
 
 @dataclass
+class StopObservation:
+    event_time: datetime
+    frame_id: str
+
+
+@dataclass
 class StopProgress:
     """One first observation per known planned arrival; no retained GPS stream."""
 
-    first_events: dict[str, datetime] = field(default_factory=dict)
+    first_observations: dict[str, StopObservation] = field(default_factory=dict)
     seen_frames: set[str] = field(default_factory=set)
     last_stop: Arrival | None = None
     last_evidence_event: datetime | None = None
@@ -80,7 +86,8 @@ class Schedule:
         belong to this detector, not the ML rolling window. Each vehicle retains
         at most one event per planned arrival plus IDs in the bounded state
         history supplied by its caller. Late evidence never reverses the
-        committed stop sequence or changes a recorded first observation.
+        committed stop sequence. A same-event correction can retract its GPS
+        evidence; future confidence then requires a confirmed stop again.
         """
         stops = self.by_vehicle.get(tr_id, ())
         if not stops:
@@ -97,24 +104,33 @@ class Schedule:
         new.sort(key=lambda row: (str(row["receive_time"]), str(row["received_at_utc"])))
         for row in new:
             event = datetime.fromisoformat(str(row["event_time"]))
-            if not row["location_valid"]:
-                continue
             speed = row["speed"]
             lon, lat = row["lon"], row["lat"]
-            if (speed is None or lon is None or lat is None
-                    or not all(math.isfinite(float(x)) for x in (speed, lon, lat))
-                    or float(speed) > self.stop_speed_kmh):
-                continue
             near: list[int] = []
-            times = self._times[tr_id]
-            start = bisect_left(times, event - timedelta(seconds=self.observation_lag_s))
-            end = bisect_right(times, event + timedelta(seconds=60))
-            for index in range(start, end):
-                stop = stops[index]
-                if not math.isfinite(stop.lon) or not math.isfinite(stop.lat):
-                    continue
-                if _distance_m(float(lon), float(lat), stop.lon, stop.lat) <= self.stop_radius_m:
-                    near.append(index)
+            if (row["location_valid"] and speed is not None and lon is not None and lat is not None
+                    and all(math.isfinite(float(x)) for x in (speed, lon, lat))
+                    and float(speed) <= self.stop_speed_kmh):
+                times = self._times[tr_id]
+                start = bisect_left(times, event - timedelta(seconds=self.observation_lag_s))
+                end = bisect_right(times, event + timedelta(seconds=60))
+                for index in range(start, end):
+                    stop = stops[index]
+                    if not math.isfinite(stop.lon) or not math.isfinite(stop.lat):
+                        continue
+                    if _distance_m(float(lon), float(lat), stop.lon, stop.lat) <= self.stop_radius_m:
+                        near.append(index)
+            # Explicit corrections revoke evidence even when their event is old.
+            # An observation absent solely through history eviction remains kept.
+            frame_id = str(row["frame_id"])
+            for stop_id, observation in list(progress.first_observations.items()):
+                if observation.event_time == event and observation.frame_id != frame_id:
+                    if len(near) == 1 and stops[near[0]].stop_id == stop_id:
+                        observation.frame_id = frame_id
+                    else:
+                        del progress.first_observations[stop_id]
+                        if progress.last_stop is not None and progress.last_stop.stop_id == stop_id:
+                            progress.confident = False
+                        self._counters["stop_observations_retracted"] += 1
             if len(near) > 1:
                 if progress.last_evidence_event is None or event >= progress.last_evidence_event:
                     progress.confident = False
@@ -133,19 +149,19 @@ class Schedule:
                 progress.confident = False
                 self._counters["stop_sequence_regression"] += 1
                 continue
-            if stop.stop_id not in progress.first_events:
-                progress.first_events[stop.stop_id] = event
+            if stop.stop_id not in progress.first_observations:
+                progress.first_observations[stop.stop_id] = StopObservation(event, frame_id)
                 self._counters["stop_observations"] += 1
             progress.last_stop = stop
             progress.confident = True
         if not progress.confident or progress.last_stop is None:
             return None
-        first = progress.first_events[progress.last_stop.stop_id]
-        return (first - progress.last_stop.time).total_seconds()
+        first = progress.first_observations[progress.last_stop.stop_id]
+        return (first.event_time - progress.last_stop.time).total_seconds()
 
     def counters(self) -> dict[str, int]:
         return {**self._counters,
-                "stop_observation_count": sum(len(p.first_events) for p in self._progress.values()),
+                "stop_observation_count": sum(len(p.first_observations) for p in self._progress.values()),
                 "stop_observation_limit": sum(len(stops) for stops in self.by_vehicle.values()),
                 "stop_seen_frame_count": sum(len(p.seen_frames) for p in self._progress.values())}
 
