@@ -40,3 +40,17 @@ Source check: pandas scan всех трёх schedule и traffic; validate 5558 s
 Answer: координаты подходят для отображения имеющейся выборки, но не для полной сети Москвы. Георешение вынесено в docs/runbooks/geography-foundation.md с первичными источниками.
 Status: source-proven
 Consequence: stable stop/route identity и road geometry — будущая работа, не скрытая предпосылка текущей интеграции.
+
+## Q5: Технические корректировки по независимому code review
+
+Source check: независимый Sol High review `artifacts/code-review/integration-review-fc45a22.md`, real probes при 47 passing tests.
+Answer: ML window 900s не должен владеть первым observed arrival; slow ML не должен блокировать NDTP acknowledgment; browser error обязан помечать сохранённые rows stale. Replay control связывается с TCP session и сверяет wire origin до отправки.
+Status: accepted technical correction
+Consequence: W3 сохраняет bounded observed-stop state и bounded/coalescing inference work отдельно от быстрых ack/readback; sourceT/frame identity остаются причинными. Consumer хранит последнее успешное browser state с wall age. Это уточняет уже принятые failure/identity обязанности и не расширяет scope. Отдельный provided_point Backend endpoint не нужен: direct ML API benchmark W1 и парное сравнение одинаковых inputs дают отдельный provided-hint путь; runtime NDTP остаётся computed_stop.
+
+## Q6: As-of контекст и отзыв GPS evidence
+
+Source check: независимый recheck0abe832 воспроизвёл future-event availability при отрицательном receive lag и invalid GPS correction ранее observed stop.
+Answer: identity prediction request должна учитывать весь доступный as-of контекст, а не только последний receive frame. Correction, отзывающий валидный GPS остановки, снимает будущую уверенность detector до нового подтверждения; уже выданный прошлый snapshot не переписывается.
+Status: accepted technical correction
+Consequence: W3 сохраняет bounded context identity в captured jobs и связывает свежесть/повторное вычисление с ней. Persistent first arrival остаётся ограниченным known plan; correction invalidates confidence, а не делает неподтверждённое число свежим.

@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-26T01:15:26.071Z",
+  "generated_at": "2026-09-26T03:16:51.938Z",
   "tasks": [
     {
       "id": "T-4",
@@ -10,28 +10,24 @@
       "priority": "p1",
       "owner": "manager",
       "created_at": "2026-09-25T19:32:16.620Z",
-      "updated_at": "2026-09-26T01:15:26.053Z",
+      "updated_at": "2026-09-26T03:16:51.925Z",
       "stream": "T",
       "path": "T-4-2026-09-25-backend-dashboard-infra",
       "work_items_total": 5,
-      "work_items_done": 0,
+      "work_items_done": 4,
       "work_items_remaining": [
-        "Актуальная модель через проверенный API. Owner: ML worker; пишет `transport_ml/` и профильные tests, не Compose. Dependencies: нет.",
-        "NDTP и ограниченное состояние потока. Owner: Backend ingest worker; пишет parser/ingest/state в `transport_backend/` и свои tests. Dependencies: W1 contract; bounded parser work можно делать параллельно W1 после фиксации normalized packet schema.",
-        "Расписание и настоящий end-to-end prediction. Owner: Backend orchestration worker; пишет schedule/orchestration/API и tests после интеграции W2. Dependencies: W1+W2.",
-        "Live consumer и воспроизводимый Docker launch. Owner: consumer worker для `consumer/`; координатор для Compose/Dockerfile/dependencies/replay scripts/runbooks. Dependencies: W3 backend schema; consumer можно готовить по frozen schema до завершения W3.",
         "Независимая проверка и доказательства. Owner: отдельный Sol High reviewer/QA; пишет только выделенный report/test boundary; координатор исправляет и закрывает parent. Dependencies: W1–W4."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-26T01:15:26.059Z",
+      "last_event": "2026-09-26T03:16:51.928Z",
       "latest_status_note": {
-        "ts": "2026-09-26T01:15:26.059Z",
-        "event": "status_changed",
+        "ts": "2026-09-26T03:16:51.928Z",
+        "event": "note",
         "actor": "manager",
-        "text": "Начато исполнение W1–W5",
-        "from": "planned",
-        "to": "doing",
-        "source": "event_reason"
+        "text": "W1–W4 приняты:57tests и независимый final-recheck036f589 закрыли все findings. W5 системная QA запущена Sol High вmanagedworktree t4-system-qa наa0a3810; DockerexclusiveownerQA, финальное закрытие ожидаетREQledgerиwallmeasurements.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
       },
       "parent_id": "",
       "subtasks": []

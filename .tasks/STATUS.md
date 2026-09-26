@@ -1,7 +1,7 @@
 # Tasks — 2 active, 0 waiting, 0 backlog, 3 archived
 
 ```text
-NEXT:    T-4 · T-4-2026-09-25-backend-dashboard-infra/task.md → Актуальная модель через проверенный API. Owner: ML worker; …
+NEXT:    T-4 · T-4-2026-09-25-backend-dashboard-infra/task.md → Независимая проверка и доказательства. Owner: отдельный Sol…
 RULES:   .locus/soul.md (## How we work, ## Decision principles) + task.md Boundary/Verification
 WHY:     .locus/soul.md (## Strategic outcome)
 REFRESH: locus task sync-index
@@ -9,7 +9,7 @@ REFRESH: locus task sync-index
 
 | ID | Type | Title | Status | Pri | Owner | Progress | Note |
 |----|------|-------|--------|-----|-------|----------|------|
-| T-4 | feature | [Интегрировать NDTP, Backend, актуальную ML-модель ](T-4-2026-09-25-backend-dashboard-infra/task.md) | doing | p1 |  | ░░░░░ 0/5<br>☐ Актуальная модель через проверенный API…<br>☐ NDTP и ограниченное состояние потока. O…<br>+3 more… | Начато исполнение W1–W5 |
+| T-4 | feature | [Интегрировать NDTP, Backend, актуальную ML-модель ](T-4-2026-09-25-backend-dashboard-infra/task.md) | doing | p1 |  | ████░ 4/5<br>☐ Независимая проверка и доказательства. … | W1–W4 приняты:57tests и независимый final-recheck036f589 закрыли все findings. … |
 | T-5 | research | [Оптимизировать ML для score выше 0.70](T-5-2026-09-25-ml-score-0-70/task.md) | doing |  | codex | █░ 1/2<br>☐ Проверенный кандидат submission и вывод… | Локальная оптимизация завершена: выбран residual depth4/800 по CV (78.03 -> 76.… |
 
 ### Recently closed (3)
@@ -22,4 +22,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 3 closed tasks total_
 
-_Generated: 2026-09-26T01:15:26.071Z_
+_Generated: 2026-09-26T03:16:51.938Z_

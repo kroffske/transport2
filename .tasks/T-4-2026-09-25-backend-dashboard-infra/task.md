@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: manager
 created_at: "2026-09-25T19:32:16.620Z"
-updated_at: "2026-09-26T01:15:26.053Z"
+updated_at: "2026-09-26T03:16:51.925Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -51,25 +51,25 @@ Direction: on-track
 
 ## Work items
 
-- [ ] W1: Актуальная модель через проверенный API. Owner: ML worker; пишет `transport_ml/` и профильные tests, не Compose. Dependencies: нет.
+- [x] W1: Актуальная модель через проверенный API. Owner: ML worker; пишет `transport_ml/` и профильные tests, не Compose. Dependencies: нет.
   - Deliverable: versioned request/response, configurable artifact loader, reusable canonical features, model identity/readiness и offline CLI/API parity всех 151 validate points (tolerance ≤1e-6 с).
   - Contribution: последующие модули действительно используют выбранную модель.
   - Proxy result: старые context/core или импорт `.local/pipeline.py` в production.
   - Input/output: model+metadata+origins+point/history/plan → signed seconds prediction/status. Failure: неизвестная машина/день/битый artifact/неверный target, без молчаливого fallback.
   - Verification: oracle из frozen local predictor; API и package predictions; запрет чтения labels/facts; mutation future/late telemetry; no-risk-output check. Commit после review и проверок.
-- [ ] W2: NDTP и ограниченное состояние потока. Owner: Backend ingest worker; пишет parser/ingest/state в `transport_backend/` и свои tests. Dependencies: W1 contract; bounded parser work можно делать параллельно W1 после фиксации normalized packet schema.
+- [x] W2: NDTP и ограниченное состояние потока. Owner: Backend ingest worker; пишет parser/ingest/state в `transport_backend/` и свои tests. Dependencies: W1 contract; bounded parser work можно делать параллельно W1 после фиксации normalized packet schema.
   - Deliverable: TCP parser/handshake, unit mapping, event/receive clocks, duplicate/late policies, bounded history и freshness readback.
   - Contribution: настоящий транспортный поток становится причинно корректным входом системы.
   - Proxy result: CSV endpoint в обход NDTP либо статичные packets без TCP.
   - Input/output: NDTP bytes + local mapping → canonical telemetry/state. Failure: CRC/fragment/unknown cell/unknown unit/disconnect.
   - Verification: реальные socket fragmented/coalesced frames, bad CRC isolation, reconnect requestId reset, late correction, stale recovery и counters. Commit отдельно.
-- [ ] W3: Расписание и настоящий end-to-end prediction. Owner: Backend orchestration worker; пишет schedule/orchestration/API и tests после интеграции W2. Dependencies: W1+W2.
+- [x] W3: Расписание и настоящий end-to-end prediction. Owner: Backend orchestration worker; пишет schedule/orchestration/API и tests после интеграции W2. Dependencies: W1+W2.
   - Deliverable: выбор target, observed-stop current deviation, HTTP ML call и backend snapshot; deterministic signal без probability; benchmark hints отдельным режимом.
   - Contribution: поток сам порождает реальные прогнозы без будущих фактов.
   - Proxy result: подавать готовые features/predictions или только provided hints и объявлять независимую online-работу.
   - Input/output: state+plan → ML request → versioned vehicle result. Failure: ambiguous stop/no eligible target/no current deviation/ML timeout.
   - Verification: хотя бы один computed-cur-dev NDTP→ML→Backend прогноз; coverage/error report; no future inputs; ML outage leaves last-success stale/degraded; no duplicate signal. Commit отдельно.
-- [ ] W4: Live consumer и воспроизводимый Docker launch. Owner: consumer worker для `consumer/`; координатор для Compose/Dockerfile/dependencies/replay scripts/runbooks. Dependencies: W3 backend schema; consumer можно готовить по frozen schema до завершения W3.
+- [x] W4: Live consumer и воспроизводимый Docker launch. Owner: consumer worker для `consumer/`; координатор для Compose/Dockerfile/dependencies/replay scripts/runbooks. Dependencies: W3 backend schema; consumer можно готовить по frozen schema до завершения W3.
   - Deliverable: три отдельных контейнера, read-only data/model mounts, deterministic historical NDTP sender с replay clock, одна инструкция, live result revisions, OpenAPI и PyDoc/Sphinx.
   - Contribution: пользователь наблюдает настоящую цепочку и может повторить запуск.
   - Proxy result: три пустых контейнера, mock JSON, только host pytest или статическая страница.
