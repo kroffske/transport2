@@ -24,7 +24,7 @@ docker compose --profile demo up --build -d
 | `transport_backend/` | TCP NDTP, bounded state, расписание и HTTP orchestration | Past-only computed stop detector, явные clocks и failure readback |
 | `consumer/` | Минимальная страница live polling | Читает только Backend HTTP; старые результаты помечает явно |
 | `scripts/` | Historical NDTP sender | Receive-order lockstep replay с per-frame ack и trace |
-| `tests/` | ML, NDTP/state, schedule/orchestration и consumer contracts | 47 тестов в объединённом checkout; независимая QA ведётся в T-4 |
+| `tests/` | ML, NDTP/state, schedule/orchestration и consumer contracts | 55 тестов в объединённом checkout; независимая QA ведётся в T-4 |
 | `artifacts/` | Исторические модели и метрики T-3/T-5 | Локальные файлы; прежние модели не являются текущим кандидатом |
 | `.local/validate-tuning-2026-09-26/` | Текущая модель, frozen код обучения/инференса и evidence | Игнорируется Git; production inference перенесён в owning пакет |
 | `data/` | Официальные train/test/validate, labels, шаблон сабмита и эмулятор | Полная локальная копия; тяжёлые файлы исключены из Git |
