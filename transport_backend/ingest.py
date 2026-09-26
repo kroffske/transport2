@@ -1,8 +1,9 @@
 """TCP NDTP server with bounded queue and explicit clock domains.
 
 ``queue_limit`` caps pending telemetry frames; a full queue drops the newest
-frame and increments ``dropped_queue_full``. ``max_frame_size`` caps per-client
-framing memory. ``history_limit`` and stale threshold belong to TelemetryState.
+frame and records its outcome. ``max_clients`` caps concurrent handler threads.
+``max_frame_size`` caps per-client framing memory. History/outcome limits and
+stale threshold belong to TelemetryState.
 ``clock`` is called at completed-frame ingest, before queueing; replay supplies
 its own dataset-wall clock. ``received_at_utc`` always records host wall time.
 """
@@ -12,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from queue import Empty, Full, Queue
 import socket
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Callable
 from uuid import uuid4
 
@@ -23,10 +24,11 @@ from .state import ClockMapping, Telemetry, TelemetryState, time_text, wire_even
 class NDTPServer:
     def __init__(self, state: TelemetryState, *, host: str = "127.0.0.1", port: int = 0,
                  queue_limit: int = 256, max_frame_size: int = 65550,
+                 max_clients: int = 64,
                  mapping: ClockMapping | None = None,
                  clock: Callable[[], datetime] | None = None):
-        if queue_limit < 1:
-            raise ValueError("queue_limit must be positive")
+        if queue_limit < 1 or max_clients < 1:
+            raise ValueError("queue_limit and max_clients must be positive")
         if (mapping is None) != (state.source_clock == "utc"):
             raise ValueError("dataset_wall needs ClockMapping; utc must not use it")
         if state.source_clock == "dataset_wall" and clock is None:
@@ -35,6 +37,7 @@ class NDTPServer:
         self.host = host
         self.port = port
         self.max_frame_size = max_frame_size
+        self.max_clients = max_clients
         self.mapping = mapping
         self.clock = clock or (lambda: datetime.now(timezone.utc).replace(tzinfo=None))
         self.queue: Queue[Telemetry] = Queue(maxsize=queue_limit)
@@ -42,8 +45,8 @@ class NDTPServer:
         self._listener: socket.socket | None = None
         self._accept_thread: Thread | None = None
         self._worker: Thread | None = None
-        self._clients: set[socket.socket] = set()
-        self._handlers: list[Thread] = []
+        self._handlers: dict[socket.socket, Thread] = {}
+        self._handlers_lock = Lock()
 
     @property
     def address(self) -> tuple[str, int]:
@@ -71,15 +74,17 @@ class NDTPServer:
         self._stop.set()
         if self._listener is not None:
             self._listener.close()
-        for client in list(self._clients):
+        if self._accept_thread is not None:
+            self._accept_thread.join(timeout=2)
+        with self._handlers_lock:
+            handlers = list(self._handlers.items())
+        for client, _ in handlers:
             try:
                 client.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
             client.close()
-        if self._accept_thread is not None:
-            self._accept_thread.join(timeout=2)
-        for handler in self._handlers:
+        for _, handler in handlers:
             handler.join(timeout=2)
         self.queue.join()
         if self._worker is not None:
@@ -97,8 +102,11 @@ class NDTPServer:
         self.queue.join()
 
     def counters(self) -> dict[str, int]:
+        with self._handlers_lock:
+            active_clients = len(self._handlers)
         return {**self.state.counters(), "queue_depth": self.queue.qsize(),
-                "queue_limit": self.queue.maxsize}
+                "queue_limit": self.queue.maxsize,
+                "active_clients": active_clients, "max_clients": self.max_clients}
 
     def _accept(self) -> None:
         assert self._listener is not None
@@ -109,10 +117,18 @@ class NDTPServer:
                 continue
             except OSError:
                 break
-            self._clients.add(client)
-            handler = Thread(target=self._handle, args=(client,), daemon=True)
-            self._handlers.append(handler)
-            handler.start()
+            with self._handlers_lock:
+                if self._stop.is_set() or len(self._handlers) >= self.max_clients:
+                    rejected = True
+                else:
+                    rejected = False
+                    handler = Thread(target=self._handle, args=(client,), daemon=True)
+                    self._handlers[client] = handler
+                    handler.start()
+            if rejected:
+                client.close()
+                self.state.count("dropped_connections_limit")
+                continue
 
     def _handle(self, client: socket.socket) -> None:
         session = uuid4().hex
@@ -179,10 +195,12 @@ class NDTPServer:
                     except Full:
                         self.state.count("dropped")
                         self.state.count("dropped_queue_full")
+                        self.state.mark_processed(record, "dropped_queue_full")
         finally:
             if unit is not None:
                 self.state.disconnected(unit, session)
-            self._clients.discard(client)
+            with self._handlers_lock:
+                self._handlers.pop(client, None)
             client.close()
 
     def _consume(self) -> None:

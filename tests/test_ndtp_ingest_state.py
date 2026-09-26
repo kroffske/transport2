@@ -171,12 +171,13 @@ def test_queue_overload_is_bounded_and_observable() -> None:
             release.wait(2)
             return super().accept(record)
 
-    state = SlowState({UNIT: TR}, history_limit=2, source_clock="dataset_wall")
+    state = SlowState({UNIT: TR}, history_limit=2, outcome_limit=32,
+                      source_clock="dataset_wall")
     with NDTPServer(state, mapping=MAPPING, clock=lambda: ORIGIN,
                     queue_limit=1) as server:
         client = connect(server)
         try:
-            frames = b"".join(nav(1_700_000_001 + i, request=2 + i) for i in range(10))
+            frames = b"".join(nav(1_700_000_001 + i, request=2 + i) for i in range(20))
             client.sendall(handshake() + frames)
             await_counter(server, "dropped_queue_full", 1, flush=False)
         finally:
@@ -189,6 +190,84 @@ def test_queue_overload_is_bounded_and_observable() -> None:
         assert counters["dropped_queue_full"] >= 1
         assert counters["accepted"] >= 1
         assert len(state.history(TR, ORIGIN + timedelta(seconds=15))) <= 2
+        readback = state.ingest_readback()
+        assert readback["processed_revision"] == 20
+        assert len(readback["outcomes"]) == 20
+        assert {entry["request_id"] for entry in readback["outcomes"]} == set(range(2, 22))
+        assert sum(entry["outcome"] == "dropped_queue_full" for entry in readback["outcomes"]) == counters["dropped_queue_full"]
+        assert all(entry["session_id"] and entry["frame_id"] for entry in readback["outcomes"])
+
+
+def test_outcome_journal_eviction_reports_gap() -> None:
+    state = TelemetryState({UNIT: TR}, outcome_limit=3, source_clock="dataset_wall")
+    with NDTPServer(state, mapping=MAPPING, clock=lambda: ORIGIN) as server:
+        client = connect(server)
+        client.sendall(handshake() + b"".join(
+            nav(1_700_000_001 + i, request=2 + i) for i in range(5)))
+        await_counter(server, "accepted", 5)
+        readback = state.ingest_readback(0)
+        assert readback["processed_revision"] == 5
+        assert readback["oldest_outcome_revision"] == 3
+        assert readback["outcome_gap"] is True
+        assert [item["revision"] for item in readback["outcomes"]] == [3, 4, 5]
+        assert state.ingest_readback(2)["outcome_gap"] is False
+        assert server.counters()["outcome_evictions"] == 2
+        client.close()
+
+
+def test_invalid_gps_keeps_last_valid_position_and_age() -> None:
+    now = [ORIGIN + timedelta(seconds=1)]
+    state = TelemetryState({UNIT: TR}, stale_after_s=5, source_clock="dataset_wall")
+    with NDTPServer(state, mapping=MAPPING, clock=lambda: now[0]) as server:
+        client = connect(server)
+        client.sendall(handshake() + nav())
+        await_counter(server, "accepted", 1)
+        now[0] = ORIGIN + timedelta(seconds=2)
+        client.sendall(nav(1_700_000_002, request=3, lon=0, valid=False))
+        await_counter(server, "accepted", 2)
+        snapshot = state.snapshot(TR, now[0])
+        assert snapshot["reason"] == "invalid_gps"
+        assert snapshot["telemetry"]["location_valid"] is False
+        assert snapshot["lon"] == snapshot["last_valid_gps"]["lon"] == 37.617321
+        assert snapshot["lat"] == 55.7551234
+        assert snapshot["gps_age_s"] == 1
+        now[0] = ORIGIN + timedelta(seconds=10)
+        assert state.snapshot(TR, now[0])["gps_age_s"] == 9
+        client.sendall(nav(1_700_000_010, request=4, lon=376173215))
+        await_counter(server, "accepted", 3)
+        recovered = state.snapshot(TR, now[0])
+        assert recovered["reason"] is None
+        assert recovered["lon"] == 37.6173215
+        assert recovered["gps_age_s"] == 0
+        client.close()
+
+
+def test_reconnect_handlers_are_reaped_and_clients_limited() -> None:
+    state = TelemetryState({UNIT: TR}, source_clock="dataset_wall")
+    with NDTPServer(state, mapping=MAPPING, clock=lambda: ORIGIN,
+                    max_clients=1) as server:
+        first = connect(server)
+        first.sendall(handshake())
+        await_counter(server, "connections", 1)
+        assert len(state.ingest_readback()["active_sessions"][UNIT]) == 1
+        extra = connect(server)
+        extra.sendall(handshake())
+        await_counter(server, "dropped_connections_limit", 1)
+        assert server.counters()["active_clients"] == 1
+        extra.close()
+        first.close()
+        await_counter(server, "disconnects", 1)
+        for index in range(30):
+            client = connect(server)
+            client.sendall(handshake(request=index + 2))
+            await_counter(server, "connections", index + 2)
+            client.close()
+            await_counter(server, "disconnects", index + 2)
+        deadline = time.monotonic() + 2
+        while server.counters()["active_clients"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.counters()["active_clients"] == 0
+        assert len(server._handlers) == 0
 
 
 def test_live_unix_clock_is_explicit_utc() -> None:

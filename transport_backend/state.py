@@ -1,6 +1,7 @@
 """Bounded, point-in-time telemetry state for one Backend process.
 
 ``history_limit`` bounds records and duplicate identities per mapped vehicle.
+``outcome_limit`` bounds the frame outcome journal used for replay acknowledgments.
 ``stale_after_s`` is the maximum age of the latest valid GPS event. Counters
 ``accepted``, ``dropped``, and ``errors`` include reason-specific counterparts.
 No old snapshot is mutated: an as-of query filters both event and receive time.
@@ -115,15 +116,17 @@ class Telemetry:
 
 class TelemetryState:
     def __init__(self, unit_mapping: Mapping[int, str], *, history_limit: int = 4096,
-                 stale_after_s: float = 45.0, source_clock: str = "utc"):
-        if not unit_mapping or history_limit < 1 or stale_after_s <= 0:
-            raise ValueError("mapping nonempty, history_limit >= 1, stale_after_s > 0")
+                 outcome_limit: int = 1024, stale_after_s: float = 45.0,
+                 source_clock: str = "utc"):
+        if not unit_mapping or history_limit < 1 or outcome_limit < 1 or stale_after_s <= 0:
+            raise ValueError("mapping nonempty, history/outcome limits >= 1, stale_after_s > 0")
         if source_clock not in {"utc", "dataset_wall"}:
             raise ValueError("source_clock must be utc or dataset_wall")
         self.unit_mapping = {int(k): str(v) for k, v in unit_mapping.items()}
         if len(set(self.unit_mapping.values())) != len(self.unit_mapping):
             raise ValueError("each tr_id must have exactly one unit_id")
         self.history_limit = history_limit
+        self.outcome_limit = outcome_limit
         self.stale_after_s = stale_after_s
         self.source_clock = source_clock
         self._history: dict[str, deque[Telemetry]] = {
@@ -133,6 +136,7 @@ class TelemetryState:
         self._sessions: dict[int, set[str]] = {unit: set() for unit in self.unit_mapping}
         self._counters: Counter[str] = Counter()
         self._processed_revision = 0
+        self._outcomes: deque[dict[str, object]] = deque(maxlen=outcome_limit)
         self._last_processed: dict[str, object] | None = None
         self._last_accepted: dict[str, object] | None = None
         self._lock = RLock()
@@ -149,16 +153,27 @@ class TelemetryState:
         with self._lock:
             return dict(self._counters)
 
-    def ingest_readback(self) -> dict[str, object]:
-        """Ack surface for lockstep replay; revisions rise after state processing.
+    def ingest_readback(self, since_revision: int = 0) -> dict[str, object]:
+        """Bounded ack journal for lockstep replay.
 
-        ``accepted_revision`` rises only for new telemetry. ``processed_revision``
-        also rises for semantic duplicates. The caller can match unit/request/
-        session/frame IDs and outcome before advancing its replay clock.
+        Match unit/request/session/frame and ``outcome`` in ``outcomes``. If
+        ``outcome_gap`` is true, requested entries were evicted: fail replay
+        rather than infer success from a newer revision. Accepted revision rises
+        only for new telemetry; processed revision includes duplicate and queue
+        drops. A sender must check its own frame's outcome, not just a revision.
         """
+        if since_revision < 0:
+            raise ValueError("since_revision must be nonnegative")
         with self._lock:
+            oldest = self._outcomes[0]["revision"] if self._outcomes else None
             return {"accepted_revision": self._counters["accepted"],
                     "processed_revision": self._processed_revision,
+                    "oldest_outcome_revision": oldest,
+                    "outcome_gap": (oldest is not None and since_revision < oldest - 1),
+                    "outcomes": [dict(entry) for entry in self._outcomes
+                                 if entry["revision"] > since_revision],
+                    "active_sessions": {unit: sorted(sessions) for unit, sessions in self._sessions.items()
+                                        if sessions},
                     "last_processed": (dict(self._last_processed)
                                        if self._last_processed is not None else None),
                     "last_accepted": (dict(self._last_accepted)
@@ -167,10 +182,14 @@ class TelemetryState:
     def mark_processed(self, record: Telemetry, outcome: str) -> None:
         with self._lock:
             self._processed_revision += 1
-            identity = {"unit_id": record.unit_id, "request_id": record.request_id,
+            identity = {"revision": self._processed_revision,
+                        "unit_id": record.unit_id, "request_id": record.request_id,
                         "session_id": record.session_id, "frame_id": record.frame_id,
                         "event_time": record.event_time,
                         "receive_time": record.receive_time, "outcome": outcome}
+            if len(self._outcomes) == self.outcome_limit:
+                self._counters["outcome_evictions"] += 1
+            self._outcomes.append(identity)
             self._last_processed = identity
             if outcome == "accepted":
                 self._last_accepted = identity
@@ -231,18 +250,23 @@ class TelemetryState:
     def snapshot(self, tr_id: str, at: datetime) -> dict[str, object]:
         records = self.history(tr_id, at)
         current = records[-1] if records else None
+        last_valid = next((record for record in reversed(records)
+                           if record["location_valid"]), None)
+        gps_age = (max(0.0, (at - parse_time(str(last_valid["event_time"]))).total_seconds())
+                   if last_valid is not None else None)
         if current is None:
             reason = "no_available_gps"
-            age = None
         else:
-            age = max(0.0, (at - parse_time(str(current["event_time"]))).total_seconds())
             reason = ("invalid_gps" if not current["location_valid"] else
-                      "stale_gps" if age > self.stale_after_s else None)
+                      "stale_gps" if gps_age is not None and gps_age > self.stale_after_s else None)
         unit_id = next(unit for unit, tr in self.unit_mapping.items() if tr == tr_id)
         with self._lock:
             connected = bool(self._sessions[unit_id])
         if not connected:
             reason = "disconnected"
         return {"tr_id": tr_id, "unit_id": unit_id, "telemetry": current,
+                "last_valid_gps": last_valid,
+                "lon": last_valid["lon"] if last_valid is not None else None,
+                "lat": last_valid["lat"] if last_valid is not None else None,
                 "connected": connected, "degraded": reason is not None,
-                "reason": reason, "gps_age_s": age, "source_clock": self.source_clock}
+                "reason": reason, "gps_age_s": gps_age, "source_clock": self.source_clock}
