@@ -93,3 +93,7 @@ Burst override сохранён в `artifacts/qa/burst-compose.yaml`; actual rec
 - Wire-only N151: mean absolute prediction delta 2.7799668 с/max 58.7041435 с при неизменных point/plan/provided cur_dev и receive clock. Integer event timestamp теряет субсекунды; exact API parity этого не обещает.
 - State живёт в одном Backend процессе и не durable; Backend restart теряет историческое состояние. Fixed bounds/coalescing делают перегрузку наблюдаемой, но часть intermediate predictions пропускается. Полное покрытие всех 13 прогнозами не проверялось.
 - QA не закрывала task.md и не принимала решение о parent lifecycle. Координатору остаётся проверить owned diff/readback и интегрировать локальный QA commit. Push/PR/merge/deploy/training не выполнялись.
+
+## Архивирование после приёмки
+
+Координатор закрыл T-4 через Locus; task/report/evidence перенесены в `.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/`. Команды выше сохраняют фактические пути времени QA. Для нового запуска standalone review probe используйте его текущий archived путь; `tests/system_probe.py` выбирает archived evidence directory при её наличии. Product source после проверки не изменён.

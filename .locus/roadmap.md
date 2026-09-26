@@ -23,9 +23,9 @@ Roadmap следует [scorecard официальных критериев](../
 
 **Outcome:** historical NDTP replay → Backend state/schedule → актуальная модель отдельным API → live consumer; одна Docker-инструкция и проверенные failure paths.
 
-- Parent task: [T-4 «Интегрировать NDTP, Backend, актуальную ML-модель и live consumer»](../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) — planning по разрешению пользователя 2026-09-26; прежняя остановка draft отменена.
+- Parent task: [T-4 «Интегрировать NDTP, Backend, актуальную ML-модель и live consumer»](../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/task.md) — done 2026-09-26 после независимых review и QA; [runbook](../docs/runbooks/local-demo.md) и [QA evidence](../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/qa.md) фиксируют работающую цепочку и её границы.
 - Порядок: W1 модель/contract → W2 ingest/state → W3 schedule/orchestration → W4 consumer/Docker → W5 independent evidence. Parser может идти параллельно W1 после согласования packet schema.
-- C2 проверяет плановый горизонт отдельно от onset lead time; C3 только в показанной части; C5 требует измерений. C1 без platform score не меняется.
+- C2 проверяет плановый горизонт отдельно от onset lead time; C3 только в показанной части; C5 получил ограниченные локальные измерения и failure-path evidence. C1 без platform score не меняется.
 - Полноценный BI-dashboard исключён из этой T-4; простой live consumer не закрывает C4.
 
 ## Phase 3 — будущий операторский интерфейс
@@ -50,7 +50,7 @@ Roadmap следует [scorecard официальных критериев](../
 
 ## Portfolio rules
 
-- Текущий критический путь — Phase 2; один координатор владеет интеграцией. Независимые срезы выполняются в изолированных worktree.
+- Phase 2 завершена. Следующая задача определяется отдельным запросом пользователя; полноценный UI и внешние действия остаются будущими фазами.
 - Дополнительные фичи не вытесняют основной scorecard.
 - Задача, не меняющая evidence или обязательный артефакт, должна объяснить вклад до активации.
 - Каждая фаза обновляет scorecard только после readback.

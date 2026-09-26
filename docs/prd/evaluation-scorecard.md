@@ -20,10 +20,10 @@ description: "Scorecard уточнён после Astra review: onset evidence, 
 | ID | Критерий | Макс. | Подтверждено сейчас | Выполнимость | Доказательство для изменения оценки | Owning task |
 |---|---|---:|---:|---|---|---|
 | C1 | Точность ML-прогноза | 6 | 0 | Высокая, но малые данные повышают variance | Валидный `submission.csv`, platform score и воспроизводимый локальный evaluation | [T-3 «Первая ML-модель и submission»](../../.tasks/_archive/T-3-2026-09-25-ml-submission/task.md) |
-| C2 | Горизонт 10–15 минут и раннее предупреждение | 4 | 0 | Средняя: point target определён, onset-инциденты требуют отдельной проверки | Плановое окно + наблюдаемое onset-время, alert timestamp, lead-time, разделение known delay/new incident и отсутствие post-event alert | [T-3](../../.tasks/_archive/T-3-2026-09-25-ml-submission/task.md) + [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
-| C3 | Три модуля и Docker | 6 | 0 | Средняя: ML/FastAPI набросок есть, Backend и dashboard не доказаны | Одна инструкция запуска, Swagger smoke, NDTP → prediction → dashboard | [T-4 «Локальная интеграция»](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
+| C2 | Горизонт 10–15 минут и раннее предупреждение | 4 | 0 | Средняя: point target определён, onset-инциденты требуют отдельной проверки | Плановое окно + наблюдаемое onset-время, alert timestamp, lead-time, разделение known delay/new incident и отсутствие post-event alert | [T-3](../../.tasks/_archive/T-3-2026-09-25-ml-submission/task.md) + [T-4](../../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/task.md) |
+| C3 | Три модуля и Docker | 6 | 0 | Локальная цепочка трёх частей доказана QA; consumer минимальный, полный BI отложен | Одна инструкция запуска, Swagger smoke, NDTP → prediction → dashboard | [T-4 «Локальная интеграция»](../../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/task.md) |
 | C4 | BI-дашборд | 6 | 0 | Отложен пользователем 2026-09-26 | Карта, risk colors, incident card, live refresh и короткий usability-check | Будущая отдельная UI-задача после T-4 |
-| C5 | Производительность и надёжность | 4 | 0 | Средняя: требования ясны, end-to-end измерений нет | P50/P95/P99, throughput без очереди, disconnect/reconnect, cold start | [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
+| C5 | Производительность и надёжность | 4 | 0 | Есть локальные latency/load/recovery замеры; полный production benchmark отсутствует | P50/P95/P99, throughput без очереди, disconnect/reconnect, cold start | [T-4](../../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/task.md) |
 |  | **Итого основной этап** | **26** | **0** |  |  |  |
 
 ## Pitch
@@ -35,7 +35,7 @@ description: "Scorecard уточнён после Astra review: onset evidence, 
 | P3 | Ответы жюри | 4 | 0 | Q&A checklist и mock review | Отдельная задача pitch |
 |  | **Итого pitch** | **10** | **0** |  |  |
 
-Общий максимум: **36 баллов**. Текущая подтверждённая оценка: **0/36**, потому что перенесённые артефакты начального решения не доказывают platform score или готовую систему на полном датасете.
+Общий максимум: **36 баллов**. Численная оценка **0/36** пока не пересчитана. T-4 добавила проверенную локальную цепочку для C3 и ограниченное performance/reliability evidence для C5; [QA](../../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/qa.md) задаёт точную границу. C1 без platform score, C2 без onset evidence и C4 с отложенным BI остаются неподтверждёнными.
 
 ## Правила обновления
 

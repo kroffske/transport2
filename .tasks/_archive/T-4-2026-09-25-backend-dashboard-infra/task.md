@@ -2,7 +2,7 @@
 schema: task.v3
 id: T-4
 title: "Интегрировать NDTP, Backend, актуальную ML-модель и live consumer"
-status: doing
+status: done
 review_required: qa
 plan_review_profile: standard
 plan_review_gate: advisory
@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: manager
 created_at: "2026-09-25T19:32:16.620Z"
-updated_at: "2026-09-26T03:16:51.925Z"
+updated_at: "2026-09-26T03:37:06.840Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -27,7 +27,7 @@ Primary goal: Получить работающую локальную цепо�
 
 Direction: on-track
 
-Пользователь 2026-09-26 разрешил исполнение сейчас, соседние рабочие чаты Sol High и локальные коммиты по проверенным задачам. Это заменяет прежнюю остановку draft до T-3 и включение полного dashboard. План не означает выполнение C1–C5; [scorecard](../../docs/prd/evaluation-scorecard.md) сохраняет доказательственные границы.
+Пользователь 2026-09-26 разрешил исполнение сейчас, соседние рабочие чаты Sol High и локальные коммиты по проверенным задачам. Это заменяет прежнюю остановку draft до T-3 и включение полного dashboard. План не означает выполнение C1–C5; [scorecard](../../../docs/prd/evaluation-scorecard.md) сохраняет доказательственные границы.
 
 ## Decisions
 
@@ -40,7 +40,7 @@ Direction: on-track
 7. **Повторы и свежесть.** Повтор кадра не создаёт повторную prediction/alert; поздние коррекции доступны только после receive time и не переписывают уже выданное прошлое. requestId может повториться после reconnect: identity включает session/protocol semantics, не глобальный requestId. История/очередь ограничены; overload/drop/coalescing наблюдаемы. На disconnect/stale GPS/ML timeout остаётся последнее известное состояние с возрастом, `degraded` и last-success timestamp; оно не маркируется свежим прогнозом. После reconnect обработка возобновляется. Границы stale/history/timeout документируются и проверяются.
 8. **Live consumer без UI-проекта.** Backend `GET /v1/vehicles` отдаёт revision, tr_id/unit_id, lon/lat, target arrival, source/replay clock, timestamps/ages, current deviation/source, prediction/model, status/reason. Минимальная страница либо console polling показывает реальные изменения и сбой ML/связи. Polling достаточно; websocket/broker/database не нужны для одного локального demo. Consumer работает в третьем контейнере и читает Backend HTTP, не файлы модели. Изменение backend schema фиксируется до W4.
 9. **C2 честно ограничен.** Пороговый сигнал `prediction_s > 120` допустим как deterministic delay rule, с dedup/cooldown, но не probability. Логи отдельно содержат уже известную задержку, новый сигнал, target window, emitted_at. Наблюдаемого размеченного onset в исходном контракте нет. Post-hoc train/test facts можно использовать только в отдельной evaluator-процедуре; approximate stop detector не считать независимой ground truth. Если onset нельзя обосновать, C2 остаётся неподтверждённым; это не блокирует W1–W5.
-10. **География только как основа.** См. [решение](../../docs/runbooks/geography-foundation.md): WGS84 lon/lat в градусах; будущая локальная ENU-сцена в метрах, x east/y up/z south. Нет route shape/road graph/stable physical-stop IDs. Line interpolation ≠ map matching. Полная карта и C4 вынесены в будущий этап.
+10. **География только как основа.** См. [решение](../../../docs/runbooks/geography-foundation.md): WGS84 lon/lat в градусах; будущая локальная ENU-сцена в метрах, x east/y up/z south. Нет route shape/road graph/stable physical-stop IDs. Line interpolation ≠ map matching. Полная карта и C4 вынесены в будущий этап.
 11. **Владение исполнением.** Один Sol High координатор владеет интеграцией, task.md и общими Compose/dependencies/runbook. Каждый пишущий worker получает managed worktree и ветку codex/, одну область записи, критерий и local commit. Все рабочие/review чаты создаются с `model=gpt-6-sol`, `thinking=high` фактически в tool arguments. Read-only review независим от автора. Интеграция только после diff/tests/readback; каждый принятый срез отдельный commit. Основной checkout передаётся координатору после planning commit; планировщик после передачи не пишет туда.
 12. **Локальные входы явно подключены.** DATA_DIR и MODEL_DIR configurable; исходные пути `/Users/ravius/projects/transport2/data` и `/Users/ravius/projects/transport2/.local/validate-tuning-2026-09-26`. В контейнеры mount read-only. Worktree не получает ignored artifacts автоматически. Не менять исходные веса, submission или labels; не коммитить dataset/.local/artifacts/caches/сырые task evidence. Remote отсутствует; push/PR/deploy/upload не входят в полномочия.
 
@@ -75,7 +75,7 @@ Direction: on-track
   - Proxy result: три пустых контейнера, mock JSON, только host pytest или статическая страница.
   - Input/output: локальные artifacts + replay → меняющиеся consumer predictions/status. Failure: missing artifact, unavailable ML, interrupted replay.
   - Verification: cold Docker start; Swagger request; 2+ изменения результата в consumer и видимое degraded/recovery; official emulator handshake/navigation/reconnect отдельно (unsupported day допустим и явно показан). Component commits отдельно.
-- [ ] W5: Независимая проверка и доказательства. Owner: отдельный Sol High reviewer/QA; пишет только выделенный report/test boundary; координатор исправляет и закрывает parent. Dependencies: W1–W4.
+- [x] W5: Независимая проверка и доказательства. Owner: отдельный Sol High reviewer/QA; пишет только выделенный report/test boundary; координатор исправляет и закрывает parent. Dependencies: W1–W4.
   - Deliverable: повторяемый smoke/measurement сценарий; retained local evidence и краткие tracked выводы; actual SHA/readback; P50/P95/P99, accepted/emitted/dropped throughput, backlog/max queue, cold start, recovery timings; честный C2/C3/C5 статус.
   - Contribution: результат проверяем, сбои не скрыты сообщениями агентов.
   - Proxy result: PASS по одному worker summary, latency только model.predict или ускоренный event time, представленный как wall latency.
@@ -95,6 +95,12 @@ Direction: on-track
 
 - 2026-09-26 — Astra перепланировал T-4 по прямому запросу пользователя; исходный main `d8e42a51606a0e391406b0b3470826309d1487fe`, чистое дерево, remote отсутствует. Код ещё не реализован; work items не отмечены выполненными.
 
+- 2026-09-26 — Координатор принял W1–W4 после diff/tests/independent review; W5 отдельно проверила Docker, causal clocks, failure/recovery, 13-unit baseline, overload и latency. Финальная QA принята и интегрирована локально.
+
 ## Closure
 
-Открыта. Закрытие требует работающей локальной цепочки, независимой QA и readback; полный BI-dashboard не является условием закрытия текущей T-4.
+Завершена 2026-09-26. W1–W5 приняты; независимый final code review `036f589` закрыл все findings, [QA](qa.md) приняла REQ-001…009. Координатор интегрировал source и QA commits в `codex/t4-integration`, выполнил 57 tests и финальный Docker readback: три healthy сервиса, завершённый replay, queues/active=0, last predictions явно degraded/disconnected.
+
+Selected model/API совпадают с frozen oracle на 151/151 point; wire quantization и detector/hint delta измерены отдельно. При ML/Backend сбоях состояние сохраняет возраст и восстанавливается. Официальный UTC emulator подтвердил 13 соединений/reconnect без подмены trained day. [Runbook](../../../docs/runbooks/local-demo.md) содержит запуск и ограниченные wall measurements. C1/C2/C4, полный BI, dense13predictioncoverage и production load не заявляются.
+
+Доставка ограничена локальными commits; push/PR/merge/deploy/training не выполнялись. Основной checkout остаётся на `codex/t4-integration`, local `main` — planning commit `b39fe7a`.

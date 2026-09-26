@@ -1,37 +1,7 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-26T03:16:51.938Z",
+  "generated_at": "2026-09-26T03:37:06.865Z",
   "tasks": [
-    {
-      "id": "T-4",
-      "title": "Интегрировать NDTP, Backend, актуальную ML-модель и live consumer",
-      "status": "doing",
-      "type": "feature",
-      "priority": "p1",
-      "owner": "manager",
-      "created_at": "2026-09-25T19:32:16.620Z",
-      "updated_at": "2026-09-26T03:16:51.925Z",
-      "stream": "T",
-      "path": "T-4-2026-09-25-backend-dashboard-infra",
-      "work_items_total": 5,
-      "work_items_done": 4,
-      "work_items_remaining": [
-        "Независимая проверка и доказательства. Owner: отдельный Sol High reviewer/QA; пишет только выделенный report/test boundary; координатор исправляет и закрывает parent. Dependencies: W1–W4."
-      ],
-      "subtask_count": 0,
-      "last_event": "2026-09-26T03:16:51.928Z",
-      "latest_status_note": {
-        "ts": "2026-09-26T03:16:51.928Z",
-        "event": "note",
-        "actor": "manager",
-        "text": "W1–W4 приняты:57tests и независимый final-recheck036f589 закрыли все findings. W5 системная QA запущена Sol High вmanagedworktree t4-system-qa наa0a3810; DockerexclusiveownerQA, финальное закрытие ожидаетREQledgerиwallmeasurements.",
-        "from": null,
-        "to": null,
-        "source": "status_note"
-      },
-      "parent_id": "",
-      "subtasks": []
-    },
     {
       "id": "T-5",
       "title": "Оптимизировать ML для score выше 0.70",

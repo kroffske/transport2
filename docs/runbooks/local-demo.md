@@ -96,3 +96,23 @@ PYTHONPATH=. .venv/bin/python -m pydoc consumer.service
 W1 package/API совпал с frozen oracle на 151/151 validate points, максимум расхождения 0.000000490 с. Docker ML sample совпал с package без расхождения. Historical fragment через Docker дал 1630 frames, 1611 новых записей, 19 семантических повторов, без queue drops/errors; consumer показал несколько новых revision и прогнозов, затем disconnect degradation. Официальный эмулятор подтвердил navigation и reconnect на текущем UTC-дне.
 
 Detector на validate имеет coverage 139/151 (92,05%) на raw receive-ordered validate stream; средняя абсолютная разница с provided `cur_dev_s` — 94,55 с. При одинаковых доступных history и plan замена только `cur_dev_s` даёт среднюю абсолютную разницу прогноза 31,00 с, максимум 202,45 с; правило `prediction_s > 120` меняется в 7/139 пар. NDTP quantization сюда не входит. Это ошибка приближённого detector относительно подсказки, не online model MAE. 13 ТС имеют план; traffic содержит также 17 дополнительных ТС без этого плана. В demo fragment активны 11 unit. C1 без platform score, C2 без независимого onset evidence и C4 с отложенным BI остаются неподтверждёнными. Производительность и общая QA фиксируются отдельно в T-4 evidence.
+
+## Измерения финальной интеграции
+
+Независимая QA проверила source `036f589` в Docker на Apple M5 Pro, 48 GiB host RAM; Docker VM: 18 vCPU и около 7,75 GiB RAM. Исторический fragment 03:20–03:45, speedup 30: 1630 отправленных кадров за 49,91 wall-секунды, 1611 новых записей и 19 wire duplicates, 161 успешный ML request и 10 coalesced jobs, без queue overflow и protocol errors. Consumer API наблюдал 156 отдельных публикаций прогноза; это выборка, а не все входные кадры.
+
+| Интервал в реальном времени | N | P50 | P95 | P99 |
+|---|---:|---:|---:|---:|
+| От отправки до ingest acknowledgment | 1630 | 1,78 мс | 2,95 мс | 8,97 мс |
+| От отправки до первого наблюдения frame в consumer API | 1306 | 70,44 мс | 139,81 мс | 148,80 мс |
+| От отправки до наблюдения нового прогноза в consumer API | 156 | 142,71 мс | 569,97 мс | 1118,50 мс |
+
+Таблица использует monotonic clock одного macOS host для sender и probe. Consumer API опрашивался примерно каждые 0,1 секунды; это не browser render latency страницы с polling 1,5 секунды. Unix timestamps публикаций относятся к Docker VM; QA сохранила калибровку и её погрешность отдельно. Source/replay clock не используется для latency.
+
+Холодный старт уже собранных образов до трёх healthy сервисов занял 16,98 с; cached rebuild — 0,61 с. Запрос speedup 3000 дал фактически 1630 кадров за 4,61 с, 74 coalesced jobs и 3 отброшенных obsolete completion; очередь опустела. Это ограниченный lockstep replay, не максимальная пропускная способность. Отдельный burst при искусственном лимите очереди 1 отправил 26 000 кадров: 74 приняты и 25 926 явно отклонены как queue full; размер очереди не превысил 1.
+
+13 плановых unit проверены отдельно: sparse subset 65 реальных receive-ordered кадров и 13 соединений официального UTC-эмулятора с reconnect. Плотный demo fragment имеет 11 активных unit; полное историческое покрытие прогнозами всех 13 этим не заявляется. Отключение ML сохранило last success с явной деградацией, восстановление ML вернуло прогнозы. При недоступном Backend consumer сохранил snapshot и затем вернулся online.
+
+На одинаковых 151 point/history/plan/provided cur_dev Nav00-округление меняет prediction в среднем на 2,78 с, максимум на 58,70 с. Это wire quantization; exact package/HTTP oracle parity остаётся 151/151 с максимумом 0,000000490 с. Detector/hint delta приведена выше отдельно. C1, C2 и C4 остаются неподтверждёнными; C3 ограничен простым consumer, а C5 — этими локальными измерениями.
+
+Подробный [независимый QA отчёт](../../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/qa.md) содержит ledger, команды и остаточные ограничения. Повторяемый probe — `tests/system_probe.py`; список фаз: `.venv/bin/python tests/system_probe.py --help`. Для нового historical replay сбросьте Backend clock через restart Backend/consumer или полный `down/up` перед фазой. Сырые trace/JSON остаются в локальных ignored task artifacts.

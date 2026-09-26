@@ -67,7 +67,7 @@ Backend отправляет ML только восемь разрешённых
 
 Каждый outcome также сохраняет `received_at_utc` фактического приёма полного кадра. Sender trace получает его вместе с `frame_id`, поэтому wall receipt сопоставляется с правильным prediction input, даже когда vehicle snapshot уже показывает более новый кадр.
 
-Источник: [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md), [NDTP spec](../../data/docs/Emulator-and-Telematic-Packets-Specification.md), `transport_ml.data.TRAFFIC_COLUMNS`, W1/W2 commits `b67af516`/`e009861c`.
+Источник: [T-4](../../.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/task.md), [NDTP spec](../../data/docs/Emulator-and-Telematic-Packets-Specification.md), `transport_ml.data.TRAFFIC_COLUMNS`, W1/W2 commits `b67af516`/`e009861c`.
 
 ## Ограниченная обработка ML и наблюдений остановки
 

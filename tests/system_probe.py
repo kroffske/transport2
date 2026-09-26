@@ -26,7 +26,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path('/Users/ravius/projects/transport2/data')
 MODEL = Path('/Users/ravius/projects/transport2/.local/validate-tuning-2026-09-26')
-EVIDENCE = ROOT / '.tasks/T-4-2026-09-25-backend-dashboard-infra/artifacts/qa'
+TASK_NAME = 'T-4-2026-09-25-backend-dashboard-infra'
+TASK_ROOT = ROOT / '.tasks'
+ARCHIVED_TASK = TASK_ROOT / '_archive' / TASK_NAME
+EVIDENCE = (ARCHIVED_TASK if ARCHIVED_TASK.exists() else TASK_ROOT / TASK_NAME) / 'artifacts/qa'
 ENV = {**os.environ, 'DATA_DIR': str(DATA), 'MODEL_DIR': str(MODEL), 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(ROOT)}
 
 
