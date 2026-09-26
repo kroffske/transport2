@@ -14,27 +14,27 @@ Roadmap следует [scorecard официальных критериев](../
 
 **Outcome:** на полном датасете есть воспроизводимый point-in-time pipeline, честное сравнение baseline и моделей, локально валидный submission и пакет evidence для C1.
 
-- Parent task: [T-3 «Получить первую валидную ML-модель и submission»](../.tasks/T-3-2026-09-25-ml-submission/task.md) — planning.
+- Parent task: [T-3 «Получить первую валидную ML-модель и submission»](../.tasks/_archive/T-3-2026-09-25-ml-submission/task.md) — archived; актуальный очищенный кандидат описан в integration-handoff.
 - Срезы: T-3/data-audit, T-3/baseline, T-3/modeling, T-3/evaluation.
 - Основные критерии: C1; foundation для C2.
 - Exit evidence: notebook + reusable code, split manifest, metrics table, deterministic training command, validated submission schema.
 
-## Phase 2 — Streaming system and operator surface
+## Phase 2 — текущая локальная интеграция
 
-**Outcome:** NDTP replay проходит через отдельный Backend и ML-инференс в live dashboard; система запускается одной Docker-инструкцией.
+**Outcome:** historical NDTP replay → Backend state/schedule → актуальная модель отдельным API → live consumer; одна Docker-инструкция и проверенные failure paths.
 
-- Parent task: [T-4 «Собрать системный контур Backend, dashboard и infra»](../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) — draft; реализацию начать после Phase 1 model contract.
-- Срезы: NDTP ingest/state; ML API contract; dashboard; Compose/runbook; end-to-end proof.
-- Основные критерии: C2, C3, C4.
-- Exit evidence: stream → prediction → dashboard, Swagger smoke, live refresh, operator scenario.
+- Parent task: [T-4 «Интегрировать NDTP, Backend, актуальную ML-модель и live consumer»](../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) — planning по разрешению пользователя 2026-09-26; прежняя остановка draft отменена.
+- Порядок: W1 модель/contract → W2 ingest/state → W3 schedule/orchestration → W4 consumer/Docker → W5 independent evidence. Parser может идти параллельно W1 после согласования packet schema.
+- C2 проверяет плановый горизонт отдельно от onset lead time; C3 только в показанной части; C5 требует измерений. C1 без platform score не меняется.
+- Полноценный BI-dashboard исключён из этой T-4; простой live consumer не закрывает C4.
 
-## Phase 3 — Performance and reliability
+## Phase 3 — будущий операторский интерфейс
 
-**Outcome:** система имеет измеренные latency/throughput, выдерживает disconnect/reconnect и предсказуемо стартует.
+**Outcome:** отдельная последующая задача реализует понятный BI-dashboard и карту, risk semantics и incident cards на стабильном backend contract.
 
-- Расширяет системный parent task или создаёт отдельный hardening task по итогам Phase 2.
-- Основной критерий: C5.
-- Exit evidence: P50/P95/P99, отсутствие накопления очереди, degradation/recovery test, cold-start measurement.
+- C4 отложен по запросу пользователя. Three.js — кандидат renderer, не источник геоданных.
+- Основа: [географическое решение](../docs/runbooks/geography-foundation.md). Источники маршрутов, stable stop IDs и лицензии должны быть проверены до реализации.
+- Эта будущая фаза не блокирует текущую интеграцию и локальные performance/reliability проверки T-4.
 
 ## Phase 4 — Submission handoff and pitch
 
@@ -50,7 +50,7 @@ Roadmap следует [scorecard официальных критериев](../
 
 ## Portfolio rules
 
-- Одновременно активен один критический путь: сначала Phase 1, затем Phase 2.
+- Текущий критический путь — Phase 2; один координатор владеет интеграцией. Независимые срезы выполняются в изолированных worktree.
 - Дополнительные фичи не вытесняют основной scorecard.
 - Задача, не меняющая evidence или обязательный артефакт, должна объяснить вклад до активации.
 - Каждая фаза обновляет scorecard только после readback.

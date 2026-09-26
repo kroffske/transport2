@@ -15,7 +15,7 @@ REFRESH: locus task sync-index
 
 | ID | Type | Title | Status | Pri | Owner | Progress | Note |
 |----|------|-------|--------|-----|-------|----------|------|
-| T-4 | feature | [Собрать системный контур Backend, dashboard и infr](T-4-2026-09-25-backend-dashboard-infra/task.md) | draft | p1 |  | ░░░░░░ 0/6<br>☐ Backend и NDTP ingest<br>☐ Политика алертов и раннее предупреждение<br>+4 more… | workflow profile 'feature' selected (type-profile) |
+| T-4 | feature | [Интегрировать NDTP, Backend, актуальную ML-модель ](T-4-2026-09-25-backend-dashboard-infra/task.md) | planning | p1 |  | ░░░░░ 0/5<br>☐ W1 — Актуальная модель через проверенны…<br>☐ W2 — NDTP и ограниченное состояние пото…<br>+3 more… | Пользователь разрешил интеграцию сейчас; текущая граница без полного BI. |
 
 ### Recently closed (3)
 
@@ -27,4 +27,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 3 closed tasks total_
 
-_Generated: 2026-09-26T00:08:12.953Z_
+_Generated: 2026-09-26T01:12:51.566Z_

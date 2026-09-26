@@ -21,8 +21,8 @@ description: "Scorecard уточнён после Astra review: onset evidence, 
 |---|---|---:|---:|---|---|---|
 | C1 | Точность ML-прогноза | 6 | 0 | Высокая, но малые данные повышают variance | Валидный `submission.csv`, platform score и воспроизводимый локальный evaluation | [T-3 «Первая ML-модель и submission»](../../.tasks/_archive/T-3-2026-09-25-ml-submission/task.md) |
 | C2 | Горизонт 10–15 минут и раннее предупреждение | 4 | 0 | Средняя: point target определён, onset-инциденты требуют отдельной проверки | Плановое окно + наблюдаемое onset-время, alert timestamp, lead-time, разделение known delay/new incident и отсутствие post-event alert | [T-3](../../.tasks/_archive/T-3-2026-09-25-ml-submission/task.md) + [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
-| C3 | Три модуля и Docker | 6 | 0 | Средняя: ML/FastAPI набросок есть, Backend и dashboard не доказаны | Одна инструкция запуска, Swagger smoke, NDTP → prediction → dashboard | [T-4 «Backend, dashboard и infra»](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
-| C4 | BI-дашборд | 6 | 0 | Средняя: UI-контракт ясен, реализации нет | Карта, risk colors, incident card, live refresh и короткий usability-check | [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
+| C3 | Три модуля и Docker | 6 | 0 | Средняя: ML/FastAPI набросок есть, Backend и dashboard не доказаны | Одна инструкция запуска, Swagger smoke, NDTP → prediction → dashboard | [T-4 «Локальная интеграция»](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
+| C4 | BI-дашборд | 6 | 0 | Отложен пользователем 2026-09-26 | Карта, risk colors, incident card, live refresh и короткий usability-check | Будущая отдельная UI-задача после T-4 |
 | C5 | Производительность и надёжность | 4 | 0 | Средняя: требования ясны, end-to-end измерений нет | P50/P95/P99, throughput без очереди, disconnect/reconnect, cold start | [T-4](../../.tasks/T-4-2026-09-25-backend-dashboard-infra/task.md) |
 |  | **Итого основной этап** | **26** | **0** |  |  |  |
 
@@ -50,3 +50,7 @@ description: "Scorecard уточнён после Astra review: onset evidence, 
 ## Приоритет
 
 Сначала получить C1 evidence и основу C2 через честную модельную задачу. Затем собрать C3–C5 одним системным контуром. Pitch планируется после появления воспроизводимого demo-path.
+
+## Граница текущей интеграции — 2026-09-26
+
+T-4 теперь реализует актуальную модель/API, NDTP/state/schedule, Docker и минимальный live consumer. Он не закрывает C4 и не означает максимальный C3: доказательства C3 перечисляются по фактическому поведению, включая ограничение consumer. C1 остаётся без platform readback; C2 без независимого onset evidence остаётся неподтверждённым. C5 меняется только после замеров. Источник актуальной модели — [handoff](../runbooks/integration-handoff.md); offline validate MAE 44.01 с/test 45.00 с не является platform score.

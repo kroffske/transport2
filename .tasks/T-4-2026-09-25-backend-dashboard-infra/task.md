@@ -1,8 +1,8 @@
 ---
 schema: task.v3
 id: T-4
-title: "Собрать системный контур Backend, dashboard и infra"
-status: draft
+title: "Интегрировать NDTP, Backend, актуальную ML-модель и live consumer"
+status: planning
 review_required: qa
 plan_review_profile: standard
 plan_review_gate: advisory
@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: manager
 created_at: "2026-09-25T19:32:16.620Z"
-updated_at: "2026-09-25T19:32:16.620Z"
+updated_at: "2026-09-26T01:12:51.551Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -19,85 +19,82 @@ stream: T
 workflow: feature
 ---
 
-# T-4: Собрать системный контур Backend, dashboard и infra
+# T-4: Интегрировать NDTP, Backend, актуальную ML-модель и live consumer
 
 ## Outcome
 
-Primary goal: Собрать доказуемый системный контур NDTP → Backend → ML inference → BI-dashboard, который запускается одной Docker-инструкцией и создаёт evidence для C2–C5.
+Primary goal: Получить работающую локальную цепочку NDTP/исторический replay → отдельный Backend с состоянием и расписанием → актуальная обученная ML-модель через отдельный API → простой live consumer, с Docker-запуском и проверяемым поведением при сбоях.
 
 Direction: on-track
 
-T-4 является отдельным portfolio box после фиксации ML contract в T-3; текущий draft не разрешает реализацию до готовности model input/output schema.
-
-## Goal alignment
-
-Direction: on-track
-
-Задача реализует Phase 2–3 roadmap и не подменяет near-term ML goal. Она активируется после evidence T-3/evaluation.
+Пользователь 2026-09-26 разрешил исполнение сейчас, соседние рабочие чаты Sol High и локальные коммиты по проверенным задачам. Это заменяет прежнюю остановку draft до T-3 и включение полного dashboard. План не означает выполнение C1–C5; [scorecard](../../docs/prd/evaluation-scorecard.md) сохраняет доказательственные границы.
 
 ## Decisions
 
-- Backend владеет NDTP ingest, event-time состоянием, расписанием, идентификацией ТС/рейса, оркестрацией и incident lifecycle.
-- ML-модуль владеет feature/model schema, инференсом, quality status и model metadata.
-- Dashboard владеет операторским представлением: карта, risk colors, incident card, freshness и метрики.
-- Плановое окно до целевой остановки не является onset-label. T-4 отдельно владеет определением наблюдаемого инцидента, alert policy и измерением фактического lead time; известная задержка и новое предупреждение не смешиваются.
-- Docker/infra связывает три модуля и эмулятор, но не становится четвёртым продуктовым модулем.
-- Точная API-схема зависит от финального T-3 model contract; до этого задача остаётся `draft`.
-- Placeholder допустим только как документированный будущий owner, но не считается evidence C3/C4.
+1. **Сначала настоящий ML contract.** `transport_ml/` переносит только повторяемую inference-логику из `.local/validate-tuning-2026-09-26/{pipeline.py,final_model.py}`. Существующий FeatureBuilder остаётся владельцем motion-v1 и received-time фильтра. Отдельный загрузчик актуального артефакта использует `final_model.cbm`, metadata и `vehicle_origins.csv`; не переименовывать его в старые context/core. SHA-256 модели: `dc33437108c3e036089450c9b98771dacd014246fbb91d0df2a89d0c8e247122`. Старые training/evaluation вызовы не ломать без необходимости; serving явно выбирает новую модель.
+2. **Версионированный HTTP seam.** Backend вызывает `POST /v1/predict` отдельного ML-процесса: `point={sample_id,tr_id,T,target_stop_id,target_time_begin,cur_dev_s}`, последние 900 секунд доступной telemetry и plan без фактических прибытий. ML формирует feature matrix в metadata-порядке с canonical vehicle/time. Ответ содержит schema/model version, artifact SHA, `prediction_s`, predicted arrival, applicability/quality и причину отказа. Вероятности, интервалы и causal explanations отсутствуют либо null; старые p_late/q10/q90 не смешивать с новым point model. Некорректная схема → 422, недоступный artifact → readiness failure; корректный, но неподдержанный день/ТС → явно unavailable без числа. W1 закрепляет точный OpenAPI до работы потребителей.
+3. **Backend владеет состоянием.** Новый `transport_backend/` принимает TCP NDTP, связывает unit_id → tr_id явной проверенной таблицей, хранит ограниченную историю и доступность данных, выбирает первое плановое прибытие строго в `(T+600,T+900]`, оркестрирует HTTP inference. `target_stop_id` = tt_action_item_id планового прибытия, не ID физической остановки. План известен заранее; facts никогда не входят в inference.
+4. **Два честных источника cur_dev_s.** Для exact offline/API parity и benchmark replay допустим только входной hint из validate/points.csv, доступный в его T, с `cur_dev_source=provided_point`; future hints запрещены. Для самостоятельного потока Backend вычисляет отклонение от последнего наблюдаемого прибытия по прошлым GPS и plan: последовательность остановок/рейса, ограниченный радиус, снижение скорости/остановка, время наблюдения и неоднозначность. Это приближённый detector, не фактическое расписание. Отдельно измерить покрытие/ошибку и влияние на прогноз против provided hint; не обещать offline MAE. До первого уверенного прибытия либо при неоднозначности → unavailable, не ноль и не future fact. Реальный stream с computed cur_dev должен показать хотя бы один настоящий prediction; provided-point путь один не завершает W3.
+5. **Часы и replay.** Датасет имеет naive wall clock, timezone не доказан: сохранять как `dataset_wall`, не объявлять UTC/МСК. Unix NDTP трактуется UTC; исторический encoder использует документированное обратимое сопоставление dataset clock ↔ synthetic epoch с origin, не выдаваемое за географическую timezone. Replay clock отдельно от host wall/monotonic clock. Исторические строки выдаются по receive_time; использование в признаках только при event_time ≤ T И receive_time ≤ T, включая отрицательный receive lag (6434/105945 validate rows). Эмулятор всегда ставит текущий timestamp: он доказывает ingest/reconnect, но сегодняшний день не переносится скрыто на 2026-01-06. Model support проверяется по canonical prediction/target time и origin mapping; не отвергать допустимый исторический контекст около полуночи только по календарной дате пакета.
+6. **NDTP — поток байтов.** Framing little-endian NPL/NPH, CRC со swap, handshake, частичные/склеенные кадры, размер и поддержанные ячейки проверяются на TCP boundary. Неизвестная ячейка без известной длины → явное отклонение кадра, не угадывать offset. Двери передавать только при известной проверенной раскладке датчика; отсутствие door telemetry обозначать unknown. Навигационный replay через настоящий TCP/NDTP обязателен; integer timestamp/speed quantization измеряется отдельно от exact JSON API parity.
+7. **Повторы и свежесть.** Повтор кадра не создаёт повторную prediction/alert; поздние коррекции доступны только после receive time и не переписывают уже выданное прошлое. requestId может повториться после reconnect: identity включает session/protocol semantics, не глобальный requestId. История/очередь ограничены; overload/drop/coalescing наблюдаемы. На disconnect/stale GPS/ML timeout остаётся последнее известное состояние с возрастом, `degraded` и last-success timestamp; оно не маркируется свежим прогнозом. После reconnect обработка возобновляется. Границы stale/history/timeout документируются и проверяются.
+8. **Live consumer без UI-проекта.** Backend `GET /v1/vehicles` отдаёт revision, tr_id/unit_id, lon/lat, target arrival, source/replay clock, timestamps/ages, current deviation/source, prediction/model, status/reason. Минимальная страница либо console polling показывает реальные изменения и сбой ML/связи. Polling достаточно; websocket/broker/database не нужны для одного локального demo. Consumer работает в третьем контейнере и читает Backend HTTP, не файлы модели. Изменение backend schema фиксируется до W4.
+9. **C2 честно ограничен.** Пороговый сигнал `prediction_s > 120` допустим как deterministic delay rule, с dedup/cooldown, но не probability. Логи отдельно содержат уже известную задержку, новый сигнал, target window, emitted_at. Наблюдаемого размеченного onset в исходном контракте нет. Post-hoc train/test facts можно использовать только в отдельной evaluator-процедуре; approximate stop detector не считать независимой ground truth. Если onset нельзя обосновать, C2 остаётся неподтверждённым; это не блокирует W1–W5.
+10. **География только как основа.** См. [решение](../../docs/runbooks/geography-foundation.md): WGS84 lon/lat в градусах; будущая локальная ENU-сцена в метрах, x east/y up/z south. Нет route shape/road graph/stable physical-stop IDs. Line interpolation ≠ map matching. Полная карта и C4 вынесены в будущий этап.
+11. **Владение исполнением.** Один Sol High координатор владеет интеграцией, task.md и общими Compose/dependencies/runbook. Каждый пишущий worker получает managed worktree и ветку codex/, одну область записи, критерий и local commit. Все рабочие/review чаты создаются с `model=gpt-6-sol`, `thinking=high` фактически в tool arguments. Read-only review независим от автора. Интеграция только после diff/tests/readback; каждый принятый срез отдельный commit. Основной checkout передаётся координатору после planning commit; планировщик после передачи не пишет туда.
+12. **Локальные входы явно подключены.** DATA_DIR и MODEL_DIR configurable; исходные пути `/Users/ravius/projects/transport2/data` и `/Users/ravius/projects/transport2/.local/validate-tuning-2026-09-26`. В контейнеры mount read-only. Worktree не получает ignored artifacts автоматически. Не менять исходные веса, submission или labels; не коммитить dataset/.local/artifacts/caches/сырые task evidence. Remote отсутствует; push/PR/deploy/upload не входят в полномочия.
 
 ## Boundary
 
-### Included
-
-- **Backend/NDTP** — parser, TCP ingest/replay, state, schedule matching и orchestration.
-- **ML serving seam** — согласованный request/response contract и version readback.
-- **Dashboard** — live operator flow по официальным требованиям.
-- **Docker/infra** — Compose, healthchecks, README runbook и emulator integration.
-- **Reliability evidence** — latency, throughput, reconnect/degradation и cold start.
-
-### Excluded
-
-- **Model research** — обучение и выбор модели принадлежат T-3.
-- **Optional features** — Map Matching, What-if, ONNX/TensorRT и сложные ансамбли до основных критериев.
-- **Production deployment** — cloud, public URL и внешний deploy без отдельного решения.
+- **Included:** новый model serving contract, бинарный TCP ingest и historical NDTP replay, state/schedule/current-deviation logic, независимые Backend/ML/consumer, Docker, recovery/latency evidence, OpenAPI и актуальная PyDoc/Sphinx инструкция, краткое георешение.
+- **Excluded:** переобучение/поиск лучшей модели, production multi-instance state и durable storage, calibrated probability/причины, BI-dashboard/C4, Three.js-карта, road map matching, внешняя публикация и platform upload.
 
 ## Work items
 
-- [ ] W1: Backend и NDTP ingest
-  - Deliverable: поток эмулятора принимается, валидируется, сопоставляется с расписанием и превращается в versioned ML request.
-  - Contribution: создаёт реальный online input для C2/C3.
-  - Proxy result: HTTP endpoint на статическом JSON без NDTP и event-time state.
-- [ ] W2: Политика алертов и раннее предупреждение
-  - Deliverable: определены наблюдаемое событие и источник его времени, risk probability/threshold, cooldown/dedup, alert timestamp и lead-time; отдельно измеряются уже известная задержка и новый инцидент.
-  - Contribution: создаёт проверяемый путь C2 вместо подмены плановым горизонтом остановки.
-  - Proxy result: прогноз в точке, где `target_time_begin - T` равно 10–15 минут, без доказательства предупреждения до onset.
-- [ ] W3: ML serving seam
-  - Deliverable: отдельный ML service принимает согласованный context, возвращает delay/risk/quality/model version и имеет Swagger smoke.
-  - Contribution: разделяет Backend и ML по официальному критерию.
-  - Proxy result: прямой import training code внутри Backend без API/readback.
-- [ ] W4: Диспетчерский dashboard
-  - Deliverable: live карта, risk colors, incident card, freshness, predicted delay, предполагаемый паттерн/причина, участок маршрута и рекомендация работают на потоке.
-  - Contribution: создаёт evidence C4 и пользовательский результат.
-  - Proxy result: статичный mock или таблица без live update.
-- [ ] W5: Docker, документация и end-to-end runbook
-  - Deliverable: эмулятор и три модуля запускаются одной инструкцией; healthchecks и demo-path проверены; PyDoc/Sphinx и OpenAPI пересозданы по финальному коду; инструкция жюри описывает поток/replay, прогнозы, алерты, dashboard и метрики.
-  - Contribution: создаёт evidence C3.
-  - Proxy result: отдельные Dockerfile без проверенной связи модулей.
-- [ ] W6: Performance и reliability
-  - Deliverable: зафиксированы P50/P95/P99, throughput, queue behavior, reconnect/degradation и cold start.
-  - Contribution: создаёт evidence C5.
-  - Proxy result: архитектурное обещание без замеров и failure-path теста.
+- [ ] W1: Актуальная модель через проверенный API. Owner: ML worker; пишет `transport_ml/` и профильные tests, не Compose. Dependencies: нет.
+  - Deliverable: versioned request/response, configurable artifact loader, reusable canonical features, model identity/readiness и offline CLI/API parity всех 151 validate points (tolerance ≤1e-6 с).
+  - Contribution: последующие модули действительно используют выбранную модель.
+  - Proxy result: старые context/core или импорт `.local/pipeline.py` в production.
+  - Input/output: model+metadata+origins+point/history/plan → signed seconds prediction/status. Failure: неизвестная машина/день/битый artifact/неверный target, без молчаливого fallback.
+  - Verification: oracle из frozen local predictor; API и package predictions; запрет чтения labels/facts; mutation future/late telemetry; no-risk-output check. Commit после review и проверок.
+- [ ] W2: NDTP и ограниченное состояние потока. Owner: Backend ingest worker; пишет parser/ingest/state в `transport_backend/` и свои tests. Dependencies: W1 contract; bounded parser work можно делать параллельно W1 после фиксации normalized packet schema.
+  - Deliverable: TCP parser/handshake, unit mapping, event/receive clocks, duplicate/late policies, bounded history и freshness readback.
+  - Contribution: настоящий транспортный поток становится причинно корректным входом системы.
+  - Proxy result: CSV endpoint в обход NDTP либо статичные packets без TCP.
+  - Input/output: NDTP bytes + local mapping → canonical telemetry/state. Failure: CRC/fragment/unknown cell/unknown unit/disconnect.
+  - Verification: реальные socket fragmented/coalesced frames, bad CRC isolation, reconnect requestId reset, late correction, stale recovery и counters. Commit отдельно.
+- [ ] W3: Расписание и настоящий end-to-end prediction. Owner: Backend orchestration worker; пишет schedule/orchestration/API и tests после интеграции W2. Dependencies: W1+W2.
+  - Deliverable: выбор target, observed-stop current deviation, HTTP ML call и backend snapshot; deterministic signal без probability; benchmark hints отдельным режимом.
+  - Contribution: поток сам порождает реальные прогнозы без будущих фактов.
+  - Proxy result: подавать готовые features/predictions или только provided hints и объявлять независимую online-работу.
+  - Input/output: state+plan → ML request → versioned vehicle result. Failure: ambiguous stop/no eligible target/no current deviation/ML timeout.
+  - Verification: хотя бы один computed-cur-dev NDTP→ML→Backend прогноз; coverage/error report; no future inputs; ML outage leaves last-success stale/degraded; no duplicate signal. Commit отдельно.
+- [ ] W4: Live consumer и воспроизводимый Docker launch. Owner: consumer worker для `consumer/`; координатор для Compose/Dockerfile/dependencies/replay scripts/runbooks. Dependencies: W3 backend schema; consumer можно готовить по frozen schema до завершения W3.
+  - Deliverable: три отдельных контейнера, read-only data/model mounts, deterministic historical NDTP sender с replay clock, одна инструкция, live result revisions, OpenAPI и PyDoc/Sphinx.
+  - Contribution: пользователь наблюдает настоящую цепочку и может повторить запуск.
+  - Proxy result: три пустых контейнера, mock JSON, только host pytest или статическая страница.
+  - Input/output: локальные artifacts + replay → меняющиеся consumer predictions/status. Failure: missing artifact, unavailable ML, interrupted replay.
+  - Verification: cold Docker start; Swagger request; 2+ изменения результата в consumer и видимое degraded/recovery; official emulator handshake/navigation/reconnect отдельно (unsupported day допустим и явно показан). Component commits отдельно.
+- [ ] W5: Независимая проверка и доказательства. Owner: отдельный Sol High reviewer/QA; пишет только выделенный report/test boundary; координатор исправляет и закрывает parent. Dependencies: W1–W4.
+  - Deliverable: повторяемый smoke/measurement сценарий; retained local evidence и краткие tracked выводы; actual SHA/readback; P50/P95/P99, accepted/emitted/dropped throughput, backlog/max queue, cold start, recovery timings; честный C2/C3/C5 статус.
+  - Contribution: результат проверяем, сбои не скрыты сообщениями агентов.
+  - Proxy result: PASS по одному worker summary, latency только model.predict или ускоренный event time, представленный как wall latency.
+  - Input/output: финальный checkout+Docker → independent evidence. Failure: saturation, disconnect, corrupt packet, ML down/restart, unsupported model input.
+  - Verification: NDTP send/receive → backend publish → consumer observe в wall/monotonic time с correlation ID; baseline 13 ТС, дополнительно bounded accelerated replay с указанным rate/duration/hardware; отсутствие растущей очереди, явные drops; C2 lead time только при независимом onset source. При техническом blocker фиксировать конкретную неисполненную проверку.
 
 ## Verification
 
-- NDTP -> emulator replay доставляет пакеты и Backend корректно обрабатывает reconnect.
-- Horizon -> report отдельно показывает корректное плановое окно, время наблюдаемого onset, alert timestamp, lead-time и отсутствие post-event alerts. Если onset-разметки недостаточно, C2 остаётся неподтверждённым и ограничение записывается явно.
-- Separation -> Backend и ML работают как независимые процессы; Swagger smoke подтверждает контракт.
-- End-to-end -> поток → prediction → dashboard наблюдаем после одной documented команды запуска.
-- Dashboard -> карта, цвета риска, incident card и live refresh проверены по операторскому сценарию.
-- Reliability -> метрики latency/throughput, отсутствие неограниченной очереди, degradation/recovery и cold start сохранены как task evidence.
-- Submission package docs -> PyDoc/Sphinx и OpenAPI соответствуют текущему коду; jury runbook и performance/additional-features summary покрывают обязательные артефакты 2–5.
+- W1 exact parity не зависит от NDTP quantization и не доказывает качество online cur_dev; для W3/W4 измерить отличие округлённого wire replay отдельно.
+- Point-in-time invariance: изменение future telemetry, позднего correction или fact schedule не меняет уже выданное prediction; оба времени проверены.
+- Запуск не импортирует локальный эксперимент и не читает ответы; model fingerprint совпадает с выбранным artifact.
+- Consumer readback показывает реальные revision/prediction и degradation/recovery после выключения ML/NDTP.
+- C1 остаётся без platform score; C2 без onset evidence не закрывается; C3 подтверждается только в фактически показанной части с minimal consumer; C4 отложен; C5 зависит от реальных замеров.
+- Independent plan challenge до implementation: координатор сверяет этот контракт с источниками, записывает advisory review через locus; существенные изменения возвращаются в planning.md. Independent code review и QA обязательны до закрытия T-4.
 
 ## Execution log
 
+- 2026-09-26 — Astra перепланировал T-4 по прямому запросу пользователя; исходный main `d8e42a51606a0e391406b0b3470826309d1487fe`, чистое дерево, remote отсутствует. Код ещё не реализован; work items не отмечены выполненными.
+
 ## Closure
+
+Открыта. Закрытие требует работающей локальной цепочки, независимой QA и readback; полный BI-dashboard не является условием закрытия текущей T-4.
