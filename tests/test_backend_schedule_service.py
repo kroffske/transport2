@@ -1,6 +1,7 @@
 """Backend target, causal prediction, replay control and degradation behavior."""
 
 from datetime import datetime
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import socket
@@ -133,6 +134,70 @@ def test_prediction_uses_only_available_fields_and_outage_retains_last_success(t
     assert recovered["alert"] == first["alert"]  # cooldown prevents repeat signal
 
 
+def test_frame_correlation_and_wall_publication_survive_polling_and_ml_outage(tmp_path, monkeypatch):
+    path = tmp_path / "schedule_plan.csv"
+    _plan(path)
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall")
+    state.connected(1, "s")
+    first_input = replace(_record(), received_at_utc="2026-09-26 10:00:00.000001")
+    # A correction arrived later, although its GPS event precedes the latest position.
+    correction = replace(_record(event="2026-01-06 00:00:25",
+                                  receive="2026-01-06 00:00:32", lon=37.0001,
+                                  request_id=3), frame_id="s:3:2",
+                         received_at_utc="2026-09-26 10:00:00.000002")
+    assert state.accept(first_input)
+    assert state.accept(correction)
+    clock = ReplayClock(datetime(2026, 1, 6, 0, 1))
+    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
+                        clock=clock.now)
+    model = _Model()
+    flow = Orchestrator(state, server, Schedule(read_plan(path)), clock.now, model,
+                        predict_interval_s=10)
+    wall_ns = iter((1_790_417_000_000_000_001, 1_790_417_000_000_000_002,
+                    1_790_417_000_000_000_003))
+    monkeypatch.setattr("transport_backend.orchestration.time_ns", lambda: next(wall_ns))
+    first = flow.snapshot()["vehicles"][0]
+    assert first["input_frame_id"] == correction.frame_id
+    assert first["input_request_id"] == correction.request_id
+    assert first["input_session_id"] == correction.session_id
+    assert first["input_received_at_utc"] == correction.received_at_utc
+    assert first["event_time"] == first_input.event_time
+    assert first["prediction_input_frame_id"] == correction.frame_id
+    assert first["published_unix_ns"] == 1_790_417_000_000_000_001
+    assert first["prediction_published_unix_ns"] == first["published_unix_ns"]
+    assert flow.snapshot()["vehicles"][0] == first
+
+    new_input = replace(_record(event="2026-01-06 00:01:19",
+                               receive="2026-01-06 00:01:19", lon=37.05,
+                               speed=20.0, request_id=4), frame_id="s:4:3",
+                        received_at_utc="2026-09-26 10:00:00.000003")
+    assert state.accept(new_input)
+    clock.advance(datetime(2026, 1, 6, 0, 1, 20), 1, 4, 0)
+    model.fail = True
+    failed = flow.snapshot()["vehicles"][0]
+    assert failed["status"] == "degraded"
+    assert failed["input_frame_id"] == new_input.frame_id
+    assert failed["input_received_at_utc"] == new_input.received_at_utc
+    assert failed["published_unix_ns"] > first["published_unix_ns"]
+    assert failed["prediction_input_frame_id"] == first["prediction_input_frame_id"]
+    assert failed["prediction_published_unix_ns"] == first["prediction_published_unix_ns"]
+    assert flow.snapshot()["vehicles"][0] == failed
+
+    recovery_input = replace(_record(event="2026-01-06 00:01:39",
+                                    receive="2026-01-06 00:01:39", lon=37.06,
+                                    speed=20.0, request_id=5), frame_id="s:5:4",
+                             received_at_utc="2026-09-26 10:00:00.000004")
+    assert state.accept(recovery_input)
+    clock.acknowledge([{"revision": 1, "unit_id": 1, "request_id": 4, "outcome": "accepted"}])
+    clock.advance(datetime(2026, 1, 6, 0, 1, 40), 1, 5, 1)
+    model.fail = False
+    recovered = flow.snapshot()["vehicles"][0]
+    assert recovered["status"] == "normal"
+    assert recovered["prediction_input_frame_id"] == recovery_input.frame_id
+    assert recovered["prediction_published_unix_ns"] == recovered["published_unix_ns"]
+    assert recovered["prediction_published_unix_ns"] > first["prediction_published_unix_ns"]
+
+
 def test_replay_clock_socket_ack_duplicate_and_rejects_concurrent_step(tmp_path):
     data = tmp_path / "validate"
     data.mkdir()
@@ -142,6 +207,7 @@ def test_replay_clock_socket_ack_duplicate_and_rejects_concurrent_step(tmp_path)
                      source_clock="dataset_wall", ndtp_port=0)
     with TestClient(api) as client:
         ready = client.get("/ready").json()
+        before_frame_ns = time.time_ns()
         with socket.create_connection((ready["ndtp_host"], ready["ndtp_port"])) as sock:
             sock.sendall(handshake(1))
             payload = {"receive_time": "2026-01-06T00:00:31", "unit_id": 1, "request_id": 2}
@@ -160,6 +226,7 @@ def test_replay_clock_socket_ack_duplicate_and_rejects_concurrent_step(tmp_path)
                     break
                 time.sleep(0.01)
             assert ack["outcomes"][0]["outcome"] == "accepted"
+            accepted_outcome = ack["outcomes"][0]
             assert client.post("/v1/replay/clock", json={**payload,
                        "receive_time": "2026-01-06T00:00:29", "request_id": 3}).status_code == 409
             second = client.post("/v1/replay/clock", json={**payload,
@@ -179,6 +246,13 @@ def test_replay_clock_socket_ack_duplicate_and_rejects_concurrent_step(tmp_path)
             assert vehicle["cur_dev_s"] == 30.0
             assert vehicle["prediction_s"] is None
             assert vehicle["reason"] == "ml_unreachable_or_timeout"
+            assert vehicle["input_frame_id"] == accepted_outcome["frame_id"]
+            assert vehicle["input_request_id"] == 2
+            assert vehicle["input_session_id"] == accepted_outcome["session_id"]
+            assert vehicle["input_received_at_utc"] is not None
+            assert before_frame_ns <= vehicle["published_unix_ns"] <= time.time_ns()
+            assert vehicle["prediction_input_frame_id"] is None
+            assert vehicle["prediction_published_unix_ns"] is None
 
 
 def test_model_client_uses_direct_internal_http_despite_host_proxy(monkeypatch):
@@ -225,5 +299,11 @@ def test_live_utc_clock_does_not_remap_to_historical_model_day(tmp_path):
         assert vehicle["status"] == "unavailable"
         assert vehicle["reason"] == "unsupported_day"
         assert vehicle["prediction_s"] is None
+        assert vehicle["input_frame_id"] is None
+        assert vehicle["input_request_id"] is None
+        assert vehicle["input_session_id"] is None
+        assert vehicle["input_received_at_utc"] is None
+        assert vehicle["prediction_input_frame_id"] is None
+        assert vehicle["prediction_published_unix_ns"] is None
         assert client.post("/v1/replay/clock", json={"receive_time": "2026-01-06T00:00:00",
                         "unit_id": 1, "request_id": 2}).status_code == 409
