@@ -1,4 +1,9 @@
-"""Backend prediction lifecycle over point-in-time NDTP state and plan."""
+"""Backend prediction lifecycle over point-in-time NDTP state and plan.
+
+Publication timestamps use host Unix wall-clock nanoseconds, independent of
+the dataset replay clock. Input identity names the latest available received
+frame; prediction identity and publication time belong to its saved success.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ from datetime import datetime, timedelta
 import json
 import math
 from threading import RLock
+from time import time_ns
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
@@ -120,8 +126,14 @@ class Orchestrator:
                                 if key not in {"revision", "gps_age_s", "prediction_age_s"}):
             self._revision += 1
             row["revision"] = self._revision
+            row["published_unix_ns"] = time_ns()
+            if (row["prediction_input_frame_id"] is not None
+                    and row["prediction_published_unix_ns"] is None):
+                row["prediction_published_unix_ns"] = row["published_unix_ns"]
+                self._last_success[tr_id]["prediction_published_unix_ns"] = row["published_unix_ns"]
         else:
             row["revision"] = prior["revision"]
+            row["published_unix_ns"] = prior["published_unix_ns"]
         self._rows[tr_id] = row
         return row
 
@@ -130,8 +142,10 @@ class Orchestrator:
         latest = state["telemetry"]
         target = self.schedule.target(tr_id, now)
         history = self.state.history(tr_id, now, window_s=900)
-        latest_frame = (max(history, key=lambda row: str(row["receive_time"]))["frame_id"]
+        latest_frame = (max(history, key=lambda row: (str(row["receive_time"]),
+                                                    str(row["received_at_utc"])))
                         if history else None)
+        frame_id = str(latest_frame["frame_id"]) if latest_frame else None
         cur_dev = self.schedule.observed_deviation(tr_id, now, history)
         target_id = target.stop_id if target else None
         success = self._last_success.get(tr_id)
@@ -150,14 +164,14 @@ class Orchestrator:
             reason = str(state["reason"])
         else:
             last = self._last_attempt.get(tr_id)
-            due = (latest_frame is not None
-                   and latest_frame != self._last_attempt_frame.get(tr_id)
+            due = (frame_id is not None
+                   and frame_id != self._last_attempt_frame.get(tr_id)
                    and (last is None or (now - last).total_seconds() >= self.predict_interval_s
                         or self._last_attempt_target.get(tr_id) != target_id))
             if due:
                 self._last_attempt[tr_id] = now
                 self._last_attempt_target[tr_id] = target_id
-                self._last_attempt_frame[tr_id] = str(latest_frame)
+                self._last_attempt_frame[tr_id] = frame_id
                 request = {"point": {"sample_id": f"{tr_id}_{now:%Y%m%d%H%M%S%f}",
                                      "tr_id": tr_id, "T": now.isoformat(),
                                      "target_stop_id": target_id,
@@ -175,6 +189,8 @@ class Orchestrator:
                                    "model_version": response["model_version"],
                                    "artifact_sha256": response["artifact_sha256"],
                                    "last_success_at": now.isoformat(),
+                                   "prediction_input_frame_id": frame_id,
+                                   "prediction_published_unix_ns": None,
                                    "quality": response["quality"]}
                         self._last_success[tr_id] = success
                         self._last_failure.pop(tr_id, None)
@@ -205,6 +221,10 @@ class Orchestrator:
         age_s = ((now - datetime.fromisoformat(success["last_success_at"])).total_seconds()
                  if success else None)
         return {"tr_id": tr_id, "unit_id": unit_id,
+                "input_frame_id": frame_id,
+                "input_request_id": latest_frame["request_id"] if latest_frame else None,
+                "input_session_id": latest_frame["session_id"] if latest_frame else None,
+                "input_received_at_utc": latest_frame["received_at_utc"] if latest_frame else None,
                 "lon": state["lon"], "lat": state["lat"],
                 "location_valid": bool(latest["location_valid"]) if latest else False,
                 "event_time": latest["event_time"] if latest else None,
@@ -219,6 +239,8 @@ class Orchestrator:
                 "artifact_sha256": success["artifact_sha256"] if success else None,
                 "status": status, "reason": reason,
                 "last_success_at": success["last_success_at"] if success else None,
+                "prediction_input_frame_id": success["prediction_input_frame_id"] if success else None,
+                "prediction_published_unix_ns": success["prediction_published_unix_ns"] if success else None,
                 "prediction_age_s": max(0.0, age_s) if age_s is not None else None,
                 "alert": (self._alerts.get(tr_id)
                           if success and self._alerts.get(tr_id, {}).get("target_stop_id") == target_id
