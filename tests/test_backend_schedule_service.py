@@ -216,6 +216,110 @@ def test_bounded_worker_coalesces_captures_source_inputs_and_discards_old_target
         model.release.set()
 
 
+def test_previously_received_future_event_versions_full_context_and_requeues_after_completion(tmp_path, running_flow):
+    path = tmp_path / "schedule_plan.csv"
+    _plan(path)
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall")
+    state.connected(1, "s")
+    a = _record(event="2026-01-06 00:00:30", receive="2026-01-06 00:00:59", request_id=2)
+    b = _record(event="2026-01-06 00:01:10", receive="2026-01-06 00:00:50",
+                lon=37.05, speed=20.0, request_id=3)
+    assert state.accept(b)
+    assert state.accept(a)
+    now = [datetime(2026, 1, 6, 0, 1)]
+    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
+                        clock=lambda: now[0])
+
+    class GatedModel(_Model):
+        def __init__(self):
+            super().__init__()
+            self.started = [Event(), Event()]
+            self.release = [Event(), Event()]
+
+        def predict(self, request):
+            index = len(self.requests)
+            response = super().predict(request)
+            self.started[index].set()
+            assert self.release[index].wait(timeout=2)
+            return response
+
+    model = GatedModel()
+    flow = running_flow(state, server, Schedule(read_plan(path)), lambda: now[0], model,
+                        predict_interval_s=60, queue_limit=1)
+    try:
+        initial = flow.snapshot()["vehicles"][0]
+        assert model.started[0].wait(timeout=1)
+        assert len(model.requests[0]["telemetry"]) == 1
+        assert model.requests[0]["telemetry"][0]["event_time"] == a.event_time
+        now[0] = datetime(2026, 1, 6, 0, 1, 20)
+        # No accepted packet or polling occurs before releasing this old-context job.
+        model.release[0].set()
+        assert model.started[1].wait(timeout=1)
+        stale = flow.snapshot()["vehicles"][0]
+        assert stale["event_time"] == b.event_time
+        assert stale["input_frame_id"] == a.frame_id  # max-received identity did not change
+        assert stale["input_context_revision"] > initial["input_context_revision"]
+        assert stale["prediction_context_revision"] == initial["input_context_revision"]
+        assert stale["status"] == "degraded"
+        assert stale["alert"] is None
+        assert stale["last_success_at"] == "2026-01-06T00:01:00"
+        assert model.requests[1]["point"]["T"] == "2026-01-06T00:01:20"
+        assert {r["event_time"] for r in model.requests[1]["telemetry"]} == {a.event_time, b.event_time}
+        model.release[1].set()
+        fresh = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+        assert fresh["prediction_context_revision"] == fresh["input_context_revision"]
+        assert fresh["last_success_at"] == "2026-01-06T00:01:20"
+        assert fresh["alert"]["emitted_at"] == "2026-01-06T00:01:20"
+        assert len(model.requests) == 2
+        assert flow.snapshot()["vehicles"][0] == fresh
+        assert initial["prediction_s"] is None  # earlier readback was not mutated
+    finally:
+        for release in model.release:
+            release.set()
+
+
+def test_invalid_correction_revokes_stop_confidence_until_new_confirmed_observation(tmp_path, running_flow):
+    path = tmp_path / "schedule_plan.csv"
+    _plan(path)
+    schedule = Schedule(read_plan(path))
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall")
+    state.connected(1, "s")
+    first_input = _record()
+    assert state.accept(first_input)
+    now = [datetime(2026, 1, 6, 0, 1)]
+    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
+                        clock=lambda: now[0])
+    model = _Model()
+    flow = running_flow(state, server, schedule, lambda: now[0], model, predict_interval_s=10)
+    first = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    assert first["cur_dev_s"] == 30.0
+    correction = replace(first_input, location_valid=False, receive_time="2026-01-06 00:01:02",
+                         frame_id="invalid:3", request_id=3, received_at_utc="2026-01-06 00:01:02")
+    assert state.accept(correction)
+    now[0] = datetime(2026, 1, 6, 0, 1, 2)
+    revoked = flow.snapshot()["vehicles"][0]
+    assert revoked["cur_dev_s"] is None
+    assert revoked["cur_dev_source"] is None
+    assert revoked["status"] == "unavailable"
+    assert schedule.counters()["stop_observations_retracted"] == 1
+    assert state.accept(_record(event="2026-01-06 00:01:10", receive="2026-01-06 00:01:11",
+                                lon=37.05, speed=20.0, request_id=4))
+    now[0] = datetime(2026, 1, 6, 0, 1, 11)
+    moving = flow.snapshot()["vehicles"][0]
+    assert moving["location_valid"] and moving["connected"] and moving["gps_age_s"] == 1.0
+    assert moving["cur_dev_s"] is None
+    assert moving["reason"] == "no_confident_observed_stop"
+    assert len(model.requests) == 1
+    assert moving["prediction_published_unix_ns"] == first["prediction_published_unix_ns"]
+    assert state.accept(_record(event="2026-01-06 00:01:20", receive="2026-01-06 00:01:21",
+                                request_id=5))
+    now[0] = datetime(2026, 1, 6, 0, 1, 21)
+    confirmed = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    assert confirmed["cur_dev_s"] == 80.0
+    assert model.requests[-1]["point"]["cur_dev_s"] == 80.0
+    assert first["cur_dev_s"] == 30.0 and first["status"] == "normal"
+
+
 def test_prediction_uses_only_available_fields_and_outage_retains_last_success(tmp_path, running_flow):
     path = tmp_path / "schedule_plan.csv"
     _plan(path)
