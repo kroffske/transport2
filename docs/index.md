@@ -23,6 +23,7 @@ description: "Навигация дополнена PRD, scorecard и проек
 - [Контракт датасета](../data/README.md) — формат выборок, целевая переменная, метрика и правила сабмита.
 - [Спецификация NDTP и эмулятора](../data/docs/Emulator-and-Telematic-Packets-Specification.md) — потоковый протокол и запуск эмулятора.
 - [Передача текущей модели и интеграции](runbooks/integration-handoff.md) — актуальный ML-кандидат, локальные зависимости и границы следующего этапа.
+- [Backend v1](api/backend-v1.md) — контракт часов, NDTP readback и live consumer для T-4.
 
 ## Generated reference
 
