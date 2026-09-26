@@ -2,7 +2,7 @@
 schema: task.v3
 id: T-4
 title: "Интегрировать NDTP, Backend, актуальную ML-модель и live consumer"
-status: planning
+status: doing
 review_required: qa
 plan_review_profile: standard
 plan_review_gate: advisory
@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: manager
 created_at: "2026-09-25T19:32:16.620Z"
-updated_at: "2026-09-26T01:12:51.551Z"
+updated_at: "2026-09-26T01:15:26.053Z"
 parent: null
 depends_on: []
 gstack_refs: {}
