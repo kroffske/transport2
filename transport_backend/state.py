@@ -186,7 +186,8 @@ class TelemetryState:
                         "unit_id": record.unit_id, "request_id": record.request_id,
                         "session_id": record.session_id, "frame_id": record.frame_id,
                         "event_time": record.event_time,
-                        "receive_time": record.receive_time, "outcome": outcome}
+                        "receive_time": record.receive_time,
+                        "received_at_utc": record.received_at_utc, "outcome": outcome}
             if len(self._outcomes) == self.outcome_limit:
                 self._counters["outcome_evictions"] += 1
             self._outcomes.append(identity)

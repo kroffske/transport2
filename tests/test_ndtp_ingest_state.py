@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import socket
 import struct
 from threading import Event
@@ -83,6 +83,7 @@ def test_socket_fragment_crc_unknown_reconnect_and_correction() -> None:
     state = TelemetryState({UNIT: TR}, history_limit=3, stale_after_s=5,
                            source_clock="dataset_wall")
     with NDTPServer(state, mapping=MAPPING, clock=lambda: now[0], max_frame_size=128) as server:
+        wall_before = datetime.now(timezone.utc).replace(tzinfo=None)
         first = connect(server)
         h = handshake()
         first.sendall(h[:4])
@@ -98,6 +99,10 @@ def test_socket_fragment_crc_unknown_reconnect_and_correction() -> None:
         assert ack["accepted_revision"] == ack["processed_revision"] == 1
         assert ack["last_accepted"]["unit_id"] == UNIT
         assert ack["last_accepted"]["request_id"] == 2
+        assert ack["last_accepted"]["received_at_utc"] == current["telemetry"]["received_at_utc"]
+        received_wall = datetime.fromisoformat(ack["last_accepted"]["received_at_utc"])
+        assert wall_before <= received_wall <= datetime.now(timezone.utc).replace(tzinfo=None)
+        assert ack["last_accepted"]["received_at_utc"] != ack["last_accepted"]["receive_time"]
         bad = bytearray(nav(request=3))
         bad[-1] ^= 1
         first.sendall(bytes(bad) + nav(extra=bytes((99, 0)), request=4) + nav(request=5))
