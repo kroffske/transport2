@@ -1,136 +1,7 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-25T19:49:29.202Z",
+  "generated_at": "2026-09-26T00:08:12.953Z",
   "tasks": [
-    {
-      "id": "T-3",
-      "title": "Получить первую валидную ML-модель и submission",
-      "status": "planned",
-      "type": "feature",
-      "priority": "p0",
-      "owner": "manager",
-      "created_at": "2026-09-25T19:32:16.466Z",
-      "updated_at": "2026-09-25T19:47:13.634Z",
-      "stream": "T",
-      "path": "T-3-2026-09-25-ml-submission",
-      "work_items_total": 5,
-      "work_items_done": 0,
-      "work_items_remaining": [
-        "T-3/data-audit — аудит данных и EDA",
-        "T-3/baseline — split и обязательные baseline",
-        "T-3/modeling — ограниченное сравнение моделей",
-        "T-3/evaluation — locked evaluation и submission",
-        "Независимая QA модельного пути"
-      ],
-      "subtask_count": 4,
-      "last_event": "2026-09-25T19:47:13.639Z",
-      "latest_status_note": {
-        "ts": "2026-09-25T19:32:16.476Z",
-        "event": "note",
-        "actor": "manager",
-        "text": "workflow profile 'feature' selected (type-profile)",
-        "from": null,
-        "to": null,
-        "source": "status_note"
-      },
-      "parent_id": "",
-      "subtasks": [
-        {
-          "id": "T-3-baseline",
-          "title": "Зафиксировать point-in-time split и baseline",
-          "status": "planned",
-          "type": "feature",
-          "priority": "p0",
-          "owner": "manager",
-          "created_at": "2026-09-25T19:32:30.856Z",
-          "updated_at": "2026-09-25T19:47:13.908Z",
-          "stream": "T",
-          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-baseline-point-in-time-split-baseline",
-          "work_items_total": 2,
-          "work_items_done": 0,
-          "work_items_remaining": [
-            "Реализовать split manifest и evaluator",
-            "Рассчитать baseline table"
-          ],
-          "subtask_count": 0,
-          "last_event": "2026-09-25T19:47:13.913Z",
-          "latest_status_note": null,
-          "parent_id": "T-3",
-          "subtasks": []
-        },
-        {
-          "id": "T-3-data-audit",
-          "title": "Провести аудит данных и EDA",
-          "status": "planned",
-          "type": "research",
-          "priority": "p0",
-          "owner": "manager",
-          "created_at": "2026-09-25T19:32:30.710Z",
-          "updated_at": "2026-09-25T19:47:13.772Z",
-          "stream": "T",
-          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-data-audit-eda",
-          "work_items_total": 2,
-          "work_items_done": 0,
-          "work_items_remaining": [
-            "Создать data-quality evidence и EDA notebook",
-            "Передать split recommendations"
-          ],
-          "subtask_count": 0,
-          "last_event": "2026-09-25T19:47:13.777Z",
-          "latest_status_note": null,
-          "parent_id": "T-3",
-          "subtasks": []
-        },
-        {
-          "id": "T-3-evaluation",
-          "title": "Провести финальную оценку и собрать submission",
-          "status": "planned",
-          "type": "feature",
-          "priority": "p0",
-          "owner": "manager",
-          "created_at": "2026-09-25T19:32:31.173Z",
-          "updated_at": "2026-09-25T19:47:14.171Z",
-          "stream": "T",
-          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-evaluation-submission",
-          "work_items_total": 3,
-          "work_items_done": 0,
-          "work_items_remaining": [
-            "Выполнить зафиксированную локальную оценку",
-            "Собрать и проверить submission",
-            "Подготовить result handoff"
-          ],
-          "subtask_count": 0,
-          "last_event": "2026-09-25T19:47:14.176Z",
-          "latest_status_note": null,
-          "parent_id": "T-3",
-          "subtasks": []
-        },
-        {
-          "id": "T-3-modeling",
-          "title": "Сравнить модели и выбрать финальный кандидат",
-          "status": "planned",
-          "type": "feature",
-          "priority": "p0",
-          "owner": "manager",
-          "created_at": "2026-09-25T19:32:31.020Z",
-          "updated_at": "2026-09-25T19:47:14.039Z",
-          "stream": "T",
-          "path": "T-3-2026-09-25-ml-submission/subtasks/T-3-modeling",
-          "work_items_total": 3,
-          "work_items_done": 0,
-          "work_items_remaining": [
-            "Сравнить direct и residual CatBoost",
-            "Проверить оправданную дополнительную модель",
-            "Зафиксировать финального кандидата"
-          ],
-          "subtask_count": 0,
-          "last_event": "2026-09-25T19:47:14.044Z",
-          "latest_status_note": null,
-          "parent_id": "T-3",
-          "subtasks": []
-        }
-      ]
-    },
     {
       "id": "T-4",
       "title": "Собрать системный контур Backend, dashboard и infra",
@@ -159,6 +30,36 @@
         "event": "note",
         "actor": "manager",
         "text": "workflow profile 'feature' selected (type-profile)",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-5",
+      "title": "Оптимизировать ML для score выше 0.70",
+      "status": "doing",
+      "type": "research",
+      "priority": "p2",
+      "owner": "codex",
+      "created_at": "2026-09-25T23:53:29.625Z",
+      "updated_at": "2026-09-26T00:08:12.931Z",
+      "stream": "T",
+      "path": "T-5-2026-09-25-ml-score-0-70",
+      "work_items_total": 2,
+      "work_items_done": 1,
+      "work_items_remaining": [
+        "Проверенный кандидат submission и вывод о пороге 0.70."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-26T00:08:12.936Z",
+      "latest_status_note": {
+        "ts": "2026-09-26T00:08:12.936Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Локальная оптимизация завершена: выбран residual depth4/800 по CV (78.03 -> 76.21), test 62.35 -> 56.39, audit same-fit 63.97 -> 65.93. 21 тест; fresh CSV byte-identical, API parity. submission.csv обновлён, T-3 backup сохранён. W2 остаётся открытым до значения MAE_TARGET/platform score: официальный >0.70 не подтверждён. Без commit/push/upload.",
         "from": null,
         "to": null,
         "source": "status_note"

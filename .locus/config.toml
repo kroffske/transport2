@@ -1,0 +1,404 @@
+schema = "locus.config.v1"
+
+# User-wide prose defaults belong in ~/.locus/config.toml. Add [user].language
+# here only for a project-specific reply-language override. Use [preamble].prompt
+# for artifact-language rules, including exceptions to user-wide prompts.
+# User and project prompt fragments are both emitted, in that order.
+# locus docs init uses [user].language unless --language is supplied.
+
+[git]
+base_branch = "main"
+main_worktree = ""
+task_root_policy = "auto"
+report_root_policy = "auto"
+
+[locus]
+memory_root = ".locus"
+roadmap = ".locus/roadmap.md"
+contract_path = ".locus/AGENTS.md"
+registry_rule = "Register major .locus/** surfaces and owner changes in .locus/AGENTS.md; do not enumerate files."
+
+[locus.tasks]
+root = ".tasks"
+
+[locus.reports]
+root = ".reports"
+
+[locus.docs]
+root = "docs"
+
+# Authoritative docs-owned roots for each document type. A non-empty value wins
+# over the docs/<key> default. Project configuration is the owner.
+# default: docs/* for the docs-owned types.
+[locus.docs.roots]
+prd = "docs/prd"
+adr = "docs/adr"
+system_design = "docs/system-design"
+runbook = "docs/runbooks"
+
+[locus.specs]
+# spec root per ADR-001 (decision-doc storage standard)
+root = "docs/specs"
+
+# This package only loads and validates task workflow policy for future WF-3/WF-6
+# consumers. Current task commands do not route, materialize, or cause provider
+# side effects from these settings. Policy is project-only and opt-in: uncomment
+# exactly one body below and keep the active schema declaration above.
+# `write_enabled` is project intent, never host authorization; do not
+# place tokens, passwords, API keys, credentials, or other secrets here.
+
+# task-workflow-example:local:begin
+# [tasks.workflow]
+# default_mode = "local"
+# allow_no_task = false
+# no_task_max_risk = "low"
+#
+# [tasks.workflow.materialization]
+# local = "intake"
+# external = "manual"
+#
+# [tasks.workflow.title]
+# seed = "creation-source"
+# post_create = "independent"
+# directory_rename = "never"
+# drift = "show"
+#
+# [tasks.workflow.sync]
+# intake = "off"
+# team = "off"
+# execution = "off"
+# details = "local-only"
+# comments = "off"
+#
+# [tasks.workflow.failure]
+# provider_unavailable = "fail"
+# ambiguous_write = "readback"
+# weak_identity_write = "deny"
+# closure_with_pending = "block"
+#
+# [tasks.workflow.overrides]
+# allow = ["mode", "provider", "local_at", "external_at", "offline", "no_task"]
+# record = true
+# task-workflow-example:local:end
+
+# task-workflow-example:external-first:begin
+# [tasks.workflow]
+# default_mode = "external-first"
+# provider = "linear"
+# allow_no_task = true
+# no_task_max_risk = "low"
+#
+# [tasks.workflow.materialization]
+# local = "planning"
+# external = "intake"
+#
+# [tasks.workflow.title]
+# seed = "creation-source"
+# post_create = "independent"
+# directory_rename = "never"
+# drift = "show"
+#
+# [tasks.workflow.sync]
+# intake = "seed-once"
+# team = "observe"
+# execution = "publish"
+# details = "local-only"
+# comments = "semantic-only"
+#
+# [tasks.workflow.failure]
+# provider_unavailable = "queue"
+# ambiguous_write = "readback"
+# weak_identity_write = "deny"
+# closure_with_pending = "allow-visible"
+#
+# [tasks.workflow.overrides]
+# allow = ["mode", "provider", "local_at", "external_at", "offline", "no_task"]
+# record = true
+#
+# [tasks.providers.linear]
+# workspace = "engineering"
+# team = "ALG"
+# project = "Backlog"
+# write_enabled = false
+# task-workflow-example:external-first:end
+
+# task-workflow-example:paired:begin
+# [tasks.workflow]
+# default_mode = "paired"
+# provider = "linear"
+# allow_no_task = false
+# no_task_max_risk = "low"
+#
+# [tasks.workflow.materialization]
+# local = "intake"
+# external = "intake"
+#
+# [tasks.workflow.title]
+# seed = "creation-source"
+# post_create = "independent"
+# directory_rename = "never"
+# drift = "show"
+#
+# [tasks.workflow.sync]
+# intake = "seed-once"
+# team = "observe"
+# execution = "manual"
+# details = "local-only"
+# comments = "manual"
+#
+# [tasks.workflow.failure]
+# provider_unavailable = "queue"
+# ambiguous_write = "readback"
+# weak_identity_write = "deny"
+# closure_with_pending = "block"
+#
+# [tasks.workflow.overrides]
+# allow = ["mode", "provider", "local_at", "external_at", "offline", "no_task"]
+# record = true
+#
+# [tasks.providers.linear]
+# workspace = "engineering"
+# team = "ALG"
+# write_enabled = true
+# task-workflow-example:paired:end
+
+[reference_policy]
+doc = "docs/reference-policy.md"
+normal_skill_max_refs = 3
+orchestrator_max_refs = 5
+setup_max_refs = 0
+allow_many_refs = ["code-standard"]
+
+[skill_budgets.router]
+body_lines = 80
+references = 2
+
+[skill_budgets.workflow]
+body_lines = 120
+references = 3
+
+[skill_budgets.orchestrator]
+body_lines = 150
+references = 5
+
+[skill_budgets.standard]
+body_lines = 80
+references = -1
+requires_index = true
+
+[export]
+output_dir = "~/zips"
+include_ignored_paths = [".tasks", ".ml-kaggle", ".locus"]
+max_file_mb = 10
+
+[plan_review]
+default_profile = "standard"
+max_rounds = 2
+stale_on_binding_change = true
+
+[pm]
+default_delivery_mode = "standard"
+default_orchestration_mode = "inline"
+allow_automatic_escalation = true
+require_reason_for_deescalation = true
+
+[pm.delivery_modes.accelerated]
+plan_review_profile = "light"
+plan_review_gate = "advisory"
+require_completion_report = false
+
+[pm.delivery_modes.standard]
+plan_review_profile = "standard"
+plan_review_gate = "required"
+require_completion_report = true
+
+[pm.delivery_modes.full]
+plan_review_profile = "deep"
+plan_review_gate = "required"
+require_traceability = true
+require_completion_report = true
+
+[ship]
+# Replace this starter with the repository's exact direct-main or PR-only flow,
+# verification, release, deploy, and evidence rules. Keep the complete policy
+# in prose instead of decomposing it into target flags.
+# Public example: never push directly to main; push a task branch and create or
+# update a pull request, then stop before merge unless explicitly authorized.
+# Trusted example: accepted and verified work may commit and push directly to
+# main, followed by the repository's exact install or deploy procedure.
+prompt = '''
+Before shipping, follow the accepted task or user request and the repository's root AGENTS.md when present.
+Treat commit, push, pull request, merge, release, and deploy as distinct boundaries; stop at the last boundary the request and repository flow authorize.
+If the repository has not stated whether its base branch may be updated directly or only through a pull request, stop before remote mutation and resolve that rule first.
+Record the branch, commit, checks, and any remote URL or deploy result that were actually reached.
+'''
+
+# PM selection policy is project-only. It chooses a profile; it does not start work.
+[pm.workflow]
+default = "feature"
+
+[pm.workflow.by_type]
+bug = "bug"
+fix = "bug"
+
+[workflows.bug]
+schema = "locus.workflow.v1"
+description = "Reproduce -> isolate owner -> fix cause -> regression proof -> QA."
+expected_skills = ["locus-plan", "locus-dev", "locus-ship"]
+triggers = ["bug", "debug", "broken", "failing", "regression"]
+steps = [
+  "Capture observed and expected behavior.",
+  "Build the smallest deterministic pass/fail loop, or record why impossible.",
+  "Isolate the owning layer before editing.",
+  "Fix the confirmed cause.",
+  "Add or update regression proof.",
+  "Run QA according to risk."
+]
+questions = [
+  "What is the smallest reliable signal that reproduces the bug?",
+  "Which layer owns the observed behavior?",
+  "What regression proof fails before the fix and passes after?"
+]
+
+# steps explain the workflow. Only stage `after` edges define route order.
+[[workflows.bug.stages]]
+id = "plan"
+kind = "skill"
+use = "locus-plan"
+
+[[workflows.bug.stages]]
+id = "implement"
+kind = "skill"
+use = "locus-dev"
+after = ["plan"]
+
+[[workflows.bug.stages]]
+id = "verify"
+kind = "check"
+use = "task-verification"
+after = ["implement"]
+
+[workflows.feature]
+schema = "locus.workflow.v1"
+description = "Outcome -> owner/interface -> slice -> tests/docs -> QA."
+expected_skills = ["locus-plan", "locus-dev", "locus-ship"]
+triggers = ["feature", "add", "implement", "new capability"]
+steps = [
+  "State user-visible outcome and non-goals.",
+  "Name the owning module/class/interface.",
+  "Choose the smallest useful slice.",
+  "Implement with behavior proof.",
+  "Update docs/config when the public contract changes.",
+  "Run review and QA."
+]
+questions = [
+  "Who owns this behavior in domain terms?",
+  "What public contract must callers rely on?",
+  "What is the first slice that proves value without overbuilding?"
+]
+
+[[workflows.feature.stages]]
+id = "plan"
+kind = "skill"
+use = "locus-plan"
+
+[[workflows.feature.stages]]
+id = "implement"
+kind = "skill"
+use = "locus-dev"
+after = ["plan"]
+
+[[workflows.feature.stages]]
+id = "review"
+kind = "agent"
+use = "code-quality-reviewer"
+after = ["implement"]
+
+[[workflows.feature.stages]]
+id = "qa"
+kind = "skill"
+use = "locus-qa"
+after = ["review"]
+
+[workflows.refactor]
+description = "Current behavior proof -> target boundary -> mechanical steps -> equivalence proof -> review."
+expected_skills = ["locus-plan", "locus-dev", "locus-ship"]
+triggers = ["refactor", "cleanup", "simplify", "rewrite", "wrappers"]
+steps = [
+  "Capture current behavior proof before changing shape.",
+  "Name the target owner/boundary.",
+  "Apply small mechanical changes.",
+  "Run equivalence checks.",
+  "Use code-quality-review for wrapper/ownership risk."
+]
+questions = [
+  "What behavior must stay identical?",
+  "Which wrapper/helper disappears or earns its keep?",
+  "What check proves no semantic drift?"
+]
+
+[workflows.research]
+description = "Brief -> lanes -> evidence -> synthesis -> replan."
+expected_skills = ["locus-plan", "locus-research"]
+triggers = ["research", "investigate", "compare", "find options"]
+steps = [
+  "Write the decision-blocking question.",
+  "Collect evidence in bounded lanes.",
+  "Synthesize recommendation and risks.",
+  "Route to planning if implementation scope changes."
+]
+questions = [
+  "What decision will this research unblock?",
+  "What evidence would change the recommendation?",
+  "What needs to be replanned after synthesis?"
+]
+
+[workflows.release]
+description = "QA accepted -> changelog/version -> scoped commit -> push/install verification."
+expected_skills = ["locus-plan", "locus-qa", "locus-ship"]
+triggers = ["ship", "release", "commit", "push", "deploy"]
+steps = [
+  "Confirm QA acceptance or explicit bypass.",
+  "Check git status and intended files.",
+  "Update changelog/version if required.",
+  "Commit and push/install as requested.",
+  "Record ship evidence."
+]
+questions = [
+  "What exact boundary is being shipped?",
+  "Are there unrelated/generated files in the diff?",
+  "What post-ship verification is required?"
+]
+
+[workflows.docs]
+description = "Source truth -> affected docs -> registry update -> drift check."
+expected_skills = ["locus-plan", "locus-docs", "locus-ship"]
+triggers = ["docs", "documentation", "readme", "guide"]
+steps = [
+  "Identify the source-of-truth behavior or contract.",
+  "Update only docs affected by that contract.",
+  "Register durable .locus/** docs when needed.",
+  "Run a drift check against code/config/tests."
+]
+questions = [
+  "What code/config/test surface is the source of truth?",
+  "Which docs become stale if this changes?",
+  "What drift check proves the docs match reality?"
+]
+
+[workflows.audit]
+description = "Scope -> evidence -> ranked findings -> fix plan or accepted risk."
+expected_skills = ["locus-plan", "locus-qa"]
+triggers = ["audit", "security", "risk", "review risks"]
+steps = [
+  "Define the audited boundary and excluded areas.",
+  "Collect evidence before rating findings.",
+  "Rank findings by impact and exploitability or delivery risk.",
+  "Route fixes through planning when they change ownership or contracts.",
+  "Record accepted risk explicitly."
+]
+questions = [
+  "What boundary is being audited?",
+  "What evidence would upgrade or downgrade the finding?",
+  "Which findings require a plan instead of an inline fix?"
+]

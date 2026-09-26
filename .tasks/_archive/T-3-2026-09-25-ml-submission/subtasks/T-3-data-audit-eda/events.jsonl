@@ -1,0 +1,9 @@
+{"ts":"2026-09-25T19:32:30.714Z","event":"created","actor":"manager","data":{"status":"planning"},"session_id":"01a0d8ca-0400-7d03-8e12-197a9971bc91"}
+{"ts":"2026-09-25T19:47:13.777Z","event":"status_changed","actor":"manager","data":{"from":"planning","to":"planned"},"session_id":"01a0d8ca-0400-7d03-8e12-197a9971bc91"}
+{"ts":"2026-09-25T20:48:20.161Z","event":"status_changed","actor":"manager","data":{"from":"planned","to":"doing"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T20:48:20.306Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Execution delegated: read-only recon GPT-6 Luna; implementation pending shared data contract."},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:40:30.114Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:40:30.247Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:40:30.377Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Полный аудит и exposure/quarantine evidence: ../artifacts/data_audit.md; независимая QA: ../../qa.md."},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:09.809Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"done"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:09.809Z","event":"closed","actor":"manager","data":{"status":"done"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}

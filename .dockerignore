@@ -1,0 +1,10 @@
+.git
+.venv
+.local
+.tasks
+.locus
+__pycache__
+*.zip
+data
+artifacts
+tests

@@ -1,0 +1,9 @@
+{"ts":"2026-09-25T19:32:31.177Z","event":"created","actor":"manager","data":{"status":"planning"},"session_id":"01a0d8ca-0400-7d03-8e12-197a9971bc91"}
+{"ts":"2026-09-25T19:47:14.176Z","event":"status_changed","actor":"manager","data":{"from":"planning","to":"planned"},"session_id":"01a0d8ca-0400-7d03-8e12-197a9971bc91"}
+{"ts":"2026-09-25T21:41:11.616Z","event":"status_changed","actor":"manager","data":{"from":"planned","to":"doing"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:11.766Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:11.913Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:12.056Z","event":"work_item_done","actor":"manager","data":{"item":3},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:12.193Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Locked local evaluation, separate submission_model и 151-row validated submission подтверждены QA REQ-007/REQ-008."},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:12.354Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"done"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:12.354Z","event":"closed","actor":"manager","data":{"status":"done"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}

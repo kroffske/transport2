@@ -1,0 +1,21 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Локальные модели, эксперименты и runtime evidence не входят в исходники.
+/.local/
+/artifacts/
+/.tasks/**/artifacts/
+/notebooks/.tasks/
+/.locus/settings.json
+
+# Полная официальная раздача хранится локально, но не попадает в Git.
+data/train/
+data/test/
+data/validate/
+data/labels/
+data/emulator/*.tar

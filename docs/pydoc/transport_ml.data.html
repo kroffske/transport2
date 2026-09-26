@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Python: module transport_ml.data</title>
+</head><body>
+
+<table class="heading">
+<tr class="heading-text decor">
+<td class="title">&nbsp;<br><strong class="title"><a href="transport_ml.html" class="white">transport_ml</a>.data</strong></td>
+<td class="extra"><a href=".">index</a><br><a href="file:/mnt/data/transport_ml_solution/transport_ml/data.py">/mnt/data/transport_ml_solution/transport_ml/data.py</a></td></tr></table>
+    <p><span class="code">Data&nbsp;contracts.&nbsp;Facts&nbsp;are&nbsp;never&nbsp;loaded&nbsp;into&nbsp;the&nbsp;feature-building&nbsp;schedule.</span></p>
+<p>
+<table class="section">
+<tr class="decor pkg-content-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Modules</strong></td></tr>
+    
+<tr><td class="decor pkg-content-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><table><tr><td class="multicolumn"><a href="hashlib.html">hashlib</a><br>
+</td><td class="multicolumn"><a href="numpy.html">numpy</a><br>
+</td><td class="multicolumn"><a href="pandas.html">pandas</a><br>
+</td><td class="multicolumn"></td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor functions-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Functions</strong></td></tr>
+    
+<tr><td class="decor functions-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt><a name="-file_manifest"><strong>file_manifest</strong></a>(paths: 'list[Path]') -&gt; 'list[dict]'</dt></dl>
+ <dl><dt><a name="-parse_time"><strong>parse_time</strong></a>(values: 'pd.Series') -&gt; 'pd.Series'</dt><dd><span class="code">Keep&nbsp;the&nbsp;dataset's&nbsp;wall&nbsp;clock;&nbsp;never&nbsp;silently&nbsp;convert&nbsp;it&nbsp;to&nbsp;a&nbsp;user's&nbsp;timezone.</span></dd></dl>
+ <dl><dt><a name="-prepare_plan"><strong>prepare_plan</strong></a>(frame: 'pd.DataFrame') -&gt; 'pd.DataFrame'</dt></dl>
+ <dl><dt><a name="-prepare_traffic"><strong>prepare_traffic</strong></a>(frame: 'pd.DataFrame') -&gt; 'pd.DataFrame'</dt></dl>
+ <dl><dt><a name="-read_plan"><strong>read_plan</strong></a>(path: 'Path') -&gt; 'pd.DataFrame'</dt></dl>
+ <dl><dt><a name="-read_points"><strong>read_points</strong></a>(path: 'Path', require_target: 'bool' = False) -&gt; 'pd.DataFrame'</dt></dl>
+ <dl><dt><a name="-read_traffic"><strong>read_traffic</strong></a>(path: 'Path') -&gt; 'pd.DataFrame'</dt></dl>
+ <dl><dt><a name="-validate_points"><strong>validate_points</strong></a>(frame: 'pd.DataFrame', require_target: 'bool' = False) -&gt; 'pd.DataFrame'</dt></dl>
+</td></tr></table><p>
+<table class="section">
+<tr class="decor data-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Data</strong></td></tr>
+    
+<tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><strong>PLAN_COLUMNS</strong> = ['tt_action_item_id', 'tr_id', 'time_begin', 'geom']<br>
+<strong>POINT_COLUMNS</strong> = ['sample_id', 'tr_id', 'T', 'target_stop_id', 'target_time_begin', 'cur_dev_s']<br>
+<strong>TRAFFIC_COLUMNS</strong> = ['tr_id', 'event_time', 'receive_time', 'location_valid', 'lon', 'lat', 'speed', 'heading']</td></tr></table>
+</body></html>

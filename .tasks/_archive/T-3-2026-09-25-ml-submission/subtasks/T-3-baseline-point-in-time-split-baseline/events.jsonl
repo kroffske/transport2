@@ -1,0 +1,8 @@
+{"ts":"2026-09-25T19:32:30.860Z","event":"created","actor":"manager","data":{"status":"planning"},"session_id":"01a0d8ca-0400-7d03-8e12-197a9971bc91"}
+{"ts":"2026-09-25T19:47:13.913Z","event":"status_changed","actor":"manager","data":{"from":"planning","to":"planned"},"session_id":"01a0d8ca-0400-7d03-8e12-197a9971bc91"}
+{"ts":"2026-09-25T21:41:09.967Z","event":"status_changed","actor":"manager","data":{"from":"planned","to":"doing"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:10.111Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:10.256Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:10.397Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Frozen calendar split и baseline metrics подтверждены QA REQ-003/REQ-005."},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:10.557Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"done"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}
+{"ts":"2026-09-25T21:41:10.557Z","event":"closed","actor":"manager","data":{"status":"done"},"session_id":"01a0da51-0e51-7a93-b982-9a5800f90df7"}

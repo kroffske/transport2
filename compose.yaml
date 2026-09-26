@@ -1,0 +1,16 @@
+services:
+  ml:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_DIR: /models/context
+      FALLBACK_MODEL_DIR: /models/core
+    volumes:
+      - ./artifacts:/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
