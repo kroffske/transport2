@@ -120,8 +120,33 @@ def controller_call(base_url: str, method: str, path: str,
         return json.load(response)
 
 
+def validate_backend_clock(base_url: str, dataset_origin: pd.Timestamp,
+                           epoch_origin: int, timeout: float) -> None:
+    ready = controller_call(base_url, "GET", "/ready", None, timeout)
+    mapping = ready.get("clock_mapping")
+    if (ready.get("source_clock") != "dataset_wall" or not isinstance(mapping, dict)
+            or pd.Timestamp(mapping.get("dataset_origin")) != dataset_origin
+            or mapping.get("epoch_origin") != epoch_origin):
+        raise ValueError("Sender clock origins differ from Backend /ready clock_mapping")
+
+
+def wait_for_session(base_url: str, unit_id: int, since_revision: int,
+                     timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        readback = controller_call(base_url, "GET",
+                                   f"/v1/ingest?since_revision={since_revision}", None, timeout)
+        sessions = readback["active_sessions"].get(str(unit_id), [])
+        if len(sessions) > 1:
+            raise RuntimeError(f"Multiple active NDTP sessions for unit {unit_id}")
+        if sessions:
+            return str(sessions[0])
+        time.sleep(0.01)
+    raise TimeoutError(f"No handshake session for unit {unit_id}")
+
+
 def wait_for_ack(base_url: str, prior_revision: int, unit_id: int,
-                 request_id: int, timeout: float) -> dict:
+                 request_id: int, session_id: str, timeout: float) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         readback = controller_call(base_url, "GET",
@@ -130,7 +155,8 @@ def wait_for_ack(base_url: str, prior_revision: int, unit_id: int,
             raise RuntimeError(f"NDTP outcome journal gap after revision {prior_revision}")
         for outcome in readback["outcomes"]:
             if (int(outcome["unit_id"]) == unit_id
-                    and int(outcome["request_id"]) == request_id):
+                    and int(outcome["request_id"]) == request_id
+                    and outcome["session_id"] == session_id):
                 if outcome["outcome"] not in {"accepted", "duplicate"}:
                     raise RuntimeError(f"NDTP frame {unit_id}/{request_id} outcome={outcome['outcome']}")
                 return outcome
@@ -146,8 +172,12 @@ def replay(args: argparse.Namespace) -> dict:
         raise ValueError("dataset_origin must be a naive wall-clock value")
     if args.speedup <= 0:
         raise ValueError("speedup must be positive")
+    if args.backend_url:
+        validate_backend_clock(args.backend_url, dataset_origin, args.epoch_origin, args.timeout)
     sockets: dict[int, socket.socket] = {}
     request_ids: dict[int, int] = {}
+    session_ids: dict[int, str] = {}
+    last_revision = 0
     first_receive = rows.receive_time.iloc[0]
     start_monotonic = time.monotonic()
     max_lateness = 0.0
@@ -163,11 +193,20 @@ def replay(args: argparse.Namespace) -> dict:
                 time.sleep(wait)
             unit_id = int(row.unit_id)
             if unit_id not in sockets:
+                if args.backend_url:
+                    before_connect = controller_call(
+                        args.backend_url, "GET",
+                        f"/v1/ingest?since_revision={last_revision}", None, args.timeout)
+                    if before_connect["active_sessions"].get(str(unit_id), []):
+                        raise RuntimeError(f"Unit {unit_id} already has an active NDTP session")
                 sock = socket.create_connection((args.host, args.port), timeout=args.timeout)
                 sock.settimeout(args.timeout)
                 sock.sendall(handshake(unit_id))
                 sockets[unit_id] = sock
                 request_ids[unit_id] = 1
+                if args.backend_url:
+                    session_ids[unit_id] = wait_for_session(args.backend_url, unit_id,
+                                                           last_revision, args.timeout)
             request_ids[unit_id] = (request_ids[unit_id] + 1) & 0xFFFFFFFF
             if request_ids[unit_id] == 0:
                 request_ids[unit_id] = 1
@@ -176,7 +215,8 @@ def replay(args: argparse.Namespace) -> dict:
                 advance = controller_call(args.backend_url, "POST", "/v1/replay/clock",
                                           {"receive_time": row.receive_time.isoformat(),
                                            "unit_id": unit_id,
-                                           "request_id": request_ids[unit_id]}, args.timeout)
+                                           "request_id": request_ids[unit_id],
+                                           "session_id": session_ids[unit_id]}, args.timeout)
                 prior_revision = int(advance["processed_revision"])
             packet, quantization = navigation(pd.Series(row._asdict()), request_ids[unit_id],
                                               dataset_origin, args.epoch_origin)
@@ -185,12 +225,14 @@ def replay(args: argparse.Namespace) -> dict:
             max_lateness = max(max_lateness, max(0.0, send_monotonic_ns / 1e9 - target_send))
             sockets[unit_id].sendall(packet)
             acknowledged = (wait_for_ack(args.backend_url, prior_revision, unit_id,
-                                         request_ids[unit_id], args.timeout)
+                                         request_ids[unit_id], session_ids[unit_id], args.timeout)
                             if args.backend_url else None)
             ack_monotonic_ns = time.monotonic_ns() if acknowledged else None
             ack_unix_ns = time.time_ns() if acknowledged else None
             if acknowledged and acknowledged["outcome"] == "duplicate":
                 duplicate += 1
+            if acknowledged:
+                last_revision = max(last_revision, int(acknowledged["revision"]))
             sent += 1
             if trace:
                 trace.write(json.dumps({"source_packet_id": row.packet_id,

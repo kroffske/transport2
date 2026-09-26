@@ -144,13 +144,19 @@
             "maximum": 4294967295.0,
             "minimum": 1.0,
             "title": "Request Id"
+          },
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Session Id"
           }
         },
         "type": "object",
         "required": [
           "receive_time",
           "unit_id",
-          "request_id"
+          "request_id",
+          "session_id"
         ],
         "title": "ReplayStep"
       },
