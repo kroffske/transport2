@@ -7,7 +7,9 @@ time is an approximation of arrival, never a ground-truth arrival timestamp.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections import Counter
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 import math
 import pandas as pd
@@ -26,6 +28,18 @@ class Arrival:
                 "time_begin": self.time.isoformat(), "geom": self.geom}
 
 
+@dataclass
+class StopProgress:
+    """One first observation per known planned arrival; no retained GPS stream."""
+
+    first_events: dict[str, datetime] = field(default_factory=dict)
+    seen_frames: set[str] = field(default_factory=set)
+    last_stop: Arrival | None = None
+    last_evidence_event: datetime | None = None
+    last_source_time: datetime | None = None
+    confident: bool = False
+
+
 class Schedule:
     """One owner for target choice and ordered stop matching."""
 
@@ -39,11 +53,16 @@ class Schedule:
         self.stop_speed_kmh = stop_speed_kmh
         self.observation_lag_s = observation_lag_s
         self.by_vehicle: dict[str, list[Arrival]] = {}
+        self._times: dict[str, list[datetime]] = {}
+        self._progress: dict[str, StopProgress] = {}
+        self._counters: Counter[str] = Counter()
         for tr_id, group in plan.groupby("tr_id", sort=False):
             self.by_vehicle[str(tr_id)] = [
                 Arrival(str(row.tt_action_item_id), row.time_begin.to_pydatetime(),
                         float(row.stop_lon), float(row.stop_lat), str(row.geom))
                 for row in group.itertuples(index=False)]
+            self._times[str(tr_id)] = [stop.time for stop in self.by_vehicle[str(tr_id)]]
+            self._progress[str(tr_id)] = StopProgress()
 
     def target(self, tr_id: str, at: datetime) -> Arrival | None:
         low, high = at + timedelta(seconds=600), at + timedelta(seconds=900)
@@ -57,18 +76,28 @@ class Schedule:
                            history: list[dict[str, object]]) -> float | None:
         """Deviation at the latest ordered, confident observed stop.
 
-        Repeated stationary packets retain the first observation at that stop.
-        A later ambiguous match invalidates the observation until a new
-        confident stop appears. A backward route match is also ambiguous.
+        Process newly available frames in receive order. First observations
+        belong to this detector, not the ML rolling window. Each vehicle retains
+        at most one event per planned arrival plus IDs in the bounded state
+        history supplied by its caller. Late evidence never reverses the
+        committed stop sequence or changes a recorded first observation.
         """
         stops = self.by_vehicle.get(tr_id, ())
-        last_stop_id: str | None = None
-        last_plan_time: datetime | None = None
-        last_deviation: float | None = None
-        for row in history:
+        if not stops:
+            return None
+        progress = self._progress[tr_id]
+        if progress.last_source_time is not None and at < progress.last_source_time:
+            raise ValueError("stop detector source time must not move backwards")
+        progress.last_source_time = at
+        available = [row for row in history
+                     if datetime.fromisoformat(str(row["event_time"])) <= at
+                     and datetime.fromisoformat(str(row["receive_time"])) <= at]
+        new = [row for row in available if str(row["frame_id"]) not in progress.seen_frames]
+        progress.seen_frames = {str(row["frame_id"]) for row in available}
+        new.sort(key=lambda row: (str(row["receive_time"]), str(row["received_at_utc"])))
+        for row in new:
             event = datetime.fromisoformat(str(row["event_time"]))
-            receive = datetime.fromisoformat(str(row["receive_time"]))
-            if event > at or receive > at or not row["location_valid"]:
+            if not row["location_valid"]:
                 continue
             speed = row["speed"]
             lon, lat = row["lon"], row["lat"]
@@ -77,28 +106,48 @@ class Schedule:
                     or float(speed) > self.stop_speed_kmh):
                 continue
             near: list[int] = []
-            for index, stop in enumerate(stops):
-                if (not math.isfinite(stop.lon) or not math.isfinite(stop.lat)
-                        or stop.time > event + timedelta(seconds=60)
-                        or (event - stop.time).total_seconds() > self.observation_lag_s):
+            times = self._times[tr_id]
+            start = bisect_left(times, event - timedelta(seconds=self.observation_lag_s))
+            end = bisect_right(times, event + timedelta(seconds=60))
+            for index in range(start, end):
+                stop = stops[index]
+                if not math.isfinite(stop.lon) or not math.isfinite(stop.lat):
                     continue
                 if _distance_m(float(lon), float(lat), stop.lon, stop.lat) <= self.stop_radius_m:
                     near.append(index)
             if len(near) > 1:
-                last_deviation = None
+                if progress.last_evidence_event is None or event >= progress.last_evidence_event:
+                    progress.confident = False
+                    progress.last_evidence_event = event
+                    self._counters["stop_ambiguous"] += 1
                 continue
             if not near:
                 continue
             index = near[0]
             stop = stops[index]
-            if last_plan_time is not None and stop.time < last_plan_time:
-                last_deviation = None
+            if progress.last_evidence_event is not None and event < progress.last_evidence_event:
+                self._counters["stop_late_evidence_ignored"] += 1
                 continue
-            if stop.stop_id != last_stop_id:
-                last_stop_id = stop.stop_id
-                last_plan_time = stop.time
-                last_deviation = (event - stop.time).total_seconds()
-        return last_deviation
+            progress.last_evidence_event = event
+            if progress.last_stop is not None and stop.time < progress.last_stop.time:
+                progress.confident = False
+                self._counters["stop_sequence_regression"] += 1
+                continue
+            if stop.stop_id not in progress.first_events:
+                progress.first_events[stop.stop_id] = event
+                self._counters["stop_observations"] += 1
+            progress.last_stop = stop
+            progress.confident = True
+        if not progress.confident or progress.last_stop is None:
+            return None
+        first = progress.first_events[progress.last_stop.stop_id]
+        return (first - progress.last_stop.time).total_seconds()
+
+    def counters(self) -> dict[str, int]:
+        return {**self._counters,
+                "stop_observation_count": sum(len(p.first_events) for p in self._progress.values()),
+                "stop_observation_limit": sum(len(stops) for stops in self.by_vehicle.values()),
+                "stop_seen_frame_count": sum(len(p.seen_frames) for p in self._progress.values())}
 
 
 def _distance_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
