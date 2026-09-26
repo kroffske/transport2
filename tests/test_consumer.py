@@ -5,10 +5,15 @@ from __future__ import annotations
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
 from threading import Thread
 import time
 
 from fastapi.testclient import TestClient
+import pytest
 
 from consumer.service import create_app
 
@@ -172,3 +177,100 @@ def test_initial_failure_and_bad_schema_do_not_claim_fresh_data():
         assert bad_schema["status"] == "offline"
         assert "schema_version" in bad_schema["reason"]
         assert bad_schema["snapshot"] == online["snapshot"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is required to exercise browser polling JavaScript")
+def test_browser_polling_failure_timeout_and_recovery():
+    page = Path(__file__).parents[1] / "consumer" / "index.html"
+    source = re.search(r"<script>(.*?)</script>", page.read_text(), re.S).group(1)
+    # Execute the shipped script; emulate only browser I/O, DOM and wall time.
+    driver = r"""
+    const {readFileSync} = require('node:fs');
+    const vm = require('node:vm');
+    const assert = require('node:assert/strict');
+    const input = JSON.parse(readFileSync(0, 'utf8'));
+    let now = 0;
+    class Element {
+      constructor() { this.children = []; this.textContent = ''; this.className = ''; }
+      appendChild(child) { this.children.push(child); }
+      replaceChildren() { this.children = []; }
+      get firstChild() { return this.children[0]; }
+    }
+    const elements = new Map();
+    const byId = id => {
+      if (!elements.has(id)) elements.set(id, new Element());
+      return elements.get(id);
+    };
+    const requests = [], timeouts = new Map();
+    let timerId = 0;
+    const context = vm.createContext({
+      document: {getElementById: byId, createElement: () => new Element()},
+      Date: class extends Date { static now() { return now; } }, AbortController,
+      // Deliberately allow a late response after abort to test freshness protection.
+      fetch: (url, options) => new Promise((resolve, reject) => requests.push({resolve, reject, ...options})),
+      setTimeout: callback => { timeouts.set(++timerId, callback); return timerId; },
+      clearTimeout: id => timeouts.delete(id), setInterval: () => {},
+    });
+    const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+    const respond = data => ({ok: true, json: async () => data});
+    const rowText = () => byId('vehicles').children[0].children.map(cell => cell.textContent).join(' ');
+    (async () => {
+      vm.runInContext(input.source, context);
+      assert.equal(requests.length, 1);
+      now = 1000;
+      requests[0].resolve(respond(input.normal));
+      await flush();
+      assert.equal(byId('connection').textContent, 'Backend online');
+      assert.equal(byId('snapshot-age').textContent, '1.0 s', 'include response delivery age');
+      assert(!rowText().includes('последний известный'));
+
+      const failedPoll = context.poll();
+      requests[1].resolve({ok: false, status: 503});
+      await failedPoll;
+      assert(byId('connection').textContent.includes('Consumer offline'));
+      assert.equal(byId('fetched-at').textContent, input.normal.fetched_at);
+      assert(rowText().includes('последний известный'));
+      assert.equal(byId('vehicles').children[0].className, 'stale');
+      now = 4000;
+      context.updateAge();
+      assert.equal(byId('snapshot-age').textContent, '4.0 s');
+
+      const hangingPoll = context.poll();
+      await context.poll();
+      assert.equal(requests.length, 3, 'only one request may be in flight');
+      [...timeouts.values()][0]();
+      now = 6500;
+      requests[2].resolve(respond(input.normal));
+      await hangingPoll;
+      assert(byId('connection-reason').textContent.includes('timed out'));
+      assert.equal(byId('fetched-at').textContent, input.normal.fetched_at);
+      assert.equal(byId('snapshot-age').textContent, '6.5 s');
+      assert(rowText().includes('последний известный'));
+
+      const recoveredPoll = context.poll();
+      const recovered = JSON.parse(JSON.stringify(input.normal));
+      recovered.fetched_at = new Date(now).toISOString();
+      recovered.snapshot.revision = 17;
+      recovered.snapshot.vehicles[0].prediction_s = 213;
+      requests[3].resolve(respond(recovered));
+      await recoveredPoll;
+      assert.equal(byId('connection').textContent, 'Backend online');
+      assert.equal(byId('revision').textContent, '17');
+      assert.equal(byId('snapshot-age').textContent, '0.0 s');
+      assert.equal(byId('vehicles').children[0].className, '');
+      assert(!rowText().includes('последний известный'));
+
+      const backendOfflinePoll = context.poll();
+      requests[4].resolve(respond({...recovered, status: 'offline', age_s: 5, reason: 'Backend HTTP 503'}));
+      await backendOfflinePoll;
+      assert(byId('connection').textContent.includes('Backend offline'));
+      assert(rowText().includes('последний известный'));
+      assert.equal(byId('snapshot-age').textContent, '5.0 s');
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+    """
+    result = subprocess.run([shutil.which("node"), "-e", driver], input=json.dumps({
+        "source": source,
+        "normal": {"status": "online", "snapshot": snapshot(16, 187.5),
+                   "fetched_at": "1970-01-01T00:00:00+00:00", "age_s": 0, "reason": None},
+    }), text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
