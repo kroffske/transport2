@@ -15,12 +15,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {LOST_AFTER_S} from './incidents.js';
 import {reasonText} from './reasons.js';
-import {coordOk, shiftedText} from './route-context.js';
+import {coordOk, routeLayersFor, shiftedText} from './route-context.js';
 import {speedupText} from './run.js';
 
 const base = process.env.UI_URL || 'http://127.0.0.1:18882';
 const evidenceDir = process.env.UI_EVIDENCE_DIR;
 const liveEventWaitS = Number(process.env.UI_LIVE_EVENT_WAIT_S || 0);
+// UI_PASSES=regression runs the fixed-payload passes only (e.g. while no Backend with the current
+// contract is up); the report then says the live pass was not run.
+const passes = (process.env.UI_PASSES || 'live,regression').split(',');
 const VIEWPORT = {width: 1920, height: 1080};
 const failures = [];
 const passed = {live: [], regression: []};
@@ -133,7 +136,8 @@ async function dispatcherPath(page, label) {
 try {
   // ============================== LIVE: no interception ==============================
   pass = 'live';
-  {
+  if (!passes.includes('live')) skipped.push('live: pass not run (UI_PASSES)');
+  else {
     const page = await open();
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForFunction(() => document.getElementById('data-status').dataset.status === 'online', null, {timeout: 15000});
@@ -212,8 +216,14 @@ try {
         check(!(await page.locator('.stops').textContent()).includes('допущение') && (await page.locator('.stops li[data-role=target]').textContent()).includes('прогноз модели'), 'card: toggle off hides the assumption, keeps the model value');
         await page.locator('#shift-after-target').check();
       }
-      check((await page.locator('#route .route-caption').textContent()).includes('не официальная трасса'), 'card: the grey line is named «путь по GPS прогона», not an official route');
-      check((await page.locator('#legend-route').textContent()).includes('путь по GPS прогона') && (await page.locator('.legend').boundingBox()).height <= 84, 'legend with a selection: route row shown, ≤ 84 px');
+      check((await page.locator('#route .route-caption').textContent()).includes('плановый маршрут наряда'), 'card: the line is the planned route of the assignment, not a GPS track');
+      check((await page.locator('#legend-route').textContent()).includes('впереди') && (await page.locator('.legend').boundingBox()).height <= 84, 'legend with a selection: route row shown, ≤ 84 px');
+      // Route layers exactly as route_line asks: on_route → passed + ahead; otherwise dim (+ leader).
+      const {body: rowNow} = await api(page, '/api/snapshot');
+      const me = rowNow?.snapshot?.vehicles?.find(v => String(v.tr_id) === id);
+      const expectedLayers = routeLayersFor(routeBody?.route_line, me && coordOk(me.lon, me.lat) ? [Number(me.lon), Number(me.lat)] : null).join(',');
+      check(routeBody?.route_line && await page.locator('#map-pane').getAttribute('data-route-layers') === expectedLayers,
+        `route layers follow route_line.split_reason (${routeBody?.route_line?.split_reason} → «${expectedLayers}»)`);
       check(await page.locator('.stop-label').count() <= 2, 'map: time labels only for the target and the nearest future stop');
       const overlapsSelected = await labelOverlaps(page);
       check(overlapsSelected.length === 0, `selected: no two map labels intersect (${overlapsSelected.join(', ') || 'none'})`);
@@ -286,6 +296,7 @@ try {
 
   // ============================== REGRESSION: fixed payloads ==============================
   pass = 'regression';
+  if (!passes.includes('regression')) throw Object.assign(new Error('regression not requested'), {skip: true});
   const RUN = (run_id, extra = {}) => ({run_id, state: 'running', source: 'official_emulator', speedup: 7, post_period_s: 1,
     dataset_start: '2026-01-06T06:30:00', dataset_end: '2026-01-06T08:30:00', dataset_time: '2026-01-06T06:47:10',
     progress: 0.14, thinned_ratio: 0.12, repeat_ratio: 0.03, vehicle_count: 2, accepted_frames: 120, last_frame_age_s: 0.7,
@@ -306,14 +317,28 @@ try {
       {stop_id: v.target_stop_id, time: '06:58:00', lon: v.target_lon, lat: v.target_lat, role: 'target'},
       {stop_id: 'A1', time: '07:03:00', lon: v.target_lon + 0.006, lat: v.target_lat + 0.002, role: 'after_target'}],
     stops_dropped: 0, target_stop_id: v.target_stop_id, cur_dev_s: v.cur_dev_s, prediction_s: v.prediction_s,
-    model_version: v.model_version, artifact_sha256: v.artifact_sha256, ...extra});
-  const state = {status: 'online', snapshot: null, route: {}};
+    model_version: v.model_version, artifact_sha256: v.artifact_sha256, route_line: lineOf(v), ...extra});
+  // /api/route `route_line` (impl-A W11-A2): the planned line through the window's stops, split at the vehicle.
+  const lineOf = (v, extra = {}) => {
+    const line = [[v.lon - 0.006, v.lat - 0.0025], [v.lon + 0.005, v.lat + 0.0017], [v.target_lon, v.target_lat], [v.target_lon + 0.006, v.target_lat + 0.002]];
+    const split = [v.lon, v.lat];
+    return {line, passed: [line[0], split], ahead: [split, ...line.slice(1)], split, split_reason: 'on_route', nearest: split,
+      off_route: false, route_offset_m: 0, ...extra};
+  };
+  const state = {status: 'online', snapshot: null, route: {}, routes: null};
+  // /api/routes (impl-A W11-A): every vehicle's planned line in the display window.
+  const routesOf = vehicles => ({status: 'online', reason: null, checked_at: '2026-09-27T12:00:00Z', run_id: state.snapshot?.run?.run_id ?? null,
+    clock_time: '2026-01-06T06:47:10', window_start: '2026-01-06T06:32:10', window_end: '2026-01-06T07:32:10',
+    routes: vehicles.map(v => ({tr_id: v.tr_id, unit_id: 1, line: v.route_not_started ? [] : lineOf(v).line, line_times: [],
+      off_route: v.off_route ?? false, route_offset_m: v.route_offset_m ?? 0, route_not_started: v.route_not_started ?? false}))});
   const setSnapshot = (run, vehicles, sourceClock = 'simulation') => { state.status = 'online'; state.snapshot = {schema_version: 'transport.backend-vehicles.v1', revision: 1,
     source_clock: sourceClock, clock_time: run?.dataset_time ?? '2026-01-06T06:47:10', run, vehicles}; };
   const setup = page => Promise.all([
     page.route('**/api/snapshot', route => route.fulfill({contentType: 'application/json', body: JSON.stringify(state.status === 'online'
       ? {status: 'online', reason: null, age_s: 0, fetched_at: '2026-09-27T12:00:00Z', checked_at: '2026-09-27T12:00:00Z', snapshot: state.snapshot}
       : {status: 'offline', reason: 'Backend HTTP 503', age_s: 9, fetched_at: '2026-09-27T12:00:00Z', checked_at: '2026-09-27T12:00:09Z', snapshot: state.snapshot})})),
+    page.route('**/api/routes', route => route.fulfill({contentType: 'application/json',
+      body: JSON.stringify(state.routes ?? routesOf(state.snapshot?.vehicles ?? []))})),
     page.route('**/api/route/*', route => {
       const id = decodeURIComponent(route.request().url().split('/').pop());
       const answer = state.route[id];
@@ -494,7 +519,7 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
     await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
     await page.waitForTimeout(800);
-    check((await page.locator('.vehicle-label.is-selected').getAttribute('data-symbol'))?.endsWith('|selected'), 'selected vehicle: ring and larger icon');
+    check((await page.locator('.vehicle-label.is-selected').getAttribute('data-symbol'))?.split('|')[4] === 'selected', 'selected vehicle: ring and larger icon');
     const overlaps = await labelOverlaps(page);
     check(overlaps.length === 0, `symbols: no two map labels intersect (${overlaps.join(', ') || 'none'})`);
     await shot(page, 'regression-8-symbols-selected-1920.png');
@@ -513,6 +538,89 @@ try {
       else check(count === 30, `z${zoom}: all 30 stops drawn (${count})`);
       if (zoom === 12) await shot(page, 'regression-9-stops-thinned-z12-1920.png');
     }
+    await page.close();
+  }
+
+  // Planned routes (W11/W12): overview lines of all vehicles, the selected route split by Backend
+  // route_line, off-route leader and mark, heading arrow direction, «наряд ещё не начался».
+  {
+    const a = bus('900001', center[0], center[1], {prediction_s: 200, heading: null});
+    const east = bus('900002', center[0] + 0.03, center[1] + 0.01, {prediction_s: 40, heading: 90});
+    const off = bus('900006', center[0] - 0.03, center[1] - 0.01, {prediction_s: 60, off_route: true, route_offset_m: 3440});
+    const later = bus('900007', center[0] + 0.01, center[1] - 0.02, {status: 'unavailable', reason: 'no_target_in_horizon', prediction_s: null,
+      target_stop_id: null, route_not_started: true});
+    setSnapshot(RUN('run-F-0006'), [a, east, off, later]);
+    state.routes = null;
+    state.route = {900001: routeOf(a),
+      900006: routeOf(off, {route_line: lineOf(off, {split_reason: 'off_route', passed: [], ahead: [], split: null,
+        nearest: [off.lon + 0.02, off.lat + 0.012], off_route: true, route_offset_m: 3440})})};
+    const page = await open({setup, query: '?debug', allow: /\/api\/route\//});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(2500);
+    const rendered = layer => page.evaluate(l => window.__map.queryRenderedFeatures({layers: [l]}).length, layer);
+    check(await rendered('routes-all') > 0 && await page.evaluate(() => ['route-path', 'route-path-casing'].every(l => !window.__map.getLayer(l))),
+      'overview: planned routes of all vehicles drawn thin; no GPS path layers exist');
+    check((await page.locator('#vehicles .vehicle[data-id="900006"]').textContent()).includes('вне маршрута ~3,4 км')
+      && (await page.locator('.vehicle-label[data-id="900006"]').getAttribute('data-symbol')).endsWith('|≠'), 'off route: list says «вне маршрута ~3,4 км», icon has «≠»');
+    await shot(page, 'regression-10-overview-routes-1920.png');
+
+    // Heading 90° points east: dark arrow pixels right of the icon, none left, above or below.
+    const arrow = await page.evaluate(async ([lon, lat]) => {
+      const map = window.__map;
+      map.jumpTo({center: [lon, lat], zoom: 15});
+      await new Promise(resolve => map.once('idle', resolve));
+      const p = map.project([lon, lat]);
+      const source = map.getCanvas();
+      const canvas = Object.assign(document.createElement('canvas'), {width: source.width, height: source.height});
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(source, 0, 0);
+      const ratio = source.width / source.clientWidth;
+      const dark = (x0, y0, x1, y1) => {
+        const d = ctx.getImageData(Math.round((p.x + x0) * ratio), Math.round((p.y + y0) * ratio), Math.round((x1 - x0) * ratio), Math.round((y1 - y0) * ratio)).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] < 70 && d[i + 1] < 80 && d[i + 2] < 90) n += 1;
+        return n;
+      };
+      return {east: dark(14, -5, 23, 5), west: dark(-23, -5, -14, 5), north: dark(-5, -23, 5, -14), south: dark(-5, 14, 5, 23)};
+    }, [east.lon, east.lat]);
+    check(arrow.east > 10 && arrow.west + arrow.north + arrow.south < 4, `heading 90° → arrow east of the icon (dark px east ${arrow.east}, west ${arrow.west}, north ${arrow.north}, south ${arrow.south})`);
+    await shot(page, 'regression-11-heading-east-z15-1920.png');
+    check(await page.evaluate(() => document.querySelectorAll('.vehicle-label').length) > 0, 'heading: map still labelled');
+
+    // Selected on route: passed dim + ahead bright with arrows.
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
+    await page.waitForTimeout(1200);
+    check(await page.locator('#map-pane').getAttribute('data-route-layers') === 'route-passed,route-ahead'
+      && await rendered('route-ahead') > 0 && await rendered('route-passed') > 0, 'on_route: data-route-layers «route-passed,route-ahead», both drawn');
+    check(await rendered('route-ahead-arrows') > 0, 'on_route: direction arrows along the ahead part');
+    check(await page.evaluate(() => { const ids = window.__map.getStyle().layers.map(l => l.id); return ids.indexOf('route-passed') < ids.indexOf('route-ahead'); }), 'ahead is drawn above passed');
+    await shot(page, 'regression-12-selected-on-route-1920.png');
+
+    // Off route: whole line dim, dashed leader to `nearest`, label and card text.
+    await page.locator('#vehicles .vehicle[data-id="900006"]').click();
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
+    await page.waitForTimeout(1200);
+    check(await page.locator('#map-pane').getAttribute('data-route-layers') === 'route-dim,offroute-leader'
+      && await rendered('route-dim') > 0 && await rendered('route-ahead') === 0, 'off_route: data-route-layers «route-dim,offroute-leader», no split');
+    check((await page.locator('.stop-label[data-kind=offroute]').textContent()).includes('вне маршрута ~3,4 км')
+      && (await page.locator('#off-route').textContent()).includes('координаты не совпадают с маршрутом наряда')
+      && (await page.locator('#off-route').textContent()).includes('прогноз может быть неверен'), 'off_route: map label and card say «вне маршрута ~3,4 км», prediction may be wrong');
+    const offOverlaps = await labelOverlaps(page);
+    check(offOverlaps.length === 0, `off_route: no two map labels intersect (${offOverlaps.join(', ') || 'none'})`);
+    await shot(page, 'regression-13-selected-off-route-1920.png');
+
+    // No segment in the window: whole line dim, no leader.
+    state.route['900006'] = routeOf(off, {route_line: lineOf(off, {split_reason: 'no_segment', passed: [], ahead: [], split: null})});
+    await page.waitForFunction(() => document.getElementById('map-pane').dataset.routeLayers === 'route-dim', null, {timeout: 8000}).catch(() => {});
+    check(await page.locator('#map-pane').getAttribute('data-route-layers') === 'route-dim' && await page.locator('.stop-label[data-kind=offroute]').count() === 0,
+      'no_segment: whole line dim, no leader');
+
+    // The assignment has not started yet.
+    await page.locator('#vehicles .vehicle[data-id="900007"]').click();
+    await page.waitForTimeout(800);
+    check((await page.locator('#card .headline').textContent()).includes('Наряд ещё не начался')
+      && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Наряд ещё не начался'), 'route_not_started: «наряд ещё не начался» in card and list');
     await page.close();
   }
 
@@ -564,7 +672,8 @@ try {
     await page.close();
   }
 } catch (error) {
-  failures.push(`${pass}: exception: ${error.message}`);
+  if (error.skip) skipped.push(`${pass}: pass not run (UI_PASSES)`);
+  else failures.push(`${pass}: exception: ${error.message}`);
 } finally {
   await browser.close();
 }

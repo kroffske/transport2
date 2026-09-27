@@ -6,6 +6,9 @@
 //   no current prediction (stale, degraded, Backend offline) — hollow white icon, dashed border;
 //   invalid GPS  — grey icon with badge «?», drawn at the last valid position;
 //   selected     — larger icon inside a dark ring; hovered — thin blue ring;
+//   off route    — badge «≠» at the bottom-left corner (coordinates do not match the assignment);
+//   heading      — a separate dark arrowhead outside the icon, turned by the transport layer
+//                  (0° = north, clockwise); none when Backend `heading` is null;
 //   target       — white diamond with a dark border and the Lucide `flag` glyph;
 //   stop         — small white circle with a dark border (a MapLibre layer, route-layers.js).
 // `vehicleLook`/`targetLook` are pure; `drawSymbol` needs a browser canvas.
@@ -21,7 +24,7 @@ const GREY = '#5d6b76';
 const LEVEL_FILL = {severe: '#c8412f', warning: '#e39a2d', normal: '#23845f', nodata: '#ffffff'};
 
 // level: severe | warning | normal | nodata (incidents.js assess).
-export function vehicleLook(level, {gpsValid = true, selected = false, hovered = false} = {}) {
+export function vehicleLook(level, {gpsValid = true, selected = false, hovered = false, offRoute = false} = {}) {
   const stale = level === 'nodata';
   return {
     kind: 'vehicle',
@@ -31,13 +34,17 @@ export function vehicleLook(level, {gpsValid = true, selected = false, hovered =
     border: stale ? 'dashed' : 'solid',
     badge: !gpsValid ? '?' : level === 'severe' ? '!!' : level === 'warning' ? '!' : null,
     ring: selected ? 'selected' : hovered ? 'hovered' : null,
+    offRoute: offRoute === true,
   };
 }
+
+// The arrowhead that shows the direction of movement; drawn pointing north, turned by `rotation`.
+export const headingLook = ({selected = false} = {}) => ({kind: 'heading', size: selected ? SELECTED_SIZE : VEHICLE_SIZE});
 
 export const targetLook = () => ({kind: 'target', size: TARGET_SIZE});
 
 // The parts of a look that do not depend on colour: two states must differ here.
-export const shapeOf = look => [look.kind, look.size, look.border ?? '', look.badge ?? '', look.ring ?? ''].join('|');
+export const shapeOf = look => [look.kind, look.size, look.border ?? '', look.badge ?? '', look.ring ?? '', look.offRoute ? '≠' : ''].join('|');
 
 export const symbolKey = look => JSON.stringify(look);
 
@@ -78,22 +85,35 @@ function drawVehicle(ctx, look) {
   ctx.stroke();
   ctx.setLineDash([]);
   strokeIcon(ctx, bus, s * 0.66, look.glyph);
-  if (look.badge) {
-    const r = 7;
-    const x = s / 2 - 2, y = -s / 2 + 2;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, 2 * Math.PI);
-    ctx.fillStyle = look.badge === '?' ? GREY : INK;
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = '#ffffff';
-    ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `800 ${look.badge.length > 1 ? 8.5 : 10}px system-ui, -apple-system, "Segoe UI", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(look.badge, x, y + 0.5);
-  }
+  if (look.badge) badge(ctx, s / 2 - 2, -s / 2 + 2, look.badge, look.badge === '?' ? GREY : INK);
+  if (look.offRoute) badge(ctx, -s / 2 + 2, s / 2 - 2, '≠', '#6b3fa0');
+}
+
+function badge(ctx, x, y, text, fill) {
+  ctx.beginPath();
+  ctx.arc(x, y, 7, 0, 2 * Math.PI);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `800 ${text.length > 1 ? 8.5 : 10}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y + 0.5);
+}
+
+// Pointing up (north) just outside the icon body; the box is the vehicle's, so both share a centre.
+function drawHeading(ctx, look) {
+  const tip = -(look.size / 2 + 9.5), base = -(look.size / 2 + 3);
+  ctx.beginPath();
+  ctx.moveTo(0, tip); ctx.lineTo(6, base); ctx.lineTo(-6, base); ctx.closePath();
+  ctx.fillStyle = INK;
+  ctx.fill();
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
 }
 
 function drawTarget(ctx, look) {
@@ -118,6 +138,7 @@ export function drawSymbol(look, ratio = 2) {
   ctx.scale(ratio, ratio);
   ctx.translate(box / 2, box / 2);
   if (look.kind === 'target') drawTarget(ctx, look);
+  else if (look.kind === 'heading') drawHeading(ctx, look);
   else drawVehicle(ctx, look);
   return {canvas, box};
 }

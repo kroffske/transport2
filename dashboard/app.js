@@ -4,9 +4,9 @@ import {NOTE_MAX, acknowledge, addNote, assess, countByFilter, createIncidentSto
   incidentForVehicle, markRead, observeSnapshot, orderedIncidents, reopen, visibleRows} from './incidents.js';
 import {patchChildren, patchText} from './dom.js';
 import {placeLabels} from './map-labels.js';
-import {drawSymbol, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
+import {drawSymbol, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
 import {reasonText} from './reasons.js';
-import {BASIS, coordOk, durationText, labelledStops, planText, shiftedText, signedDurationText,
+import {BASIS, coordOk, durationText, labelledStops, offsetText, planText, shiftedText, signedDurationText,
   stopRows, undrawnCount} from './route-context.js';
 import {createRouteLayers} from './route-layers.js';
 import {createRunTracker, dataTimeText, runStateText, shortRunId, sourceText, speedupText} from './run.js';
@@ -77,6 +77,9 @@ let routeToken = 0;
 let shiftAfterTarget = true; // «Показывать сдвиг после цели»
 let stopsShownFor = null; // the vehicle whose stop list was already scrolled to its upcoming stops
 let cardFor; // the vehicle the card's DOM was built for; another vehicle gets a fresh card
+// Planned routes of all vehicles for the overview (consumer /api/routes), refreshed every ROUTES_MS.
+let routesFeed = {status: 'idle', data: null, at: 0, inFlight: false};
+const ROUTES_MS = 10000;
 
 const snapshotRows = () => Array.isArray(feed?.snapshot?.vehicles) ? feed.snapshot.vehicles : [];
 const currentRun = () => feed?.snapshot?.run ?? null;
@@ -141,15 +144,18 @@ const baseStyle = {
   ],
 };
 
+// `?debug` (browser-check only): expose the map and keep the drawing buffer so pixels can be read.
+const DEBUG = new URLSearchParams(location.search).has('debug');
 let map = null;
 try {
   map = new maplibregl.Map({
     container: 'map', style: baseStyle, ...DEFAULT_VIEW, minZoom: 9, maxZoom: 16,
     maxBounds: CAMERA_BOUNDS,
+    ...(DEBUG ? {canvasContextAttributes: {preserveDrawingBuffer: true}} : {}),
     pitch: 0, bearing: 0, maxPitch: 0, dragRotate: false, pitchWithRotate: false, touchPitch: false,
     attributionControl: false,
   });
-  if (new URLSearchParams(location.search).has('debug')) window.__map = map; // browser-check only: query rendered layers
+  if (DEBUG) window.__map = map;
   map.touchZoomRotate.disableRotation();
   map.keyboard.disableRotation();
   map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'bottom-right');
@@ -209,18 +215,58 @@ fetch('/map/manifest.json').then(r => { if (!r.ok) throw Error(`HTTP ${r.status}
   .catch(error => markMapUnavailable(`нет описания геоосновы manifest.json (${error.message})`));
 
 // ---- Route context and transport symbols: route-layers.js, transport-layer.js ----------------
+// Overview lines of the run on screen only; the selected vehicle's own line is its route context.
+const overviewRoutes = () => (routesFeed.data && (routesFeed.data.run_id ?? null) === (currentRun()?.run_id ?? null)
+  && Array.isArray(routesFeed.data.routes) ? routesFeed.data.routes : []);
+
 function renderRouteLayers() {
-  const data = mapStatus === 'ready' ? shownRoute() : null;
+  const ready = mapStatus === 'ready';
+  const data = ready ? shownRoute() : null;
   const rows = routeRows(data);
   const chosen = findRow(selected);
-  routeLayers?.render(data, rows, {keep: labelledStops(rows).next, target: chosen ? targetPoint(chosen) : null});
+  const vehicle = chosen && locationOk(chosen) ? [Number(chosen.lon), Number(chosen.lat)] : null;
+  routeLayers?.renderOverview(ready ? overviewRoutes() : [], selected);
+  const layers = routeLayers?.render(data, rows, {keep: labelledStops(rows).next, target: chosen ? targetPoint(chosen) : null, vehicle}) ?? [];
+  $('map-pane').dataset.routeLayers = layers.join(',');
+  renderOffRouteLabel(chosen, data, vehicle, layers);
 }
+
+// «вне маршрута ~N км» at the middle of the leader from the vehicle to the nearest point of its route.
+function renderOffRouteLabel(vehicle, data, from, layers) {
+  const nearest = data?.route_line?.nearest;
+  if (!layers.includes('offroute-leader')) { stopLabel('offroute', null); return; }
+  const middle = [(from[0] + nearest[0]) / 2, (from[1] + nearest[1]) / 2];
+  stopLabel('offroute', middle, `вне маршрута ${offsetText(data.route_line.route_offset_m ?? vehicle.route_offset_m) ?? ''}`.trim());
+}
+
+// /api/routes: 200 {status: online, run_id, routes: [{tr_id, line, …}]}; 503 offline keeps the last
+// lines of this run on screen (they are the plan, not live data).
+async function loadRoutes() {
+  if (routesFeed.inFlight) return;
+  routesFeed.inFlight = true;
+  routesFeed.at = performance.now();
+  try {
+    const response = await fetch('/api/routes', {cache: 'no-store', signal: AbortSignal.timeout(4000)});
+    const body = await response.json().catch(() => null);
+    if (response.ok && body?.status === 'online' && Array.isArray(body.routes)) routesFeed = {...routesFeed, status: 'online', data: body};
+    else routesFeed = {...routesFeed, status: 'offline'};
+  } catch {
+    routesFeed = {...routesFeed, status: 'offline'};
+  }
+  routesFeed.inFlight = false;
+  renderRouteLayers();
+}
+const refreshRoutes = () => { if (!routesFeed.at || performance.now() - routesFeed.at >= ROUTES_MS) loadRoutes(); };
 
 const vehicleSymbol = (vehicle, assessment) => {
   const id = String(vehicle.tr_id);
   return {lon: Number(vehicle.lon), lat: Number(vehicle.lat),
-    look: vehicleLook(assessment.level, {gpsValid: gpsValid(vehicle), selected: id === selected, hovered: id === hovered})};
+    look: vehicleLook(assessment.level, {gpsValid: gpsValid(vehicle), selected: id === selected, hovered: id === hovered, offRoute: vehicle.off_route})};
 };
+// Direction of movement: Backend `heading` (degrees clockwise from north); none when null.
+const headingOk = v => v.heading !== null && v.heading !== undefined && v.heading !== '' && Number.isFinite(Number(v.heading));
+const headingSymbol = vehicle => ({lon: Number(vehicle.lon), lat: Number(vehicle.lat), rotation: Number(vehicle.heading),
+  look: headingLook({selected: String(vehicle.tr_id) === selected})});
 
 // Where the selected vehicle's target is drawn: the snapshot's coordinate, else the route's target stop.
 function targetPoint(vehicle) {
@@ -243,7 +289,10 @@ function renderMapObjects() {
   if (drawable && chosen && locationOk(chosen) && !located.some(({vehicle}) => vehicle === chosen)) {
     ordered.push({vehicle: chosen, assessment: assess(chosen, isFresh())});
   }
-  for (const {vehicle, assessment} of ordered) symbols.push(vehicleSymbol(vehicle, assessment));
+  for (const {vehicle, assessment} of ordered) {
+    if (headingOk(vehicle)) symbols.push(headingSymbol(vehicle));
+    symbols.push(vehicleSymbol(vehicle, assessment));
+  }
   transportLayer.setSymbols(symbols);
   renderLabels(ordered);
   renderStopLabels(drawable && chosen ? chosen : null, target);
@@ -317,7 +366,7 @@ function renderLabels(rows) {
 // label sizes are fixed in pixels while the distances between points change with zoom. Vehicle and
 // stop time labels are placed together (selected vehicle, then target, then next stop, then the
 // others); the panels drawn over the map (legend, banner, buttons, toasts) are obstacles.
-const STOP_LABEL_PRIORITY = {target: 2, next: 1};
+const STOP_LABEL_PRIORITY = {target: 3, offroute: 2, next: 1};
 function layoutLabels() {
   if (!map || !(labels.size || stopLabels.size)) return;
   const canvas = map.getCanvas();
@@ -476,9 +525,11 @@ function rowNote(vehicle, assessment) {
   } else if (vehicle.prediction_updating === true) {
     note = `${note} · обновляется`;
   }
+  if (vehicle.route_not_started === true) note = 'Наряд ещё не начался';
   // An invalid-GPS reason already says it; the position note is not repeated.
   const where = assessment.level === 'nodata' && vehicle.reason === 'invalid_gps' && locationOk(vehicle) ? '' : positionNote(vehicle);
-  return where ? `${note} · ${where}` : note;
+  const off = vehicle.off_route === true ? `вне маршрута ${offsetText(vehicle.route_offset_m) ?? ''}`.trim() : '';
+  return [note, where, off].filter(Boolean).join(' · ');
 }
 
 function renderFilters() {
@@ -595,11 +646,21 @@ function renderCard() {
   } else if (assessment.hasPrediction) {
     value.textContent = `${signedDurationText(v.prediction_s)} · устарел`;
     source.textContent = fresh ? `Последний известный: ${reasonText(v.reason) || STATUS[v.status] || text(v.status)}` : 'Последний известный: Backend недоступен';
+  } else if (v.route_not_started === true && fresh) {
+    value.textContent = 'Наряд ещё не начался';
+    source.textContent = 'Плановых остановок наряда рядом с текущим временем нет — прогнозировать нечего.';
   } else {
     value.textContent = 'Нет прогноза';
     source.textContent = `Прогноза нет: ${fresh ? reasonText(v.reason) || 'источник не передал прогноз' : 'Backend недоступен'}`;
   }
   headline.append(label, value, source);
+  if (v.off_route === true) {
+    const off = document.createElement('p');
+    off.id = 'off-route';
+    off.className = 'off-route';
+    off.textContent = `Вне маршрута ${offsetText(v.route_offset_m) ?? ''} — координаты не совпадают с маршрутом наряда${assessment.level !== 'nodata' ? '; прогноз может быть неверен' : ''}.`;
+    headline.append(off);
+  }
 
   const facts = document.createElement('dl');
   facts.dataset.key = 'facts';
@@ -748,12 +809,11 @@ function routeBlock(vehicle) {
   const truncated = Number(data.stops_truncated) || 0;
   const missing = [dropped ? `${dropped} остановок без координат исключены Backend` : null,
     truncated ? `${truncated} самых ранних остановок окна не показаны (не больше 40)` : null,
-    bad.stops ? `${bad.stops} остановок без координат на карте не показаны` : null,
-    bad.path + bad.passed ? `${bad.path + bad.passed} точек GPS вне карты пропущены` : null].filter(Boolean);
+    bad.stops ? `${bad.stops} остановок без координат на карте не показаны` : null].filter(Boolean);
   if (missing.length) note(`${missing.join(' · ')}.`);
   const caption = document.createElement('small');
   caption.className = 'route-caption';
-  caption.textContent = `Окно остановок ${windowText} · расчёт строки ТС rev ${text(data.vehicle_revision)}. Серая линия — путь по GPS прогона (траектория ТС в окне данных), не официальная трасса маршрута и не вход модели. Синяя — уже пройдено в этом прогоне.`;
+  caption.textContent = `Окно остановок ${windowText} · расчёт строки ТС rev ${text(data.vehicle_revision)}. Линия на карте — плановый маршрут наряда между остановками, не GPS-трек: впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`;
   box.append(caption);
   return box;
 }
@@ -1086,6 +1146,7 @@ function render() {
   renderEvents();
   renderToasts();
   renderDiagnostics();
+  renderRouteLayers(); // the leader and the overview follow the vehicles
   renderMapObjects();
   if (pendingOverview && mapStatus === 'ready' && snapshotRows().length) overview(false);
 }
@@ -1102,6 +1163,7 @@ function resetView() {
   contact = {id: null, result: null};
   clearToasts();
   clearRoute();
+  routesFeed = {status: 'idle', data: null, at: 0, inFlight: false}; // the next poll loads the new run's routes
 }
 
 // ---- Source -------------------------------------------------------------------------------
@@ -1127,6 +1189,7 @@ async function poll() {
   ingest();
   render();
   refreshRoute();
+  refreshRoutes();
   setTimeout(poll, POLL_MS);
 }
 

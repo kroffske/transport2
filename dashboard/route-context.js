@@ -137,3 +137,22 @@ export function thinStops(points, {avoid = [], gap = MIN_STOP_GAP_PX} = {}) {
   for (const p of points) if (far(p)) kept.push(p);
   return kept.map(p => p.row);
 }
+
+// Which selected-route layers a /api/route `route_line` asks for, bottom to top (also the value of
+// `#map-pane[data-route-layers]`). on_route: passed dim + ahead bright; otherwise the whole window
+// line dim (if any), and for off_route a leader from the vehicle to `nearest` of the day's line.
+const drawablePoint = p => Array.isArray(p) && coordOk(p[0], p[1]);
+export function routeLayersFor(routeLine, vehiclePoint) {
+  if (!routeLine) return [];
+  if (routeLine.split_reason === 'on_route') return ['route-passed', 'route-ahead'];
+  const layers = lineParts(routeLine.line ?? []).length ? ['route-dim'] : [];
+  if (routeLine.split_reason === 'off_route' && drawablePoint(routeLine.nearest) && drawablePoint(vehiclePoint)) layers.push('offroute-leader');
+  return layers;
+}
+
+// «~3,4 км» / «~400 м» for route_offset_m.
+export function offsetText(meters) {
+  if (meters == null || !Number.isFinite(Number(meters))) return null;
+  const m = Number(meters);
+  return m >= 1000 ? `~${(m / 1000).toLocaleString('ru-RU', {maximumFractionDigits: 1})} км` : `~${Math.round(m / 10) * 10} м`;
+}

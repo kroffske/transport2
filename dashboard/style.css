@@ -109,8 +109,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend-help { justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); font-size: 11px; font-weight: 700; cursor: help; }
 .line { display: inline-block; width: 22px; height: 4px; border-radius: 2px; }
-.line.path { background: #6f8190; box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px #d3dade; }
-.line.passed { background: #2f6f9f; height: 5px; }
+.line.ahead { background: #1565c0; height: 5px; box-shadow: 0 0 0 1.5px #fff; }
+.line.leader { height: 0; border-top: 2px dashed #1b2a36; border-radius: 0; }
+.line.passed { background: #a4b0b9; height: 5px; }
 .stop { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2.5px solid #1b2a36; }
 .stop.passed { width: 8px; height: 8px; border: 1.5px solid #a9b3ba; }
 .legend-symbol { display: inline-block; margin: -5px -4px; } /* bitmaps from map-symbols.js, padding included */
@@ -125,6 +126,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .stop-label { padding: 1px 6px; border: 1px solid #1b2a36; border-radius: 4px; background: #fff; font-size: 11px; font-weight: 600; white-space: nowrap; pointer-events: none; box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
 .stop-label[data-kind=target] { border-width: 2px; font-weight: 700; }
 .stop-label[data-kind=next] { border-color: #8795a0; color: var(--ink); }
+.stop-label[data-kind=offroute] { border: 1.5px dashed #6b3fa0; color: #4b2a75; }
+.off-route { margin: 6px 0 0; padding: 4px 8px; border-left: 3px solid #6b3fa0; background: #f3eefa; color: #3c2560; font-size: 12px; font-weight: 600; }
 .vehicle-label[hidden], .stop-label[hidden] { display: none; }
 .stop-tip .maplibregl-popup-content { padding: 4px 8px; font-size: 12px; font-weight: 600; border-radius: 6px; box-shadow: 0 2px 8px rgba(10, 30, 45, .22); }
 .vehicle-label.is-selected { outline: 3px solid #10202e; outline-offset: 1px; z-index: 2; }
