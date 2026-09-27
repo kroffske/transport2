@@ -274,10 +274,11 @@ class Orchestrator:
                     "processing": self.processing_readback()}
 
     def routes(self) -> dict:
-        """Planned-stop lines of all run vehicles in the display window, with off-route flags.
+        """Route lines of all run vehicles in the display window, with off-route flags.
 
-        Flags come from the last computed vehicle rows; the line is the plan's
-        stops with ``now - 15 min <= time <= now + 45 min`` inside the map bbox.
+        Flags come from the last computed vehicle rows; the line runs through the
+        plan's stops with ``now - 15 min <= time <= now + 45 min`` inside the map
+        bbox along their road shapes; ``line_times`` is set on stop points only.
         """
         with self._lock:
             now = self.run.clock()
@@ -288,10 +289,15 @@ class Orchestrator:
             routes = []
             for unit_id, tr_id in self.run.vehicles():
                 stops = self._window_line(tr_id, now)
+                points, anchors = self.schedule.shape_line(tr_id, stops)
+                times: list[str | None] = [None] * len(points)
+                for index, stop in zip(anchors, stops):
+                    times[index] = stop.time.strftime("%H:%M:%S")
                 row = self._rows.get(tr_id, {})
                 routes.append({"tr_id": tr_id, "unit_id": unit_id,
-                               "line": [[stop.lon, stop.lat] for stop in stops],
-                               "line_times": [stop.time.strftime("%H:%M:%S") for stop in stops],
+                               "line": [[lon, lat] for lon, lat in points],
+                               "line_times": times,
+                               "line_shape": "road" if self.schedule.has_shapes(tr_id) else "straight",
                                "off_route": row.get("off_route"),
                                "route_offset_m": row.get("route_offset_m"),
                                "route_not_started": row.get("route_not_started")})
@@ -370,20 +376,22 @@ class Orchestrator:
     def _route_line(self, tr_id: str, row: dict, at: datetime) -> dict:
         """Split the window line at the vehicle: dim passed part, bright part ahead.
 
-        The split is the projection of the last valid position onto the nearest
-        segment planned for ``[at - 10 min, at + 20 min]`` shifted back by
-        ``cur_dev_s`` (a late vehicle is where the plan was earlier). Off route,
+        The split is the projection of the last valid position onto the road
+        shape of the nearest stop-to-stop segment planned for
+        ``[at - 10 min, at + 20 min]`` shifted back by ``cur_dev_s`` (a late
+        vehicle is where the plan was earlier). Off route,
         without position or without such a segment there is no split.
         """
         stops = self._window_line(tr_id, at)
-        points = [(stop.lon, stop.lat) for stop in stops]
+        points, anchors = self.schedule.shape_line(tr_id, stops)
         line = [[lon, lat] for lon, lat in points]
         lon, lat = row["lon"], row["lat"]
         # The leader goes to the whole-assignment line, as the off-route check does,
         # so it exists even when the display window holds no stop.
         nearest = (self.schedule.route_nearest(tr_id, float(lon), float(lat))
                    if lon is not None and lat is not None else None)
-        view = {"line": line, "passed": [], "ahead": [], "split": None,
+        view = {"line": line, "line_shape": "road" if self.schedule.has_shapes(tr_id) else "straight",
+                "passed": [], "ahead": [], "split": None,
                 "nearest": [nearest[0], nearest[1]] if nearest else None,
                 "off_route": row["off_route"], "route_offset_m": row["route_offset_m"]}
         if lon is None or lat is None:
@@ -397,7 +405,10 @@ class Orchestrator:
         # Equal distances (the same street both ways) go to the segment closest in time.
         candidates.sort(key=lambda i: abs((stops[i].time + (stops[i + 1].time - stops[i].time) / 2
                                            - center).total_seconds()))
-        found = nearest_on_polyline(points, float(lon), float(lat), candidates)
+        # Stops stay the anchors in time; the split is projected onto their road shape.
+        found = nearest_on_polyline(points, float(lon), float(lat),
+                                    [part for i in candidates
+                                     for part in range(anchors[i], anchors[i + 1])])
         if found is None:
             return {**view, "split_reason": "no_segment"}
         segment, split_lon, split_lat, _ = found

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 import math
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from transport_backend.ingest import NDTPServer
 from transport_backend.orchestration import Orchestrator
+from transport_backend.route_shapes import parse_route_shapes
 from transport_backend.run import RunRegistry
 from transport_backend.schedule import M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, Schedule
 from transport_backend.service import create_app
@@ -173,9 +175,10 @@ def test_routes_http_waits_for_run_then_serves_only_run_vehicles(tmp_path):
         assert view["run_id"] == run_id
         assert [route["tr_id"] for route in view["routes"]] == ["v"]
         route = view["routes"][0]
-        assert set(route) == {"tr_id", "unit_id", "line", "line_times", "off_route",
+        assert set(route) == {"tr_id", "unit_id", "line", "line_times", "line_shape", "off_route",
                               "route_offset_m", "route_not_started"}
         assert route["line_times"][0] == "06:20:00"
+        assert route["line_shape"] == "straight"  # no data/routes/route_shapes.json
         assert (route["off_route"], route["route_offset_m"]) == (None, None)  # no position yet
         row = client.get("/v1/vehicles").json()["vehicles"][0]
         assert {"heading", "off_route", "route_offset_m", "route_not_started"} <= set(row)
@@ -293,3 +296,90 @@ def test_off_route_leader_exists_when_the_display_window_is_empty(world):
     assert math.hypot(dx, dy) == pytest.approx(view["route_offset_m"], abs=10)
     none = flow.route("none")["route_line"]  # no plan and no position
     assert (none["nearest"], none["off_route"], none["route_offset_m"]) == (None, None, None)
+
+
+# ------------------------------------------------------------ road shapes (W14)
+
+# v1 -> v2 drives around a block 1 km north instead of the straight 626 m.
+DETOUR = [[37.51, LAT], [37.51, LAT + NORTH_1KM], [37.52, LAT + NORTH_1KM], [37.52, LAT]]
+SHAPES_RAW = {"v": {"segments": [
+    {"from_stop": "v1", "to_stop": "v2", "coords": DETOUR, "source": "gps", "n": 3},
+    # Not a consecutive plan pair: never used.
+    {"from_stop": "v0", "to_stop": "v2", "coords": [[37.50, LAT], [37.40, 55.0], [37.52, LAT]],
+     "source": "gps", "n": 1}], "built_from": ["2026-01-06"], "sha": "x"}}
+
+
+@pytest.fixture
+def shaped_world(tmp_path):
+    path = tmp_path / "plan.csv"
+    _write_plan(path)
+    units = {1: "v", 2: "late"}
+    state = TelemetryState(units, source_clock="dataset_wall", stale_after_s=3600)
+    for unit in units:
+        state.connected(unit, "s")
+    now = [DAY + timedelta(hours=6, minutes=30)]
+    run = RunRegistry("dataset_wall", units, mapping=ClockMapping(1_700_000_000, DAY),
+                      clock=lambda: now[0])
+    schedule = Schedule(read_plan(path), shapes=parse_route_shapes(SHAPES_RAW))
+    flow = Orchestrator(state, NDTPServer(state, run=run), schedule, _Model())
+    yield flow, state, now
+    flow.close()
+
+
+def test_whole_day_line_follows_road_shape_between_consecutive_stops(tmp_path):
+    path = tmp_path / "plan.csv"
+    _write_plan(path)
+    shaped = Schedule(read_plan(path), shapes=parse_route_shapes(SHAPES_RAW))
+    straight = Schedule(read_plan(path))
+    # On the detour: on the road line, 1 km off the straight one.
+    assert shaped.route_offset_m("v", 37.515, LAT + NORTH_1KM) == pytest.approx(0, abs=0.5)
+    assert straight.route_offset_m("v", 37.515, LAT + NORTH_1KM) == pytest.approx(1000, rel=0.005)
+    # The straight v1 -> v2 chord is gone: nearest are the detour's legs 0.005 deg
+    # (~314 m) away; the whole-day projection uses the plan's mean latitude, which
+    # the off-map (10, 10) stop skews, hence the loose bound.
+    assert 300 < shaped.route_offset_m("v", 37.515, LAT) < 400
+    lon, lat, _ = shaped.route_nearest("v", 37.515, LAT + NORTH_1KM + 0.0001)
+    assert (lon, lat) == pytest.approx((37.515, LAT + NORTH_1KM))
+    # Pairs without a shape (and the non-consecutive v0 -> v2) stay straight.
+    assert shaped.route_offset_m("v", 37.505, LAT) == pytest.approx(0, abs=0.5)
+    assert shaped.has_shapes("v") and not shaped.has_shapes("late")
+
+
+def test_window_line_and_split_follow_the_road_shape(shaped_world):
+    flow, state, now = shaped_world
+    assert state.accept(_record("v", 1, "2026-01-06 06:29:50", 37.515, LAT + NORTH_1KM, speed=20))
+    row = next(row for row in flow.snapshot()["vehicles"] if row["tr_id"] == "v")
+    assert (row["off_route"], row["route_offset_m"]) == (False, 0)
+    routes = {route["tr_id"]: route for route in flow.routes()["routes"]}
+    line = DETOUR + [[37.53, LAT], [37.54, LAT]]
+    assert routes["v"]["line"] == line and routes["v"]["line_shape"] == "road"
+    # Planned times stay on the stop anchors; shape points in between carry none.
+    assert routes["v"]["line_times"] == ["06:20:00", None, None, "06:40:00", "07:00:00", "07:15:00"]
+    assert routes["late"]["line_shape"] == "straight"
+    view = flow.route("v")["route_line"]
+    assert view["line"] == line and view["line_shape"] == "road"
+    assert view["split_reason"] == "on_route"
+    assert view["split"] == pytest.approx([37.515, LAT + NORTH_1KM])
+    assert view["passed"][:-1] == DETOUR[:2] and view["passed"][-1] == view["split"]
+    assert view["ahead"][0] == view["split"] and view["ahead"][1:] == line[2:]
+    assert view["nearest"] == pytest.approx([37.515, LAT + NORTH_1KM])
+    assert view["off_route"] is False and view["route_offset_m"] == 0
+
+
+def test_service_loads_route_shapes_from_the_data_dir(tmp_path):
+    data = tmp_path / "validate"
+    data.mkdir()
+    _write_plan(data / "schedule_plan.csv")
+    (data / "traffic.csv").write_text("unit_id,tr_id\n1,v\n", encoding="utf-8")
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "route_shapes.json").write_text(json.dumps(SHAPES_RAW), encoding="utf-8")
+    api = create_app(data_dir=tmp_path, model_url="http://127.0.0.1:1",
+                     source_clock="simulation", ndtp_port=0)
+    with TestClient(api) as client:
+        client.post("/v1/run", json={
+            "dataset_start": "2026-01-06T06:30:00", "dataset_end": "2026-01-06T07:30:00",
+            "speedup": 1, "post_period_s": 2, "units": [1]})
+        client.get("/v1/vehicles")
+        route = client.get("/v1/routes").json()["routes"][0]
+        assert route["line_shape"] == "road"
+        assert route["line"][:4] == DETOUR

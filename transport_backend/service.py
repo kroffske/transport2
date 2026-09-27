@@ -18,6 +18,7 @@ from transport_ml.data import read_plan
 
 from .ingest import NDTPServer
 from .orchestration import ModelClient, Orchestrator, RouteUnavailable
+from .route_shapes import load_route_shapes
 from .run import RunConflict, RunNotFound, RunPlan, RunRegistry
 from .schedule import Schedule
 from .state import ClockMapping, TelemetryState, load_unit_mapping
@@ -129,7 +130,10 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
         schedule = Schedule(read_plan(data / "validate" / "schedule_plan.csv"),
                             stop_radius_m=float(os.environ.get("STOP_RADIUS_M", "35")),
                             stop_speed_kmh=float(os.environ.get("STOP_SPEED_KMH", "3")),
-                            observation_lag_s=float(os.environ.get("STOP_OBSERVATION_LAG_S", "900")))
+                            observation_lag_s=float(os.environ.get("STOP_OBSERVATION_LAG_S", "900")),
+                            # Missing file: straight lines between stops.
+                            shapes=load_route_shapes(Path(os.environ.get(
+                                "ROUTE_SHAPES_PATH", data / "routes" / "route_shapes.json"))))
         state = TelemetryState(mapping_table,
                                history_limit=int(os.environ.get("HISTORY_LIMIT", "4096")),
                                outcome_limit=int(os.environ.get("OUTCOME_LIMIT", "1024")),

@@ -15,6 +15,8 @@ import math
 import numpy as np
 import pandas as pd
 
+from .route_shapes import RouteShapes, line_through
+
 # Local equirectangular metres per degree; accurate to well under 1 % across Moscow.
 M_PER_DEG_LAT = 110_540.0
 M_PER_DEG_LON_EQUATOR = 111_320.0
@@ -53,7 +55,7 @@ class StopProgress:
 
 @dataclass(frozen=True)
 class _PlanLine:
-    """Static polyline through every planned stop of one day assignment, in local metres."""
+    """Static polyline of one day assignment (stops and road shapes), in local metres."""
 
     cos_lat: float
     start: np.ndarray  # (segments, 2)
@@ -61,9 +63,7 @@ class _PlanLine:
     length2: np.ndarray  # (segments,)
 
     @classmethod
-    def through(cls, stops: list[Arrival]) -> "_PlanLine | None":
-        points = [(stop.lon, stop.lat) for stop in stops
-                  if math.isfinite(stop.lon) and math.isfinite(stop.lat)]
+    def through(cls, points: list[tuple[float, float]]) -> "_PlanLine | None":
         if len(points) < 2:
             return None
         cos_lat = math.cos(math.radians(sum(lat for _, lat in points) / len(points)))
@@ -112,7 +112,8 @@ class Schedule:
     """One owner for target choice, ordered stop matching and the planned-stop line."""
 
     def __init__(self, plan: pd.DataFrame, *, stop_radius_m: float = 35.0,
-                 stop_speed_kmh: float = 3.0, observation_lag_s: float = 900.0):
+                 stop_speed_kmh: float = 3.0, observation_lag_s: float = 900.0,
+                 shapes: RouteShapes | None = None):
         if (not all(math.isfinite(value) for value in
                     (stop_radius_m, stop_speed_kmh, observation_lag_s))
                 or stop_radius_m <= 0 or stop_speed_kmh < 0 or observation_lag_s <= 0):
@@ -131,8 +132,36 @@ class Schedule:
                 for row in group.itertuples(index=False)]
             self._times[str(tr_id)] = [stop.time for stop in self.by_vehicle[str(tr_id)]]
             self._progress[str(tr_id)] = StopProgress()
+        # Road shapes between consecutive planned stops; none means straight segments.
+        self._shapes: RouteShapes = shapes or {}
         # Computed once: the day's plan never changes within a process.
-        self._lines = {tr_id: _PlanLine.through(stops) for tr_id, stops in self.by_vehicle.items()}
+        self._lines = {tr_id: _PlanLine.through(self.shape_line(tr_id, [
+            stop for stop in stops if math.isfinite(stop.lon) and math.isfinite(stop.lat)])[0])
+            for tr_id, stops in self.by_vehicle.items()}
+
+    def has_shapes(self, tr_id: str) -> bool:
+        """Whether road shapes exist for ``tr_id`` (else lines are straight)."""
+        return bool(self._shapes.get(tr_id))
+
+    def shape_line(self, tr_id: str, stops: list[Arrival]
+                   ) -> tuple[list[tuple[float, float]], list[int]]:
+        """Polyline through ``stops`` in order and the index of each stop in it.
+
+        Stops are anchors and appear exactly at their coordinates; between two
+        consecutive stops the road shape of that pair is inserted when known,
+        otherwise the segment stays straight.
+        """
+        shapes = self._shapes.get(tr_id, {})
+        points: list[tuple[float, float]] = []
+        anchors: list[int] = []
+        for index, stop in enumerate(stops):
+            if index:
+                previous = stops[index - 1]
+                points.extend(line_through(shapes, [(previous.stop_id, previous.lon, previous.lat),
+                                                    (stop.stop_id, stop.lon, stop.lat)])[1:-1])
+            anchors.append(len(points))
+            points.append((stop.lon, stop.lat))
+        return points, anchors
 
     def target(self, tr_id: str, at: datetime) -> Arrival | None:
         low, high = at + timedelta(seconds=600), at + timedelta(seconds=900)
@@ -140,7 +169,7 @@ class Schedule:
                      if low < stop.time <= high), None)
 
     def route_offset_m(self, tr_id: str, lon: float, lat: float) -> float | None:
-        """Distance to the line through all of the day's planned stops (time order).
+        """Distance to the whole-day line: planned stops in time order joined by road shapes.
 
         ``None`` when the plan has fewer than two stops with coordinates. This is
         a spatial check ("does the vehicle drive where its assignment goes"),
@@ -150,7 +179,7 @@ class Schedule:
         return nearest[2] if nearest is not None else None
 
     def route_nearest(self, tr_id: str, lon: float, lat: float) -> tuple[float, float, float] | None:
-        """Closest point ``(lon, lat, distance_m)`` of the whole-day planned-stop line."""
+        """Closest point ``(lon, lat, distance_m)`` of the whole-day line (stops + shapes)."""
         line = self._lines.get(tr_id)
         if line is None or not (math.isfinite(lon) and math.isfinite(lat)):
             return None
