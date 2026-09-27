@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T11:24:42.661Z"
-updated_at: "2026-09-27T12:24:25.059Z"
+updated_at: "2026-09-27T13:25:33.647Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -113,19 +113,19 @@ UI на 1920×1080 (было → стало):
   - Deliverable: [data-note](artifacts/data-note.md): поля совпадают кроме времени (ставит эмулятор) и идентификаторов пакета; `unit_id↔tr_id` 1:1; маршрутной группировки выше `tr_id` нет; модель прогнозирует первую плановую остановку в (T+10, T+15] мин; окно 06:30–08:30 и focus ТС 132430/133300/134040.
   - Contribution: выбор ТС, окна и честной семантики маршрута/прогноза.
   - Proxy result: предположения о полях без проверки.
-- [ ] W3: Backend-прогон и драйвер официального эмулятора (agent A).
+- [x] W3: Backend-прогон и драйвер официального эмулятора (agent A).
   - Deliverable: `ClockMapping.rate`; simulation без зашитого 03:20; `POST /v1/run`, `POST /v1/run/{id}/state`, `run` в `/ready` и `/v1/vehicles`, lifecycle со `stalled`; фильтр ТС прогона; `RunRegistry`; собственный tick прогнозов в `Orchestrator`; семантика `prediction_updating`; reconnect grace; `scripts/emulator_driver.py` (регистрация → поток POST с эхо-проверкой и heartbeat метрик → `completed/failed` → очистка конфига эмулятора); удалён `scripts/start_ndtp_simulation.py`; compose profile `demo` = `emulator` + `driver`, `backend` по умолчанию `SOURCE_CLOCK=simulation`; удаление `ui-demo`/`replay`/`simulation` profiles; spike-evidence ([emulator-spike](artifacts/emulator-spike.md), готово).
   - Contribution: реальный поток официальный эмулятор → Backend с управляемой скоростью и прогоном.
   - Proxy result: `autoGenerate`/прямой replay под видом эмулятора; ускорение только в драйвере без rate в Backend; второй драйвер, тихо перетирающий конфиг.
-- [ ] W4: Единый сценарий, прогон и ускорение в UI (agent B).
+- [x] W4: Единый сценарий, прогон и ускорение в UI (agent B).
   - Deliverable: удалены сценарий/режимы; шапка с источником, `run_id`, «Ускорение ×N: 1 мин показа = N мин данных», временем данных, lifecycle и progress из `snapshot.run`; сброс UI-состояния при смене `run_id`; русские подписи причин; browser-check переписан на live-данные (fixture-интерцепция допустима только в regression-проходах и так подписана).
   - Contribution: единственный понятный показ без второго режима.
   - Proxy result: скрытый scenario-код или default-ветка; hardcode коэффициента.
-- [ ] W5: Маршрутный контекст и прогноз (agents A + B).
+- [x] W5: Маршрутный контекст и прогноз (agents A + B).
   - Deliverable: A — `GET /v1/route/{tr_id}` + `target_lon/lat` + consumer `GET /api/route/{tr_id}`; B — слои path/passed/stops/target с легендой и карточка с фактом/прогнозом/допущением и переключателем.
   - Contribution: «Google Maps с прогнозом задержек по маршруту» в честном упрощении.
   - Proxy result: весь дневной план; линия как «трасса»; `[0,0]`; прогноз модели на остановках, для которых модель его не давала, без подписи допущения.
-- [ ] W6: Реальный ML gate (coordinator).
+- [x] W6: Реальный ML gate (coordinator).
   - Deliverable: на поднятом стеке ≥2 новых model results от разных inputs текущего run (разные `prediction_input_frame_id`/`prediction_context_revision`, один `model_version`/`artifact_sha256`) с теми же `prediction_s` в `/api/snapshot`, `/api/route` и UI того же ТС; evidence `artifacts/ml-gate.md` + snapshots JSON + скриншоты; non-success путь: ML остановлен (`docker compose stop ml` в стеке проекта) → `ml_unreachable_or_timeout` с русской подписью, не зелёный статус; ML снова запущен → прогнозы вернулись.
   - Contribution: доказательство сквозной цепочки на новом прогоне.
   - Proxy result: ML stub, interception, переизданный старый result, `/ready`/revision growth как «прогноз».
@@ -133,7 +133,7 @@ UI на 1920×1080 (было → стало):
   - Deliverable: стиль и иконки по Decisions; LICENSE/attribution иконок; before/after скриншоты 1920×1080; collision checks из T-6 проходят; pan/zoom/selection без регрессии.
   - Contribution: читаемая карта, где ТС, остановка и цель не путаются.
   - Proxy result: перекраска без скриншотов; внешние tiles/CDN; различие состояний только цветом.
-- [ ] W8: Build identity (A — consumer/Dockerfile/compose; B — diagnostics UI).
+- [x] W8: Build identity (A — consumer/Dockerfile/compose; B — diagnostics UI).
   - Deliverable: `/api/build` с полной identity и `files`; diagnostics показывает все поля; regression tests (pytest на форму/рецепт; JS/browser на отображение).
   - Contribution: проверяемая связь показанной сборки с commit.
   - Proxy result: hardcode hash в UI; поломка `files`.
