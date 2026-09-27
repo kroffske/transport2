@@ -147,7 +147,8 @@ class Orchestrator:
                  model: ModelClient, *, predict_interval_s: float = 60.0,
                  alert_cooldown_s: float = 300.0, queue_limit: int = 32,
                  tick_interval_s: float | None = None, off_route_m: float = 400.0,
-                 off_route_clear_m: float = 250.0, prediction_hold_s: float = 180.0):
+                 off_route_clear_m: float = 250.0, prediction_hold_s: float = 300.0,
+                 vehicle_lost_s: float = 300.0):
         if (not math.isfinite(predict_interval_s) or not math.isfinite(alert_cooldown_s)
                 or predict_interval_s <= 0 or alert_cooldown_s <= 0 or queue_limit < 1):
             raise ValueError("prediction interval/cooldown must be finite and positive; queue_limit >= 1")
@@ -157,11 +158,14 @@ class Orchestrator:
             raise ValueError("off-route thresholds need 0 < clear < set")
         if not (math.isfinite(prediction_hold_s) and prediction_hold_s >= 0):
             raise ValueError("prediction_hold_s must be finite and >= 0")
+        if not (math.isfinite(vehicle_lost_s) and vehicle_lost_s > 0):
+            raise ValueError("vehicle_lost_s must be finite and positive")
         self.state, self.server, self.schedule = state, server, schedule
         self.run, self.model = server.run, model
         self.predict_interval_s = predict_interval_s
         self.fresh_s = 1.5 * predict_interval_s
         self.prediction_hold_s = prediction_hold_s
+        self.vehicle_lost_s = vehicle_lost_s
         self.tick_interval_s = tick_interval_s
         self.off_route_m, self.off_route_clear_m = off_route_m, off_route_clear_m
         self.alert_cooldown_s = alert_cooldown_s
@@ -445,7 +449,8 @@ class Orchestrator:
         row = self._vehicle(unit_id, tr_id, now, enqueue)
         prior = self._rows.get(tr_id)
         if prior is None or any(row[key] != prior[key] for key in row
-                                if key not in {"revision", "gps_age_s", "prediction_age_s"}):
+                                if key not in {"revision", "gps_age_s", "prediction_age_s",
+                                               "data_age_s", "warming_eta_s"}):
             self._revision += 1
             row["revision"] = self._revision
             row["published_unix_ns"] = time_ns()
@@ -470,6 +475,11 @@ class Orchestrator:
                                                     str(row["received_at_utc"])))
                         if history else None)
         frame_id = str(latest_frame["frame_id"]) if latest_frame else None
+        # Presence: lost only after vehicle_lost_s of data without any frame.
+        data_age = (max(0.0, (now - datetime.fromisoformat(str(history[-1]["event_time"]))).total_seconds())
+                    if history else None)
+        lost = data_age is not None and data_age > self.vehicle_lost_s
+        gps_reason = self._gps_reason(state, lost)
         cur_dev = self.schedule.observed_deviation(tr_id, now, history)
         target_id = target.stop_id if target else None
         traffic = [row for row in history
@@ -478,7 +488,7 @@ class Orchestrator:
             tuple(str(row["frame_id"]) for row in history),
             tuple(str(row["frame_id"]) for row in traffic), cur_dev, target_id)
         context_revision = self._observe_context(tr_id, context)
-        if enqueue and target is not None and cur_dev is not None and not state["degraded"]:
+        if enqueue and target is not None and cur_dev is not None and gps_reason is None and not lost:
             last = self._last_attempt.get(tr_id)
             failed = self._last_failure.get(tr_id)
             captured_context = self._last_attempt_contexts.get(tr_id)
@@ -508,10 +518,15 @@ class Orchestrator:
                                           frame_id, context_revision, context, float(cur_dev), request),
                             first=self._last_attempt_target.get(tr_id) != target_id)
         success = self._last_success.get(tr_id)
+        ever_predicted = success is not None
         held = None
         if success is not None and success["target_stop_id"] != target_id:
-            held = self._held_pair(tr_id, success, target_id, now)
+            # Any loss of the current-target forecast (target changed, left the
+            # 10-15 min window, answer pending or failed) holds the last pair.
+            held = self._held_pair(tr_id, success, now)
             success = None
+        if lost:
+            success = held = None
         pending = (tr_id in self._jobs or self._active is not None and self._active.tr_id == tr_id)
         failure = self._last_failure.get(tr_id)
         failure_reason = failure[1] if failure is not None and failure[0] == target_id else None
@@ -521,28 +536,31 @@ class Orchestrator:
         updating = pending or (success is not None
                                and success["prediction_context_revision"] != context_revision)
         status, reason = "unavailable", None
-        if target is None:
+        if lost:
+            reason = "vehicle_lost"
+        elif success is not None or held is not None:
+            # A forecast is shown: only real GPS trouble or its age lowers the level.
+            shown_quality = (success or held)["quality"]
+            if gps_reason is not None:
+                status, reason = "degraded", gps_reason
+            elif shown_quality != "normal" or success is not None and age_s > self.fresh_s:
+                status, reason = "degraded", "prediction_aging"
+            else:
+                status = "normal"
+        elif target is None:
             plan = self.schedule.by_vehicle.get(tr_id, ())
             reason = ("unsupported_day" if self.state.source_clock == "utc"
                       and plan and now > plan[-1].time + timedelta(days=1)
                       else "no_target_in_horizon")
         elif cur_dev is None:
             reason = "no_confident_observed_stop"
-        elif state["degraded"]:
-            status = "degraded" if success or held else "unavailable"
-            reason = str(state["reason"])
+        elif gps_reason is not None:
+            reason = gps_reason
         elif failure_reason is not None:
-            status = "degraded" if success or held else "unavailable"
             reason = failure_reason
-        elif held is not None:
-            status, reason = "degraded", "prediction_held_previous_target"
-        elif success is None:
+        else:
             status, reason = (("degraded", "prediction_pending") if pending
                               else ("unavailable", "prediction_waiting_new_telemetry"))
-        elif age_s > self.fresh_s or success["quality"] != "normal":
-            status, reason = "degraded", "prediction_aging"
-        else:
-            status = "normal"
         # The shown pair: the current target with its own prediction, or, while
         # held, the previous target with its prediction. Never mixed.
         shown, shown_target = ((held, held["target"]) if held is not None
@@ -551,6 +569,9 @@ class Orchestrator:
             age_s = (now - datetime.fromisoformat(held["last_success_at"])).total_seconds()
             updating = True
         route_check = self._route_check(tr_id, state["lon"], state["lat"], now)
+        warming = (shown is None and not ever_predicted and not lost and gps_reason is None
+                   and bool(self.schedule.by_vehicle.get(tr_id))
+                   and route_check["route_not_started"] is False)
         return {"tr_id": tr_id, "unit_id": unit_id, **self._route_identity(tr_id),
                 "input_frame_id": frame_id,
                 "input_context_revision": context_revision,
@@ -561,7 +582,10 @@ class Orchestrator:
                 "location_valid": bool(latest["location_valid"]) if latest else False,
                 "event_time": latest["event_time"] if latest else None,
                 "receive_time": latest["receive_time"] if latest else None,
-                "gps_age_s": state["gps_age_s"], "connected": state["connected"],
+                "gps_age_s": state["gps_age_s"], "data_age_s": data_age,
+                # Presence is smoothed: a short session gap is not "lost".
+                "connected": not lost and (state["connected"] or data_age is not None),
+                "session_connected": state["connected"], "lost": lost,
                 "heading": _heading(history, now),
                 **route_check,
                 **_gps_suspect(history, now, state, route_check["off_route"],
@@ -579,9 +603,15 @@ class Orchestrator:
                 "model_version": shown["model_version"] if shown else None,
                 "artifact_sha256": shown["artifact_sha256"] if shown else None,
                 "prediction_state": ("updating" if held is not None
-                                     else "fresh" if success is not None else "none"),
+                                     else "fresh" if success is not None
+                                     else "warming" if warming else "none"),
                 "prediction_held_from_target": held["target_stop_id"] if held is not None else None,
+                "prediction_hold_reason": (None if held is None else "target_changed"
+                                           if target_id is not None else "no_target_in_horizon"),
+                "warming_eta_s": self._warming_eta(tr_id, now, cur_dev) if warming else None,
                 "status": status, "reason": reason, "prediction_pending": pending,
+                # The last ML failure for the current target; a shown forecast keeps its level.
+                "prediction_error": failure_reason,
                 "prediction_updating": updating,
                 "last_success_at": shown["last_success_at"] if shown else None,
                 "prediction_input_frame_id": shown["prediction_input_frame_id"] if shown else None,
@@ -592,15 +622,13 @@ class Orchestrator:
                           if success and self._alerts.get(tr_id, {}).get("target_stop_id") == target_id
                           else None), "revision": 0}
 
-    def _held_pair(self, tr_id: str, success: dict, target_id: str | None,
-                   now: datetime) -> dict | None:
-        """The last success for another target while its hold lasts, with its plan stop.
+    def _held_pair(self, tr_id: str, success: dict, now: datetime) -> dict | None:
+        """The last success for another (or no) target while its hold lasts, with its plan stop.
 
         The hold starts when the row first shows this success held and lasts
-        ``prediction_hold_s`` of dataset time. No current target means the run
-        has nothing left to predict, so nothing is held.
+        ``prediction_hold_s`` of dataset time.
         """
-        if target_id is None or self.prediction_hold_s <= 0:
+        if self.prediction_hold_s <= 0:
             self._hold_started.pop(tr_id, None)
             return None
         key = (success["target_stop_id"], success["last_success_at"])
@@ -615,6 +643,37 @@ class Orchestrator:
         if stop is None:
             return None
         return {**success, "target": stop}
+
+    def _gps_reason(self, state: dict, lost: bool) -> str | None:
+        """GPS degradation without flicker: a session gap before ``lost`` and one invalid
+        frame while the last valid fix is younger than ``stale_after_s`` are not trouble."""
+        reason = state["reason"]
+        if reason == "disconnected" and not lost:
+            latest, age = state["telemetry"], state["gps_age_s"]
+            reason = ("no_available_gps" if latest is None
+                      else "stale_gps" if age is None or age > self.state.stale_after_s
+                      else None)
+        if reason == "invalid_gps" and state["gps_age_s"] is not None \
+                and state["gps_age_s"] <= self.state.stale_after_s:
+            reason = None
+        return reason
+
+    def _warming_eta(self, tr_id: str, now: datetime, cur_dev: float | None) -> float | None:
+        """Rough plan-based wait for the first forecast (dataset seconds).
+
+        The forecast needs a confident observed stop (the vehicle standing at a
+        planned stop) and a planned target 10-15 min ahead; the estimate is the
+        later of "reach the next planned stop" and "a stop enters the window".
+        """
+        stops = self.schedule.by_vehicle.get(tr_id, ())
+        upcoming = next((stop for stop in stops if stop.time >= now), None)
+        observe = 0.0 if cur_dev is not None else (
+            (upcoming.time - now).total_seconds() if upcoming is not None else None)
+        entering = next((stop for stop in stops if stop.time > now + timedelta(seconds=600)), None)
+        window = (max(0.0, (entering.time - now).total_seconds() - 900) if entering is not None else None)
+        if observe is None or window is None:
+            return None
+        return round(max(observe, window))
 
     def _route_identity(self, tr_id: str) -> dict:
         """Derived route of the assignment (``route_catalog``); ``None`` without a plan."""

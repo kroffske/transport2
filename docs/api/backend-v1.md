@@ -81,7 +81,10 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "event_time": "2026-01-06T03:34:55",
       "receive_time": "2026-01-06T03:35:00",
       "gps_age_s": 5.0,
+      "data_age_s": 5.0,
       "connected": true,
+      "session_connected": true,
+      "lost": false,
       "target_stop_id": "53700172828",
       "target_time_begin": "2026-01-06T03:50:00",
       "target_lon": 37.42318933,
@@ -95,6 +98,9 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "artifact_sha256": "dc33437108c3e036089450c9b98771dacd014246fbb91d0df2a89d0c8e247122",
       "prediction_state": "fresh",
       "prediction_held_from_target": null,
+      "prediction_hold_reason": null,
+      "warming_eta_s": null,
+      "prediction_error": null,
       "status": "normal",
       "reason": null,
       "prediction_pending": false,
@@ -143,7 +149,7 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
 
 **Свежесть прогноза в живом потоке.** Успешный прогноз относится к цели, для которой его посчитали. Если последний успех относится к текущей цели, его `quality="normal"` и возраст во времени данных `≤ PREDICTION_FRESH_S = 1.5 × PREDICT_INTERVAL_S` (90 с при 60 с), строка остаётся `status="normal"` даже при более новых кадрах; тогда `prediction_updating=true` (есть вход новее прогноза или задача в работе). Возраст больше порога → `degraded`, `prediction_aging`. Прежняя причина `prediction_behind_input` больше не выдаётся: её заменил флаг `prediction_updating`. Alert создаётся только прогнозом, посчитанным на полном текущем контексте (`normal` и `prediction_updating=false`).
 
-**Смена цели: удержание прошлой пары (W14).** Когда цель плана меняется, задание для новой цели ставится в очередь сразу (не ждёт `PREDICT_INTERVAL_S`) и первым среди других ТС. Пока его ответа нет, но не дольше `PREDICTION_HOLD_S=180` (env, секунды времени данных, отсчёт от первой строки с удержанием этого успеха; `0` выключает), строка показывает прошлый прогноз **целой парой**: `target_stop_id`, `target_time_begin`, `target_lon/lat` — прошлой цели, `prediction_s`, `predicted_arrival`, `model_version`, `artifact_sha256`, `last_success_at`, `prediction_*` — её прогноза. Новая цель с прошлым значением никогда не смешивается. Поля строки:
+**Удержание прошлой пары (W14, обобщено в W16).** Когда цель плана меняется, задание для новой цели ставится в очередь сразу (не ждёт `PREDICT_INTERVAL_S`) и первым среди других ТС. Пока его ответа нет, но не дольше `PREDICTION_HOLD_S=300` (env, секунды времени данных, отсчёт от первой строки с удержанием этого успеха; `0` выключает), строка показывает прошлый прогноз **целой парой**: `target_stop_id`, `target_time_begin`, `target_lon/lat` — прошлой цели, `prediction_s`, `predicted_arrival`, `model_version`, `artifact_sha256`, `last_success_at`, `prediction_*` — её прогноза. Новая цель с прошлым значением никогда не смешивается. Поля строки:
 
 | поле | значение |
 |---|---|
@@ -151,7 +157,29 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
 | `prediction_held_from_target` | при `"updating"` — `stop_id` удержанной цели (равен `target_stop_id`), иначе `null` |
 | `planned_target_stop_id` | текущая цель плана всегда; отличается от `target_stop_id` только при удержании; `null`, если цели нет |
 
-При удержании: `status="degraded"`, `reason="prediction_held_previous_target"` (или причина деградации GPS/ошибки ML, если она есть), `prediction_updating=true`, `alert=null`. Ответ для новой цели заменяет пару (`"fresh"`). Если за `PREDICTION_HOLD_S` ответа нет — `"none"`, `target_stop_id` = новая цель, `prediction_s=null`, `reason="prediction_pending"` (задание в работе) или `"prediction_waiting_new_telemetry"`. Без цели плана (`no_target_in_horizon`, конец плана) ничего не удерживается. Удержание меняет `revision` только на переходах (начало, конец, замена), не на каждом тике. `/v1/route/{tr_id}` берёт цель из той же строки: при удержании роль `target` — у прошлой цели; там же отдаются `prediction_state`, `prediction_held_from_target`, `planned_target_stop_id`.
+Удержание срабатывает при **любой** потере прогноза текущей цели: цель сменилась, цель вышла из окна 10–15 мин (`target=null`), ответ ещё считается, ML ответил ошибкой. При удержании:
+- `status="normal"` и `reason=null`, если у удержанного прогноза `quality="normal"`; уровень не мигает;
+- `prediction_updating=true`, `alert=null`;
+- `prediction_hold_reason` — `"target_changed"` или `"no_target_in_horizon"`.
+
+Ответ для новой цели заменяет пару (`"fresh"`). Если за `PREDICTION_HOLD_S` ответа нет, строка переходит в `"none"`: `target_stop_id` — новая цель (или `null`), `prediction_s=null`, причина — обычная (`prediction_pending`, `prediction_waiting_new_telemetry`, `no_target_in_horizon`, …). Удержание меняет `revision` только на переходах, а не на каждом тике. `/v1/route/{tr_id}` берёт цель из той же строки: при удержании роль `target` — у прошлой цели; там же отдаются `prediction_state`, `prediction_held_from_target` и `planned_target_stop_id`.
+
+**Без моргания (W16).** Замер и причины — `.tasks/T-7-2026-09-27-ml/artifacts/flicker.md`.
+
+| поле | значение |
+|---|---|
+| `prediction_state` | добавлено `"warming"`: у ТС есть наряд, оно на маршруте (`route_not_started=false`), GPS в порядке и не пропало, но прогноза нет и ещё ни разу не было. UI показывает «по графику · прогноз готовится». Если прогноз уже был и истёк, состояние — `"none"`. |
+| `warming_eta_s` | только при `"warming"`: грубая оценка по плану в секундах данных — большее из «до следующей плановой остановки» (нужна уверенная остановка) и «пока остановка войдёт в окно 10–15 мин»; иначе `null` |
+| `prediction_error` | последняя ошибка ML для текущей цели (`ml_unreachable_or_timeout`, `ml_http_…`, `unsupported_vehicle`, …) или `null`. Показанный прогноз из-за неё уровень не меняет, стареет только по возрасту (`prediction_aging` после 90 с). |
+| `data_age_s` | секунды данных с последнего кадра любого вида (валидного или нет) |
+| `lost` | `true` только после `VEHICLE_LOST_S=300` (env) секунд данных без кадров. Тогда `status="unavailable"`, `reason="vehicle_lost"`, прогноз скрыт. Новый кадр возвращает ТС. |
+| `connected` | сглажено: `true`, пока ТС не `lost`; разрыв сессии эмулятора (unit снимается после 30 с без новой точки) строку не портит |
+| `session_connected` | сырой признак TCP-сессии NDTP (как прежний `connected`) |
+
+Прочее:
+- `reason="disconnected"` больше не выдаётся: его заменило `vehicle_lost`.
+- `invalid_gps` выдаётся, только если валидный фикс старше `STALE_AFTER_S=45`; одиночный невалидный кадр строку не портит.
+- `data_age_s` и `warming_eta_s`, как и `gps_age_s`, не меняют `revision`.
 
 Отсутствующие значения — JSON `null`, не ноль. `target_stop_id` — ID планового прибытия (`tt_action_item_id`). Долгота/широта — WGS84 degrees, с флагом валидности. `revision` меняется при принятом новом состоянии или изменении статуса; consumer использует его для live readback. `status` сообщает `normal`, `degraded` или `unavailable`, а `reason` объясняет отсутствие свежего прогноза. При сбое ML либо NDTP последнее число может оставаться только вместе с `degraded`, возрастом и `last_success_at`; его нельзя выдавать за свежий прогноз.
 

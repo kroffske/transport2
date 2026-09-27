@@ -312,7 +312,9 @@ def test_invalid_correction_revokes_stop_confidence_until_new_confirmed_observat
     revoked = flow.snapshot()["vehicles"][0]
     assert revoked["cur_dev_s"] is None
     assert revoked["cur_dev_source"] is None
-    assert revoked["status"] == "unavailable"
+    # W16: the last forecast stays shown; only the GPS trouble (no valid fix left) lowers the level.
+    assert (revoked["status"], revoked["reason"]) == ("degraded", "invalid_gps")
+    assert revoked["prediction_s"] == first["prediction_s"]
     assert schedule.counters()["stop_observations_retracted"] == 1
     assert state.accept(_record(event="2026-01-06 00:01:10", receive="2026-01-06 00:01:11",
                                 lon=37.05, speed=20.0, request_id=4))
@@ -320,7 +322,8 @@ def test_invalid_correction_revokes_stop_confidence_until_new_confirmed_observat
     moving = flow.snapshot()["vehicles"][0]
     assert moving["location_valid"] and moving["connected"] and moving["gps_age_s"] == 1.0
     assert moving["cur_dev_s"] is None
-    assert moving["reason"] == "no_confident_observed_stop"
+    # Without a confident stop no new request is made; the fresh forecast keeps its level.
+    assert (moving["status"], moving["reason"]) == ("normal", None)
     assert len(model.requests) == 1
     assert moving["prediction_published_unix_ns"] == first["prediction_published_unix_ns"]
     assert state.accept(_record(event="2026-01-06 00:01:20", receive="2026-01-06 00:01:21",
@@ -371,15 +374,20 @@ def test_prediction_uses_only_available_fields_and_outage_retains_last_success(t
                                 receive="2026-01-06 00:01:19", lon=37.05,
                                 speed=20.0, request_id=4))
     clock.advance(datetime(2026, 1, 6, 0, 1, 20), 1, 4, "s", 0)
-    failed = _wait_vehicle(flow, lambda row: row["reason"] == "ml_unreachable_or_timeout" and not row["prediction_pending"])
-    assert failed["status"] == "degraded"
-    assert failed["reason"] == "ml_unreachable_or_timeout"
+    failed = _wait_vehicle(flow, lambda row: row["prediction_error"] == "ml_unreachable_or_timeout"
+                           and not row["prediction_pending"])
+    # W16: an ML failure no longer lowers a shown forecast; only its age does.
+    assert (failed["status"], failed["reason"]) in {("normal", None), ("degraded", "prediction_aging")}
+    assert failed["prediction_error"] == "ml_unreachable_or_timeout"
     assert failed["prediction_s"] == 150.0
     assert failed["last_success_at"] == first["last_success_at"]
     assert failed["prediction_age_s"] == 20.0
     assert failed["alert"] == first["alert"]
     state.disconnected(1, "s")
-    assert flow.snapshot()["vehicles"][0]["reason"] == "disconnected"
+    # W16: a session gap is not "lost" before VEHICLE_LOST_S of data without frames.
+    gap = flow.snapshot()["vehicles"][0]
+    assert gap["session_connected"] is False and gap["connected"] is True and gap["lost"] is False
+    assert gap["reason"] != "disconnected" and gap["prediction_s"] == 150.0
     state.connected(1, "s")
     model.fail = False
     clock.acknowledge([{"revision": 1, "unit_id": 1, "request_id": 4, "outcome": "accepted", "session_id": "s"}])
@@ -431,8 +439,9 @@ def test_frame_correlation_and_wall_publication_survive_polling_and_ml_outage(tm
     assert state.accept(new_input)
     clock.advance(datetime(2026, 1, 6, 0, 1, 20), 1, 4, "s", 0)
     model.fail = True
-    failed = _wait_vehicle(flow, lambda row: row["reason"] == "ml_unreachable_or_timeout" and not row["prediction_pending"])
-    assert failed["status"] == "degraded"
+    failed = _wait_vehicle(flow, lambda row: row["prediction_error"] == "ml_unreachable_or_timeout"
+                           and not row["prediction_pending"])
+    assert (failed["status"], failed["reason"]) in {("normal", None), ("degraded", "prediction_aging")}
     assert failed["input_frame_id"] == new_input.frame_id
     assert failed["input_received_at_utc"] == new_input.received_at_utc
     assert failed["published_unix_ns"] > first["published_unix_ns"]

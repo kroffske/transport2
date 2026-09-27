@@ -16,7 +16,7 @@ from scripts.replay_ndtp import handshake
 from transport_backend.ingest import NDTPServer
 from transport_backend.ndtp import NAV, encode_frame
 from transport_backend.route_catalog import route_catalog
-from transport_backend.orchestration import MAP_BBOX, Orchestrator, PredictionJob
+from transport_backend.orchestration import MAP_BBOX, ModelFailure, Orchestrator, PredictionJob
 from transport_backend.run import RunConflict, RunNotFound, RunPlan, RunRegistry
 from transport_backend.schedule import Schedule
 from transport_backend.service import create_app
@@ -348,7 +348,9 @@ def test_fresh_prediction_stays_normal_updating_then_target_change_and_aging(tmp
         assert (target["target_lon"], target["target_lat"]) == (37.512, 55.7)
         assert target["prediction_state"] == "updating"
         assert target["prediction_held_from_target"] == "v12"
-        assert target["status"] == "degraded" and target["reason"] == "prediction_held_previous_target"
+        # W16: holding keeps the level (no green -> yellow -> green blink).
+        assert target["status"] == "normal" and target["reason"] is None
+        assert target["prediction_hold_reason"] == "target_changed"
         assert target["prediction_updating"] is True and target["alert"] is None
         assert target["last_success_at"] == first["last_success_at"]
         # Holding is quiet: an unchanged held row keeps its revision.
@@ -356,7 +358,7 @@ def test_fresh_prediction_stays_normal_updating_then_target_change_and_aging(tmp
     finally:
         model.release.set()
     # The answer for v13 replaces the held pair.
-    current = _wait(lambda: (lambda r: r if r["status"] == "normal" else None)(
+    current = _wait(lambda: (lambda r: r if r["prediction_state"] == "fresh" else None)(
         flow.snapshot()["vehicles"][0]))
     assert current["target_stop_id"] == "v13" and current["prediction_s"] == 150.0
     assert current["prediction_state"] == "fresh" and current["prediction_held_from_target"] is None
@@ -530,3 +532,127 @@ def test_route_keeps_target_when_more_than_forty_stops_and_planned_without_targe
     assert "planned" in {s["role"] for s in late["stops"]}
     with pytest.raises(LookupError):
         flow.route("unknown")
+
+
+# ----------------------------------------------------- W16: no-flicker rows
+
+def _dataset_flow(tmp_path, flows, rows, **kwargs):
+    path = tmp_path / "plan.csv"
+    _write_plan(path, rows)
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall", stale_after_s=45, reconnect_grace_s=0)
+    state.connected(1, "s")
+    now = [DAY + timedelta(minutes=1, seconds=30)]
+    run = RunRegistry("dataset_wall", state.unit_mapping,
+                      mapping=ClockMapping(1_700_000_000, DAY), clock=lambda: now[0])
+    model = kwargs.pop("model", _Model())
+    flow = flows(state, NDTPServer(state, run=run), Schedule(read_plan(path)), model,
+                 predict_interval_s=60, **kwargs)
+    return flow, state, now, model
+
+
+def _row(flow):
+    return flow.snapshot()["vehicles"][0]
+
+
+def test_hold_300_s_covers_target_leaving_the_window_then_none(tmp_path, flows):
+    # Stops every minute until 00:12, then a gap until 00:40: at 00:02:31 no stop is 10-15 min ahead.
+    flow, state, now, _ = _dataset_flow(
+        tmp_path, flows, _stop_rows("v", DAY, 13, 60, "v") + ["late,v,2026-01-06 00:40:00,POINT (37.6 55.7)"])
+    assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.501))
+    first = _wait(lambda: (lambda r: r if r["prediction_state"] == "fresh" else None)(_row(flow)))
+    assert first["target_stop_id"] == "v12" and first["status"] == "normal"
+    request = 3
+    for minute, second in ((2, 31), (5, 0), (7, 31), (7, 32)):
+        now[0] = DAY + timedelta(minutes=minute, seconds=second)
+        # Frames keep coming: the vehicle is present, only the forecast is gone.
+        assert state.accept(_record(event=now[0].strftime("%Y-%m-%d %H:%M:%S"), lon=37.501,
+                                    request_id=request))
+        request += 1
+        row = _row(flow)
+        if (minute, second) != (7, 32):
+            assert row["planned_target_stop_id"] is None
+            assert row["prediction_state"] == "updating" and row["target_stop_id"] == "v12"
+            assert row["prediction_hold_reason"] == "no_target_in_horizon"
+            assert (row["status"], row["reason"], row["prediction_s"]) == ("normal", None, 150.0)
+            assert row["alert"] is None and row["lost"] is False
+    # 00:02:31 + 301 s: the hold is over.
+    assert row["prediction_state"] == "none" and row["prediction_s"] is None
+    assert (row["status"], row["reason"]) == ("unavailable", "no_target_in_horizon")
+
+
+def test_hold_covers_pending_and_ml_failure_for_the_new_target(tmp_path, flows):
+    class _FailSecond(_Model):
+        def predict(self, request):
+            response = super().predict(request)
+            if len(self.requests) > 1:
+                raise ModelFailure("ml_unreachable_or_timeout")
+            return response
+
+    flow, state, now, model = _dataset_flow(tmp_path, flows, _stop_rows("v", DAY, 61, 60, "v"),
+                                            model=_FailSecond())
+    assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.501))
+    _wait(lambda: (lambda r: r if r["prediction_state"] == "fresh" else None)(_row(flow)))
+    now[0] = DAY + timedelta(minutes=2, seconds=31)  # target v13, its request fails
+    assert state.accept(_record(event="2026-01-06 00:02:31", lon=37.501, request_id=3))
+    failed = _wait(lambda: (lambda r: r if r["prediction_error"] else None)(_row(flow)))
+    assert failed["prediction_error"] == "ml_unreachable_or_timeout"
+    assert failed["prediction_state"] == "updating" and failed["target_stop_id"] == "v12"
+    assert (failed["status"], failed["reason"]) == ("normal", None)
+
+
+def test_vehicle_lost_only_after_300_s_without_frames(tmp_path, flows):
+    flow, state, now, _ = _dataset_flow(tmp_path, flows, _stop_rows("v", DAY, 61, 60, "v"))
+    assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.501))
+    _wait(lambda: (lambda r: r if r["prediction_state"] == "fresh" else None)(_row(flow)))
+    state.disconnected(1, "s")  # the emulator dropped the unit for a while
+    gap = _row(flow)
+    assert (gap["connected"], gap["session_connected"], gap["lost"]) == (True, False, False)
+    assert gap["reason"] != "disconnected" and gap["prediction_s"] == 150.0
+    revision = gap["revision"]
+    now[0] = DAY + timedelta(minutes=6, seconds=20)  # 300 s after the last frame
+    present = _row(flow)
+    assert present["lost"] is False and present["data_age_s"] == 300.0
+    assert present["prediction_state"] in {"fresh", "updating"}
+    now[0] = DAY + timedelta(minutes=6, seconds=21)
+    lost = _row(flow)
+    assert (lost["lost"], lost["connected"]) == (True, False)
+    assert (lost["status"], lost["reason"]) == ("unavailable", "vehicle_lost")
+    assert lost["prediction_s"] is None and lost["prediction_state"] == "none"
+    assert lost["revision"] > revision
+    # A new frame brings it back.
+    state.connected(1, "s")
+    assert state.accept(_record(event="2026-01-06 00:06:21", lon=37.506, request_id=9))
+    assert _row(flow)["lost"] is False
+
+
+def test_single_invalid_frame_with_recent_fix_does_not_blink(tmp_path, flows):
+    flow, state, now, _ = _dataset_flow(tmp_path, flows, _stop_rows("v", DAY, 61, 60, "v"))
+    assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.501))
+    first = _wait(lambda: (lambda r: r if r["prediction_state"] == "fresh" else None)(_row(flow)))
+    assert state.accept(_record(event="2026-01-06 00:01:29", valid=False, request_id=3))
+    row = _row(flow)
+    assert row["location_valid"] is False and (row["status"], row["reason"]) == ("normal", None)
+    assert row["prediction_s"] == first["prediction_s"]
+
+
+def test_warming_until_the_first_forecast_and_never_again(tmp_path, flows):
+    flow, state, now, _ = _dataset_flow(tmp_path, flows, _stop_rows("v", DAY, 61, 60, "v"),
+                                        prediction_hold_s=20)
+    # Moving between stops at 00:01:20: on the route, no confident stop yet.
+    assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.5015, speed=20.0))
+    warming = _row(flow)
+    assert warming["prediction_state"] == "warming" and warming["prediction_s"] is None
+    assert warming["route_not_started"] is False
+    # Next planned stop 00:02 (30 s), a target is already 10-15 min ahead: about 30 s.
+    assert warming["warming_eta_s"] == 30
+    assert warming["reason"] == "no_confident_observed_stop"
+    assert state.accept(_record(event="2026-01-06 00:01:29", lon=37.501, request_id=3))
+    now[0] = DAY + timedelta(minutes=1, seconds=30)
+    fresh = _wait(lambda: (lambda r: r if r["prediction_state"] == "fresh" else None)(_row(flow)))
+    assert fresh["warming_eta_s"] is None
+    # After a forecast existed, losing it past the hold is "none", never "warming" again.
+    now[0] = DAY + timedelta(minutes=2, seconds=31)
+    state.accept(_record(event="2026-01-06 00:02:31", lon=37.5015, speed=20.0, request_id=4))
+    _row(flow)
+    now[0] = DAY + timedelta(minutes=2, seconds=52)
+    assert _row(flow)["prediction_state"] in {"none", "fresh"}
