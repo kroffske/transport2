@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T14:55:32.734Z",
+  "generated_at": "2026-09-27T17:16:02.438Z",
   "tasks": [
     {
       "id": "T-10",
@@ -59,6 +59,32 @@
         "to": null,
         "source": "status_note"
       },
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-12",
+      "title": "UX/UI-ревью диспетчерского дашборда: карточка автобуса, остановки, тексты прогноза",
+      "status": "planned",
+      "type": "research",
+      "priority": "p1",
+      "owner": "claude",
+      "created_at": "2026-09-27T17:15:44.411Z",
+      "updated_at": "2026-09-27T17:15:44.411Z",
+      "stream": "T",
+      "path": "T-12-2026-09-27-ux-ui",
+      "work_items_total": 5,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "Живой проход и скриншоты.",
+        "Сверка сборки и реализации прогноза.",
+        "Компоновка карточки.",
+        "Обозначения остановок и тексты времени.",
+        "Итоговый отчёт."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T17:15:44.437Z",
+      "latest_status_note": null,
       "parent_id": "",
       "subtasks": []
     },
@@ -137,7 +163,7 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T11:24:42.661Z",
-      "updated_at": "2026-09-27T14:36:00.489Z",
+      "updated_at": "2026-09-27T16:21:25.500Z",
       "stream": "T",
       "path": "T-7-2026-09-27-ml",
       "work_items_total": 13,
@@ -151,12 +177,12 @@
         "Независимая финальная QA (agent D)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:36:00.503Z",
+      "last_event": "2026-09-27T16:21:25.533Z",
       "latest_status_note": {
-        "ts": "2026-09-27T14:36:00.503Z",
+        "ts": "2026-09-27T16:21:25.533Z",
         "event": "note",
         "actor": "manager",
-        "text": "User 2026-09-27 17:45: 5-second clarity check = designer subagent using gstack design-review skill (path in T-11 note), run after UI cutoff on the final UI at 1920×1080; findings feed W13 leftovers / W10.",
+        "text": "User 2026-09-27 ~19:55 MSK: bring the UI to the team's prototype «Диспетчерская карта v2» (~/Downloads/Transport dashboard for dispatchers/): event queue with groups and SLA instead of the events dropdown, snooze/close with reason, group actions, reaction checklist, attention bar, tabs События/Транспорт, toggle «Приглушить без прогноза», hotkeys J/K/W/S/X/Esc. Base semantics unchanged. B = layout/integration, C = pure event-queue module. Checkpoint 21:00, hard stop 21:45, then final QA + form.",
         "from": null,
         "to": null,
         "source": "status_note"
