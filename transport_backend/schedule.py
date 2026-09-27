@@ -12,7 +12,12 @@ from collections import Counter
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 import math
+import numpy as np
 import pandas as pd
+
+# Local equirectangular metres per degree; accurate to well under 1 % across Moscow.
+M_PER_DEG_LAT = 110_540.0
+M_PER_DEG_LON_EQUATOR = 111_320.0
 
 
 @dataclass(frozen=True)
@@ -46,8 +51,36 @@ class StopProgress:
     confident: bool = False
 
 
+@dataclass(frozen=True)
+class _PlanLine:
+    """Static polyline through every planned stop of one day assignment, in local metres."""
+
+    cos_lat: float
+    start: np.ndarray  # (segments, 2)
+    delta: np.ndarray  # (segments, 2)
+    length2: np.ndarray  # (segments,)
+
+    @classmethod
+    def through(cls, stops: list[Arrival]) -> "_PlanLine | None":
+        points = [(stop.lon, stop.lat) for stop in stops
+                  if math.isfinite(stop.lon) and math.isfinite(stop.lat)]
+        if len(points) < 2:
+            return None
+        cos_lat = math.cos(math.radians(sum(lat for _, lat in points) / len(points)))
+        xy = np.array(points) * [M_PER_DEG_LON_EQUATOR * cos_lat, M_PER_DEG_LAT]
+        delta = xy[1:] - xy[:-1]
+        return cls(cos_lat, xy[:-1], delta, np.maximum((delta ** 2).sum(axis=1), 1e-9))
+
+    def distance_m(self, lon: float, lat: float) -> float:
+        point = np.array([lon * M_PER_DEG_LON_EQUATOR * self.cos_lat, lat * M_PER_DEG_LAT])
+        offset = point - self.start
+        share = np.clip((offset * self.delta).sum(axis=1) / self.length2, 0.0, 1.0)
+        nearest = self.start + share[:, None] * self.delta
+        return float(np.sqrt(((point - nearest) ** 2).sum(axis=1)).min())
+
+
 class Schedule:
-    """One owner for target choice and ordered stop matching."""
+    """One owner for target choice, ordered stop matching and the planned-stop line."""
 
     def __init__(self, plan: pd.DataFrame, *, stop_radius_m: float = 35.0,
                  stop_speed_kmh: float = 3.0, observation_lag_s: float = 900.0):
@@ -69,11 +102,30 @@ class Schedule:
                 for row in group.itertuples(index=False)]
             self._times[str(tr_id)] = [stop.time for stop in self.by_vehicle[str(tr_id)]]
             self._progress[str(tr_id)] = StopProgress()
+        # Computed once: the day's plan never changes within a process.
+        self._lines = {tr_id: _PlanLine.through(stops) for tr_id, stops in self.by_vehicle.items()}
 
     def target(self, tr_id: str, at: datetime) -> Arrival | None:
         low, high = at + timedelta(seconds=600), at + timedelta(seconds=900)
         return next((stop for stop in self.by_vehicle.get(tr_id, ())
                      if low < stop.time <= high), None)
+
+    def route_offset_m(self, tr_id: str, lon: float, lat: float) -> float | None:
+        """Distance to the line through all of the day's planned stops (time order).
+
+        ``None`` when the plan has fewer than two stops with coordinates. This is
+        a spatial check ("does the vehicle drive where its assignment goes"),
+        not a schedule-position check.
+        """
+        line = self._lines.get(tr_id)
+        if line is None or not (math.isfinite(lon) and math.isfinite(lat)):
+            return None
+        return line.distance_m(lon, lat)
+
+    def stops_between(self, tr_id: str, low: datetime, high: datetime) -> list[Arrival]:
+        """Planned stops with ``low <= time <= high``, in plan (time) order."""
+        times = self._times.get(tr_id, [])
+        return self.by_vehicle.get(tr_id, [])[bisect_left(times, low):bisect_right(times, high)]
 
     def ml_rows(self, tr_id: str) -> list[dict[str, str]]:
         return [stop.ml_row(tr_id) for stop in self.by_vehicle.get(tr_id, ())]

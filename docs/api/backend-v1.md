@@ -96,6 +96,10 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "reason": null,
       "prediction_pending": false,
       "prediction_updating": true,
+      "heading": 213,
+      "route_offset_m": 20,
+      "off_route": false,
+      "route_not_started": false,
       "last_success_at": "2026-01-06T03:35:00",
       "revision": 12
     }
@@ -103,6 +107,16 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
   "ingest": { "accepted": 12, "dropped": 0, "errors": 0, "rejected_no_run": 0, "queue_depth": 0 }
 }
 ```
+
+**Сверка с маршрутом наряда и направление (W11).** Маршрут ТС — плановая последовательность остановок его наряда `tr_id` (`schedule_plan`, по времени); `route_id` в данных нет.
+
+- `route_offset_m` — расстояние в метрах (округлено до 10) от последней валидной позиции до ближайшего сегмента ломаной через **все** плановые остановки наряда за день (остановки без конечных координат пропускаются; линия строится один раз при старте). Это пространственная сверка «ездит ли ТС там, где проходит его наряд», а не сверка с плановой позицией во времени.
+- `off_route` — гистерезис: `true`, когда расстояние `> OFF_ROUTE_M=400`; обратно `false` только при `< OFF_ROUTE_CLEAR_M=250` (оба — env; состояние на `tr_id` под lock orchestrator). Между порогами значение не меняется.
+- Оба поля `null` (не `false`), если в плане наряда меньше двух остановок с координатами или у ТС нет ни одной валидной позиции.
+- `route_not_started` — `true`, если у наряда нет ни одной плановой остановки в окне отображения `[сейчас − 15 мин, сейчас + 45 мин]` и первая остановка дня позже текущего времени («наряд ещё не начался»); `false` иначе; `null` без плана.
+- `heading` — курс (целые градусы 0…360) последнего валидного кадра со скоростью `> 3` км/ч в пределах последних 120 с данных; иначе `null` (стоит или давно нет движения).
+
+Офлайн-проверка той же функцией на validate 06:30–08:30 воспроизводит `artifacts/offroute-distribution.txt` (колонка A): доля точек `> 400 м` — 130072 100 %, 122613 49 %, 122658 26 %, 122048 4 %, остальные 0 %.
 
 `vehicles` — только ТС текущего прогона (`units` регистрации); в `dataset_wall`/`utc` — все ТС реестра. `target_lon/target_lat` — координаты плановой цели (`null` без цели или без валидной координаты). `clock_time=null` до регистрации прогона.
 
@@ -156,8 +170,27 @@ Same-event correction, отзывающая GPS evidence первого набл
 - `role`: `target` — цель модели; `passed` — детектор уже наблюдал это прибытие или `план + cur_dev_s < сейчас` (без `cur_dev_s` — `план < сейчас`); остальные до цели — `before_target`, после — `after_target`; без цели — `planned`. Значения прогноза для остановок кроме цели Backend не выдумывает: это допущение UI.
 - `404 {"detail": "unknown_tr_id"}` — ТС нет в текущем прогоне (или прогон не зарегистрирован); `404 {"detail": "vehicle_not_evaluated"}` — строка ещё не посчитана (tick исправит за ≤ 1 с).
 
+## Маршруты всех ТС `GET /v1/routes`
+
+Лёгкая обзорная ручка (UI опрашивает ≈ раз в 10 с). Окно по плановому времени `[сейчас − 15 мин, сейчас + 45 мин]` (включительно) — одно для обзора и выбранного ТС.
+
+```json
+{"run_id": "run-20260927T140339-d1ec", "clock_time": "2026-01-06T06:37:05.602605",
+ "window_start": "2026-01-06T06:22:05.602605", "window_end": "2026-01-06T07:22:05.602605",
+ "routes": [{"tr_id": "133300", "unit_id": 1076894,
+             "line": [[37.41266478, 55.73372104], "..."], "line_times": ["06:30:00", "..."],
+             "off_route": false, "route_offset_m": 0, "route_not_started": false},
+            {"tr_id": "130072", "unit_id": 896671, "line": [], "line_times": [],
+             "off_route": true, "route_offset_m": 3440, "route_not_started": true}]}
+```
+
+- `routes` — все ТС текущего прогона (вне `simulation` — весь реестр, `run_id=null`); до регистрации прогона `routes=[]` и все поля `null`.
+- `line` — плановые остановки наряда в окне по времени, `line_times[i]` — плановое время `HH:MM:SS` точки `line[i]`; только координаты внутри bbox данных карты (`37.25,55.50,38.00,56.00`, как для `stops_dropped`). Это «маршрут по плану остановок», не дорожная трасса.
+- `off_route`, `route_offset_m`, `route_not_started` — из последней посчитанной строки ТС (те же значения, что в `/v1/vehicles`).
+
 ## Consumer
 
 - `GET /api/snapshot` — без изменений: конверт `{status, reason, checked_at, fetched_at, age_s, snapshot}`, новые поля Backend (`run`, `target_lon/lat`, `prediction_updating`) проходят как есть.
 - `GET /api/route/{tr_id}` — proxy на `GET /v1/route/{tr_id}` без кэша: `200 {"status": "online", "reason": null, "checked_at", ...поля route}`; `404 {"status": "not_found", "reason": "<detail Backend>"}`; Backend недоступен, timeout, `5xx` или неверная форма → `503 {"status": "offline", "reason": "..."}` без маршрутных данных (прошлый маршрут не выдаётся). `tr_id` вне `[0-9A-Za-z_-]{1,64}` → `404`.
+- `GET /api/routes` — proxy на `GET /v1/routes` в том же стиле: `200 {"status": "online", "reason": null, "checked_at", ...поля routes}`; Backend недоступен или неверная форма → `503 {"status": "offline", "reason"}` без линий.
 - `GET /api/build` — `{"files": {"index.html", "static/app.js", "static/app.css", "static/map-worker.js": sha256}, "source_commit", "dashboard_bundle_sha256", "consumer_static_sha256"}`, считается на каждый запрос. Рецепт T-6 (`.tasks/T-6-2026-09-26-ndtp/artifacts/transport-demo/m2.md`): `dashboard_bundle_sha256` = sha256 вывода `shasum -a 256 consumer/static/app.css consumer/static/app.js consumer/static/map-worker.js`; `consumer_static_sha256` = sha256 вывода `shasum -a 256 consumer/index.html $(ls consumer/static/* | sort)` (пути относительно корня репозитория, сортировка C-locale). `source_commit` — build-arg `SOURCE_COMMIT` образа (`git describe --always --dirty --abbrev=40`), без него `"unknown"`.

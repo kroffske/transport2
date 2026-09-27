@@ -43,6 +43,22 @@
         }
       }
     },
+    "/api/routes": {
+      "get": {
+        "summary": "All Routes",
+        "operationId": "all_routes_api_routes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/route/{tr_id}": {
       "get": {
         "summary": "Route",

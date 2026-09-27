@@ -49,13 +49,16 @@ def fake_backend():
         mode = "ok"
         payload = snapshot(12, 120.0)
         routes: dict[str, dict] = {}
+        overview: object = None
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.server.mode == "timeout":
                 time.sleep(0.2)
             status = 503 if self.server.mode == "unavailable" else 200
-            if self.path.startswith("/v1/route/"):
+            if self.path == "/v1/routes":
+                body = json.dumps(self.server.overview).encode()
+            elif self.path.startswith("/v1/route/"):
                 route = self.server.routes.get(self.path.removeprefix("/v1/route/"))
                 if status == 200 and route is None:
                     status, route = 404, {"detail": "unknown_tr_id"}
@@ -254,3 +257,25 @@ def test_build_identity_keeps_files_and_matches_host_recipe(monkeypatch):
         expected = subprocess.run(["sh", "-c", command], cwd=REPO, capture_output=True,
                                   text=True, check=True, env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"}).stdout.strip()
         assert known[key] == expected, key
+
+
+def test_routes_overview_proxy_online_and_offline_without_invented_lines():
+    overview = {"run_id": "run-x", "clock_time": "2026-01-06T06:30:00",
+                "window_start": "2026-01-06T06:15:00", "window_end": "2026-01-06T07:15:00",
+                "routes": [{"tr_id": "131672", "unit_id": 123, "line": [[37.6, 55.7], [37.61, 55.71]],
+                            "line_times": ["06:20:00", "06:40:00"], "off_route": False,
+                            "route_offset_m": 20, "route_not_started": False}]}
+    with fake_backend() as (backend, url), TestClient(create_app(url, timeout_s=0.05)) as consumer:
+        backend.overview = overview
+        online = consumer.get("/api/routes")
+        assert online.status_code == 200
+        assert online.json()["status"] == "online"
+        assert {key: online.json()[key] for key in overview} == overview
+        backend.overview = {**overview, "routes": [{"tr_id": "131672"}]}
+        bad = consumer.get("/api/routes")
+        assert bad.status_code == 503 and "routes shape" in bad.json()["reason"]
+        backend.overview = overview
+        backend.mode = "unavailable"
+        offline = consumer.get("/api/routes")
+        assert offline.status_code == 503 and offline.json()["status"] == "offline"
+        assert "routes" not in offline.json()

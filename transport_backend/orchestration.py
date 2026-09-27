@@ -31,6 +31,11 @@ ROUTE_STOP_LIMIT = 40
 ROUTE_BEFORE_NOW = timedelta(minutes=5)
 ROUTE_AFTER_TARGET = timedelta(minutes=15)
 ROUTE_AFTER_NOW_NO_TARGET = timedelta(minutes=30)
+# One display window for the planned-stop line, overview and selected vehicle alike.
+LINE_BEFORE_NOW = timedelta(minutes=15)
+LINE_AFTER_NOW = timedelta(minutes=45)
+HEADING_MIN_SPEED_KMH = 3.0
+HEADING_MAX_AGE_S = 120.0
 
 
 class RouteUnavailable(LookupError):
@@ -119,17 +124,21 @@ class Orchestrator:
     def __init__(self, state: TelemetryState, server: NDTPServer, schedule: Schedule,
                  model: ModelClient, *, predict_interval_s: float = 60.0,
                  alert_cooldown_s: float = 300.0, queue_limit: int = 32,
-                 tick_interval_s: float | None = None):
+                 tick_interval_s: float | None = None, off_route_m: float = 400.0,
+                 off_route_clear_m: float = 250.0):
         if (not math.isfinite(predict_interval_s) or not math.isfinite(alert_cooldown_s)
                 or predict_interval_s <= 0 or alert_cooldown_s <= 0 or queue_limit < 1):
             raise ValueError("prediction interval/cooldown must be finite and positive; queue_limit >= 1")
         if tick_interval_s is not None and (not math.isfinite(tick_interval_s) or tick_interval_s <= 0):
             raise ValueError("tick_interval_s must be finite and positive")
+        if not (math.isfinite(off_route_m) and 0 < off_route_clear_m < off_route_m):
+            raise ValueError("off-route thresholds need 0 < clear < set")
         self.state, self.server, self.schedule = state, server, schedule
         self.run, self.model = server.run, model
         self.predict_interval_s = predict_interval_s
         self.fresh_s = 1.5 * predict_interval_s
         self.tick_interval_s = tick_interval_s
+        self.off_route_m, self.off_route_clear_m = off_route_m, off_route_clear_m
         self.alert_cooldown_s = alert_cooldown_s
         self.queue_limit = queue_limit
         self._lock = RLock()
@@ -153,6 +162,7 @@ class Orchestrator:
         self._alerts: dict[str, dict] = {}
         self._rows: dict[str, dict] = {}
         self._row_times: dict[str, datetime] = {}
+        self._off_route: dict[str, bool] = {}  # hysteresis state per tr_id
         self._revision = 0
         self._seen_accepted = 0
 
@@ -249,6 +259,32 @@ class Orchestrator:
                                "rejected_no_run": counters.get("rejected_no_run", 0),
                                "queue_depth": counters["queue_depth"]},
                     "processing": self.processing_readback()}
+
+    def routes(self) -> dict:
+        """Planned-stop lines of all run vehicles in the display window, with off-route flags.
+
+        Flags come from the last computed vehicle rows; the line is the plan's
+        stops with ``now - 15 min <= time <= now + 45 min`` inside the map bbox.
+        """
+        with self._lock:
+            now = self.run.clock()
+            if now is None:
+                return {"run_id": None, "clock_time": None, "window_start": None,
+                        "window_end": None, "routes": []}
+            low, high = now - LINE_BEFORE_NOW, now + LINE_AFTER_NOW
+            routes = []
+            for unit_id, tr_id in self.run.vehicles():
+                stops = [stop for stop in self.schedule.stops_between(tr_id, low, high) if _on_map(stop)]
+                row = self._rows.get(tr_id, {})
+                routes.append({"tr_id": tr_id, "unit_id": unit_id,
+                               "line": [[stop.lon, stop.lat] for stop in stops],
+                               "line_times": [stop.time.strftime("%H:%M:%S") for stop in stops],
+                               "off_route": row.get("off_route"),
+                               "route_offset_m": row.get("route_offset_m"),
+                               "route_not_started": row.get("route_not_started")})
+            return {"run_id": self.run.run_id, "clock_time": now.isoformat(),
+                    "window_start": low.isoformat(), "window_end": high.isoformat(),
+                    "routes": routes}
 
     def route(self, tr_id: str) -> dict:
         """Route context of the last computed row: display path, passed GPS and plan stops.
@@ -428,6 +464,8 @@ class Orchestrator:
                 "event_time": latest["event_time"] if latest else None,
                 "receive_time": latest["receive_time"] if latest else None,
                 "gps_age_s": state["gps_age_s"], "connected": state["connected"],
+                "heading": _heading(history, now),
+                **self._route_check(tr_id, state["lon"], state["lat"], now),
                 "target_stop_id": target_id,
                 "target_time_begin": target.time.isoformat() if target else None,
                 "target_lon": target.lon if target and _finite(target.lon, target.lat) else None,
@@ -447,6 +485,23 @@ class Orchestrator:
                 "alert": (self._alerts.get(tr_id)
                           if success and self._alerts.get(tr_id, {}).get("target_stop_id") == target_id
                           else None), "revision": 0}
+
+    def _route_check(self, tr_id: str, lon: float | None, lat: float | None, now: datetime) -> dict:
+        """Spatial check of the last valid position against the day's planned-stop line."""
+        offset = (self.schedule.route_offset_m(tr_id, float(lon), float(lat))
+                  if lon is not None and lat is not None else None)
+        off_route = None
+        if offset is not None:
+            # Hysteresis: set above off_route_m, clear only below off_route_clear_m.
+            was_off = self._off_route.get(tr_id, False)
+            off_route = offset > self.off_route_m or (was_off and offset >= self.off_route_clear_m)
+            self._off_route[tr_id] = off_route
+        plan = self.schedule.by_vehicle.get(tr_id, ())
+        not_started = (None if not plan else
+                       plan[0].time > now and not self.schedule.stops_between(
+                           tr_id, now - LINE_BEFORE_NOW, now + LINE_AFTER_NOW))
+        return {"route_offset_m": int(round(offset / 10.0)) * 10 if offset is not None else None,
+                "off_route": off_route, "route_not_started": not_started}
 
     def _queue(self, job: PredictionJob) -> None:
         if self._stopping:
@@ -550,3 +605,16 @@ def _finite(*values: float) -> bool:
 def _on_map(stop: Arrival) -> bool:
     west, south, east, north = MAP_BBOX
     return _finite(stop.lon, stop.lat) and west <= stop.lon <= east and south <= stop.lat <= north
+
+
+def _heading(history: list[dict], now: datetime) -> int | None:
+    """Course of the latest valid frame faster than 3 km/h within the last 120 s of data."""
+    for record in reversed(history):  # ordered by event_time
+        age = (now - datetime.fromisoformat(str(record["event_time"]))).total_seconds()
+        if age > HEADING_MAX_AGE_S:
+            return None
+        speed, heading = record["speed"], record["heading"]
+        if (record["location_valid"] and speed is not None and heading is not None
+                and _finite(float(speed), float(heading)) and float(speed) > HEADING_MIN_SPEED_KMH):
+            return max(0, min(360, round(float(heading))))
+    return None

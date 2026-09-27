@@ -153,7 +153,9 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
                                     # Replay advances one acknowledged frame at a time; only the
                                     # emulator run needs its own tick.
                                     tick_interval_s=(float(os.environ.get("PREDICT_TICK_S", "1"))
-                                                     if domain == "simulation" else None))
+                                                     if domain == "simulation" else None),
+                                    off_route_m=float(os.environ.get("OFF_ROUTE_M", "400")),
+                                    off_route_clear_m=float(os.environ.get("OFF_ROUTE_CLEAR_M", "250")))
         api.state.backend = Runtime(state, server, orchestrator, replay_clock, run)
         orchestrator.start()
         try:
@@ -242,6 +244,10 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
     @api.get("/v1/vehicles")
     def vehicles():
         return runtime().orchestrator.snapshot()
+
+    @api.get("/v1/routes")
+    def routes():
+        return runtime().orchestrator.routes()
 
     @api.get("/v1/route/{tr_id}")
     def route(tr_id: str):

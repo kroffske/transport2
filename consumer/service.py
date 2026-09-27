@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from threading import Lock
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 from fastapi import FastAPI
@@ -107,20 +107,44 @@ class SnapshotReader:
 
 
 class RouteReader:
-    """Proxy one vehicle's route context; no cache, a failure is reported as offline."""
+    """Proxy Backend route views without cache; a failure is reported as offline, not replaced."""
 
     def __init__(self, backend_url: str, timeout_s: float):
         if timeout_s <= 0:
             raise ValueError("BACKEND_TIMEOUT_S must be positive")
-        self.url = backend_url.rstrip("/") + "/v1/route/"
+        self.base = backend_url.rstrip("/")
         self.timeout_s = timeout_s
 
     def read(self, tr_id: str) -> tuple[int, dict[str, Any]]:
-        checked_at = datetime.now(timezone.utc).isoformat()
+        """One vehicle's route context (``/v1/route/{tr_id}``)."""
         if not TR_ID.fullmatch(tr_id):
-            return 404, {"status": "not_found", "reason": "invalid tr_id", "checked_at": checked_at}
+            return 404, {"status": "not_found", "reason": "invalid tr_id",
+                         "checked_at": datetime.now(timezone.utc).isoformat()}
+
+        def check(payload: dict[str, Any]) -> None:
+            if payload.get("tr_id") != tr_id:
+                raise ValueError("invalid Backend route identity")
+            if (type(payload.get("vehicle_revision")) is not int
+                    or not all(isinstance(payload.get(key), list) for key in ("path", "passed", "stops"))):
+                raise ValueError("invalid Backend route shape")
+
+        return self._get("/v1/route/" + quote(tr_id, safe=""), check)
+
+    def read_all(self) -> tuple[int, dict[str, Any]]:
+        """Planned-stop lines of all run vehicles (``/v1/routes``)."""
+
+        def check(payload: dict[str, Any]) -> None:
+            routes = payload.get("routes")
+            if not isinstance(routes, list) or not all(
+                    isinstance(route, dict) and isinstance(route.get("line"), list) for route in routes):
+                raise ValueError("invalid Backend routes shape")
+
+        return self._get("/v1/routes", check)
+
+    def _get(self, path: str, check: Callable[[dict[str, Any]], None]) -> tuple[int, dict[str, Any]]:
+        checked_at = datetime.now(timezone.utc).isoformat()
         try:
-            response = httpx.get(self.url + quote(tr_id, safe=""), timeout=self.timeout_s)
+            response = httpx.get(self.base + path, timeout=self.timeout_s)
             if response.status_code == 404:
                 detail = response.json().get("detail") if response.headers.get(
                     "content-type", "").startswith("application/json") else None
@@ -128,11 +152,9 @@ class RouteReader:
                              "checked_at": checked_at}
             response.raise_for_status()
             payload = response.json()
-            if not isinstance(payload, dict) or payload.get("tr_id") != tr_id:
-                raise ValueError("invalid Backend route identity")
-            if (type(payload.get("vehicle_revision")) is not int
-                    or not all(isinstance(payload.get(key), list) for key in ("path", "passed", "stops"))):
-                raise ValueError("invalid Backend route shape")
+            if not isinstance(payload, dict):
+                raise ValueError("invalid Backend response shape")
+            check(payload)
         except (httpx.HTTPError, ValueError) as exc:
             return 503, {"status": "offline", "reason": str(exc), "checked_at": checked_at}
         return 200, {"status": "online", "reason": None, "checked_at": checked_at, **payload}
@@ -156,6 +178,11 @@ def create_app(backend_url: str | None = None, timeout_s: float | None = None,
     @app.get("/api/snapshot")
     def snapshot() -> dict[str, Any]:
         return reader.read()
+
+    @app.get("/api/routes")
+    def all_routes() -> JSONResponse:
+        status, body = routes.read_all()
+        return JSONResponse(status_code=status, content=body)
 
     @app.get("/api/route/{tr_id}")
     def route(tr_id: str) -> JSONResponse:

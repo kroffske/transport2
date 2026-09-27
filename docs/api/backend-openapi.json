@@ -195,6 +195,22 @@
         }
       }
     },
+    "/v1/routes": {
+      "get": {
+        "summary": "Routes",
+        "operationId": "routes_v1_routes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/route/{tr_id}": {
       "get": {
         "summary": "Route",
