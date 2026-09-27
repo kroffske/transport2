@@ -10,6 +10,12 @@
 //                a dark border (a vehicle is a bus icon, the target a diamond with a flag).
 // Hovering a stop shows its plan, expected time and basis.
 //
+// Every route line is drawn shifted to the right of its direction of travel (`line-offset`, the
+// line coordinates are in travel order): the two directions of an out-and-back or loop route on
+// the same street separate instead of being drawn on top of each other (T-7 W14). The geometry
+// may be a dense road-following polyline; stops are drawn from the route's stops, never from the
+// line's vertices.
+//
 // Below DECLUTTER_BELOW_ZOOM the stops are thinned on screen (task T-7 UI review M-2): the labelled
 // stop is always kept, then each stop only if it is at least MIN_STOP_GAP_PX (route-context.js)
 // from every stop already kept and from the target. Redone on every zoom change; the card lists all.
@@ -45,6 +51,15 @@ function arrowImage() {
   return {image: ctx.getImageData(0, 0, canvas.width, canvas.height), ratio};
 }
 
+// Right-of-travel shift in px by zoom: thin overview lines need less than the selected route,
+// whose two directions (5.5 px wide each) must keep a gap. The arrows follow the selected shift
+// (icon y offset: +y is the right of a line-placed icon).
+const OFFSET = ['interpolate', ['linear'], ['zoom'], 10, 1.5, 13, 2.5, 16, 4];
+const SELECTED_STOPS = [10, 3, 13, 4, 15, 4.5, 16, 6];
+const SELECTED_OFFSET = ['interpolate', ['linear'], ['zoom'], ...SELECTED_STOPS];
+const ARROW_OFFSET = ['interpolate', ['linear'], ['zoom'],
+  ...SELECTED_STOPS.flatMap((value, i) => (i % 2 ? [['literal', [0, value]]] : [value]))];
+
 export function createRouteLayers(map) {
   let popup = null;
   let drawn = []; // stop rows on the map now (for label obstacles)
@@ -74,18 +89,19 @@ export function createRouteLayers(map) {
       const round = {'line-cap': 'round', 'line-join': 'round'};
       map.addLayer({id: 'routes-all', type: 'line', source: 'routes-all', layout: round,
         paint: {'line-color': ROUTE_COLOR.overview, 'line-opacity': 0.55,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.2, 15, 2.5]}});
+          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.2, 15, 2.5], 'line-offset': OFFSET}});
       map.addLayer({id: 'route-dim', type: 'line', source: 'route-dim', layout: round,
-        paint: {'line-color': ROUTE_COLOR.dim, 'line-width': 4.5}});
+        paint: {'line-color': ROUTE_COLOR.dim, 'line-width': 4.5, 'line-offset': SELECTED_OFFSET}});
       map.addLayer({id: 'route-passed', type: 'line', source: 'route-passed', layout: round,
-        paint: {'line-color': ROUTE_COLOR.dim, 'line-width': 4.5}});
+        paint: {'line-color': ROUTE_COLOR.dim, 'line-width': 4.5, 'line-offset': SELECTED_OFFSET}});
       map.addLayer({id: 'route-ahead-casing', type: 'line', source: 'route-ahead', layout: round,
-        paint: {'line-color': '#ffffff', 'line-width': 9, 'line-opacity': 0.9}});
+        paint: {'line-color': '#ffffff', 'line-width': 9, 'line-opacity': 0.9, 'line-offset': SELECTED_OFFSET}});
       map.addLayer({id: 'route-ahead', type: 'line', source: 'route-ahead', layout: round,
-        paint: {'line-color': ROUTE_COLOR.ahead, 'line-width': 5.5}});
+        paint: {'line-color': ROUTE_COLOR.ahead, 'line-width': 5.5, 'line-offset': SELECTED_OFFSET}});
       map.addLayer({id: 'route-ahead-arrows', type: 'symbol', source: 'route-ahead',
         layout: {'symbol-placement': 'line', 'symbol-spacing': 80, 'icon-image': 'route-arrow',
-          'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-rotation-alignment': 'map'}});
+          'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-rotation-alignment': 'map',
+          'icon-offset': ARROW_OFFSET}});
       map.addLayer({id: 'offroute-leader', type: 'line', source: 'offroute-leader', layout: {'line-cap': 'butt'},
         paint: {'line-color': ROUTE_COLOR.leader, 'line-width': 2, 'line-dasharray': [2, 2]}});
       const passed = ['==', ['get', 'role'], 'passed'];

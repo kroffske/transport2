@@ -15,6 +15,7 @@ const LABELS = {
   unsupported_day: 'день не поддерживается моделью',
   // Prediction freshness
   prediction_pending: 'прогноз обновляется для новой цели',
+  prediction_held_previous_target: 'прогноз прошлой цели, новая цель считается',
   prediction_waiting_new_telemetry: 'ожидается новая телеметрия для прогноза',
   prediction_behind_input: 'прогноз отстаёт от телеметрии', // legacy: replaced by `prediction_updating`
   prediction_aging: 'прогноз устарел',

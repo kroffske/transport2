@@ -1,7 +1,7 @@
 import * as maplibregl from 'maplibre-gl';
 import {PMTiles, Protocol} from 'pmtiles';
 import {NOTE_MAX, acknowledge, addNote, assess, countByFilter, createIncidentStore, findIncident, incidentCounts,
-  incidentForVehicle, markRead, observeSnapshot, orderedIncidents, reopen, visibleRows} from './incidents.js';
+  incidentForVehicle, isHeld, markRead, observeSnapshot, orderedIncidents, reopen, visibleRows} from './incidents.js';
 import {patchChildren, patchText} from './dom.js';
 import {placeLabels} from './map-labels.js';
 import {drawSymbol, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
@@ -570,7 +570,7 @@ function rowNote(vehicle, assessment) {
   if (assessment.level === 'nodata') {
     note = capital(!isFresh() ? 'Backend недоступен' : runOver(currentRun()) ? 'прогон завершён'
       : reasonText(vehicle.reason) || (assessment.hasPrediction ? 'прогноз устарел' : 'нет прогноза'));
-  } else if (vehicle.prediction_updating === true) {
+  } else if (vehicle.prediction_updating === true || isHeld(vehicle)) {
     note = `${note} · обновляется`;
   }
   if (vehicle.route_not_started === true) note = 'Наряд ещё не начался';
@@ -695,11 +695,14 @@ function renderCard() {
   const source = el('small', {className: 'headline-source'});
   if (assessment.level !== 'nodata') {
     value.textContent = delayText(v.prediction_s);
-    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}, ожидаем ≈ ${expected ?? '?'}`;
+    const held = isHeld(v);
+    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}, ожидаем ≈ ${expected ?? '?'}${held ? ' · новая цель считается' : ''}`;
     source.append(`${BASIS.model} · обновлён ${ageText(v.prediction_age_s)}`);
-    if (v.prediction_updating === true) {
+    if (v.prediction_updating === true || held) {
       source.append(' ', el('span', {id: 'prediction-updating', className: 'pulse',
-        title: `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний прогноз для этой цели (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`}, 'обновляется'));
+        title: held
+          ? `Цель сменилась по плану; прогноз для новой цели считается первым в очереди. Пока показан прогноз прошлой цели вместе с этой целью (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`
+          : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний прогноз для этой цели (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`}, 'обновляется'));
     }
   } else if (assessment.hasPrediction) {
     value.textContent = `${delayText(v.prediction_s)} · устарел`;
@@ -846,7 +849,7 @@ function routeBlock(vehicle) {
     truncated ? `${truncated} самых ранних остановок окна не показаны (не больше 40)` : null,
     bad.stops ? `${bad.stops} остановок без координат на карте не показаны` : null].filter(Boolean);
   if (missing.length) note(`${missing.join(' · ')}.`);
-  box.append(el('small', {className: 'route-caption'}, `Окно остановок ${windowText}. Линия на карте — плановый маршрут наряда между остановками, не GPS-трек: впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`));
+  box.append(el('small', {className: 'route-caption'}, `Окно остановок ${windowText}. Линия на карте — плановый маршрут наряда, не GPS-трек; она сдвинута вправо по ходу движения, поэтому встречные направления идут рядом. Впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`));
   return box;
 }
 

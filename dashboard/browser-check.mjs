@@ -270,19 +270,23 @@ try {
       check(text.includes('Текущее опоздание') && text.includes('(факт)'), 'card: current delay labelled as fact');
       const roles = (routeBody?.stops ?? []).map(s => s.role);
       const target = (routeBody?.stops ?? []).find(s => s.role === 'target');
-      if (target) {
+      // Live rows change: if the vehicle lost its current forecast since the snapshot (e.g. its GPS
+      // turned invalid), the model-specific card checks are skipped, not failed.
+      const modelNow = await page.locator('#card').getAttribute('data-level') !== 'nodata';
+      if (!modelNow) skipped.push(`live: ${id} lost its current forecast during the check — model-specific card checks not asserted`);
+      if (target && modelNow) {
         const targetRow = page.locator('.stops li[data-role=target]');
         const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s, {seconds: true}) : null;
         check(await targetRow.count() === 1 && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели')
           && (!expected || (await targetRow.textContent()).includes(expected)), `card: target = plan + prediction_s «прогноз модели» (${expected})`);
         check(await page.locator('.stop-label[data-kind=target]').count() === 1
           && inside(await page.locator('.stop-label[data-kind=target]').boundingBox(), await page.locator('#map-pane').boundingBox()), 'map: target time label drawn inside the map (never at 0/0)');
-      } else skipped.push(`live: route of ${id} has no target stop at this moment`);
+      } else if (!target) skipped.push(`live: route of ${id} has no target stop at this moment`);
       if (roles.includes('before_target') && routeBody.cur_dev_s != null) check((await page.locator('.stops li[data-group=before_target]').textContent()).includes('по факту, не прогноз'), 'card: stops before the target = plan + cur_dev_s, group «по факту, не прогноз»');
       check((await page.locator('#route').textContent()).split('по факту, не прогноз').length - 1 <= 1 && await page.locator('.stops li:not(.stop-group)').evaluateAll(items => items.every(li => li.querySelector('.stop-no'))),
         'card: the fact note once per group, every stop numbered (C-3)');
       if (roles.includes('passed')) check(!/→/.test(await page.locator('.stops li[data-role=passed]').first().textContent()), 'card: passed stops show the plan time only');
-      if (roles.includes('after_target') && routeBody.prediction_s != null) {
+      if (roles.includes('after_target') && routeBody.prediction_s != null && modelNow) {
         check(await page.locator('#shift-after-target').isChecked() && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('допущение: тот же сдвиг'), 'card: after the target «допущение: тот же сдвиг», toggle on by default');
         await page.locator('#shift-after-target').uncheck();
         check(!(await page.locator('.stops').textContent()).includes('допущение') && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели'), 'card: toggle off hides the assumption, keeps the model value');
@@ -791,6 +795,129 @@ try {
     await page.waitForTimeout(800);
     check((await page.locator('#card .headline').textContent()).includes('Наряд ещё не начался')
       && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Наряд ещё не начался'), 'route_not_started: «наряд ещё не начался» in card and list');
+    await page.close();
+  }
+
+  // W14: the two directions of an out-and-back route on one street are drawn apart (line-offset to
+  // the right of travel), for the selected route and the overview; the line is a dense
+  // road-following polyline and the stops come from the route's stops, never from its vertices.
+  {
+    const leg = (lon, lat) => Array.from({length: 101}, (_, i) => [lon + i * 0.0001, lat]); // 0.01° east, 101 vertices
+    const outAndBack = (lon, lat) => { const out = leg(lon, lat); return [...out, ...[...out].reverse().slice(1)]; };
+    const sel = bus('900011', center[0] + 0.02, center[1] + 0.02, {prediction_s: 200, heading: 90,
+      target_lon: center[0] + 0.03, target_lat: center[1] + 0.02});
+    const other = bus('900012', center[0] - 0.03, center[1] - 0.02, {prediction_s: 40, heading: 90});
+    const selLine = outAndBack(sel.lon, sel.lat);
+    const otherLine = outAndBack(other.lon, other.lat);
+    setSnapshot(RUN('run-W14-0001'), [sel, other]);
+    state.routes = {...routesOf([sel, other]), routes: [
+      {tr_id: sel.tr_id, unit_id: 1, line: selLine, line_times: [], off_route: false, route_offset_m: 0, route_not_started: false},
+      {tr_id: other.tr_id, unit_id: 1, line: otherLine, line_times: [], off_route: false, route_offset_m: 0, route_not_started: false}]};
+    state.route = {900011: routeOf(sel, {
+      stops: [{stop_id: 'S1', time: '06:44:00', lon: sel.lon, lat: sel.lat, role: 'passed'},
+        {stop_id: sel.target_stop_id, time: '06:58:00', lon: sel.target_lon, lat: sel.target_lat, role: 'target'},
+        {stop_id: 'S3', time: '07:10:00', lon: sel.lon + 0.002, lat: sel.lat, role: 'after_target'}],
+      route_line: {line: selLine, passed: [selLine[0], selLine[1]], ahead: selLine.slice(1), split: selLine[1], split_reason: 'on_route',
+        nearest: selLine[1], off_route: false, route_offset_m: 0}})};
+    const page = await open({setup, query: '?debug', allow: /\/api\/route\//});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(2000);
+    await page.locator('#vehicles .vehicle[data-id="900011"]').click();
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
+    await page.locator('#overview').click(); // stop following: the camera is moved by the check below
+    await page.waitForTimeout(800);
+    // Rows of one pixel column that the given layers paint: the column with the layers shown minus
+    // the same column with them hidden; returns the painted runs [from, to] in CSS px from the line.
+    const bands = (layers, lon, lat) => page.evaluate(async ([ids, lon, lat]) => {
+      const map = window.__map;
+      map.jumpTo({center: [lon, lat], zoom: 15});
+      await new Promise(resolve => map.once('idle', resolve));
+      const column = async visible => {
+        for (const id of ids) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+        map.triggerRepaint();
+        await new Promise(resolve => map.once('idle', resolve));
+        const source = map.getCanvas();
+        const ratio = source.width / source.clientWidth;
+        const canvas = Object.assign(document.createElement('canvas'), {width: source.width, height: source.height});
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(source, 0, 0);
+        const p = map.project([lon, lat]);
+        const data = ctx.getImageData(Math.round(p.x * ratio), Math.round((p.y - 20) * ratio), 1, Math.round(40 * ratio)).data;
+        return {data, ratio};
+      };
+      const on = await column(true);
+      const off = await column(false);
+      for (const id of ids) map.setLayoutProperty(id, 'visibility', 'visible');
+      const painted = [];
+      for (let row = 0; row < on.data.length / 4; row += 1) {
+        const i = row * 4;
+        painted.push(Math.abs(on.data[i] - off.data[i]) + Math.abs(on.data[i + 1] - off.data[i + 1]) + Math.abs(on.data[i + 2] - off.data[i + 2]) > 30);
+      }
+      const runs = [];
+      painted.forEach((v, row) => { if (v && (row === 0 || !painted[row - 1])) runs.push([row, row]); else if (v) runs[runs.length - 1][1] = row; });
+      return runs.map(([a, b]) => [a / on.ratio - 20, b / on.ratio - 20]);
+    }, [layers, lon, lat]);
+    const mid = v => [v.lon + 0.005, v.lat];
+    const selectedBands = await bands(['route-ahead'], ...mid(sel));
+    check(selectedBands.length >= 2 && selectedBands.some(([a]) => a > 0) && selectedBands.some(([, b]) => b < 0),
+      `selected out-and-back: the two directions are two separate bands, one each side of the street (${JSON.stringify(selectedBands.map(b => b.map(Math.round)))})`);
+    // Eastbound (outbound) runs south of the street = right of travel; westbound north.
+    const overviewBands = await bands(['routes-all'], ...mid(other));
+    check(overviewBands.length >= 2 && overviewBands.some(([a]) => a > 0) && overviewBands.some(([, b]) => b < 0),
+      `overview out-and-back: two separate thin lines, not one on top of the other (${JSON.stringify(overviewBands.map(b => b.map(Math.round)))})`);
+    await page.evaluate(([lon, lat]) => window.__map.jumpTo({center: [lon, lat], zoom: 15}), mid(sel));
+    await page.waitForTimeout(600);
+    await shot(page, 'regression-w14-out-and-back-z15-1920.png');
+    // Stops from the route's stops: 3 stops (1 is the target symbol), not 201 line vertices.
+    const stops = await page.evaluate(() => new Set(window.__map.queryRenderedFeatures({layers: ['route-stops']}).map(f => f.geometry.coordinates.join(','))).size);
+    check(stops === 2 && (await page.locator('.stops li:not(.stop-group)').count()) === 3,
+      `dense road-following line: stops drawn from the route's stops (${stops} on the map + target, 3 in the card), not from its vertices`);
+    await page.close();
+  }
+
+  // W14 prediction continuity: while the new target's first forecast is computed, Backend holds the
+  // previous target with its forecast (degraded / prediction_held_previous_target, state updating).
+  // Quiet: the same level and value, a small «обновляется», no «нет прогноза», no toast, no jump.
+  {
+    const w = bus('900021', center[0], center[1], {prediction_s: 200});
+    const n = bus('900022', center[0] + 0.02, center[1] + 0.01, {prediction_s: 40});
+    const z = bus('900023', center[0] - 0.02, center[1] - 0.01, {prediction_s: 20});
+    const held = v => ({...v, status: 'degraded', reason: 'prediction_held_previous_target', prediction_state: 'updating', prediction_updating: true,
+      alert: null, prediction_held_from_target: v.target_stop_id, planned_target_stop_id: `N${v.tr_id}`, revision: v.revision + 1});
+    setSnapshot(RUN('run-W14H-0001'), [w, n, z]);
+    state.routes = null;
+    state.route = {900021: routeOf(w), 900022: routeOf(n), 900023: routeOf(z)};
+    const page = await open({setup, allow: /\/api\/route\//});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(POLL_SPAN_MS);
+    const order = () => page.locator('#vehicles .vehicle').evaluateAll(rs => rs.map(r => r.dataset.id).join(','));
+    const nodataCount = () => page.locator('[data-filter=nodata]').textContent().catch(() => '');
+    const before = {order: await order(), nodata: await nodataCount(), attention: await page.locator('#attention').textContent()};
+    await page.locator('#vehicles .vehicle[data-id="900022"]').click();
+    setSnapshot(RUN('run-W14H-0001'), [held(w), held(n), z]);
+    state.route = {900021: routeOf(held(w)), 900022: routeOf(held(n)), 900023: routeOf(z)};
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    const rowW = await page.locator('#vehicles .vehicle[data-id="900021"]').textContent();
+    const rowN = await page.locator('#vehicles .vehicle[data-id="900022"]').textContent();
+    check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется')
+      && await page.locator('#vehicles .vehicle[data-id="900022"]').getAttribute('data-level') === 'normal' && rowN.includes('+40 с')
+      && !/нет прогноза|устарел/i.test(rowW + rowN), `held forecast: same level and value, «обновляется», no «нет прогноза» (${rowW.replace(/\s+/g, ' ')} | ${rowN.replace(/\s+/g, ' ')})`);
+    check(await page.locator('.toast').count() === 0 && (await page.locator('#attention').textContent()) === before.attention && await nodataCount() === before.nodata,
+    'held forecast: no toast, banner and «Нет прогноза» count unchanged');
+    check((await order()).split(',').filter(id => id !== '900022').join(',') === before.order.split(',').filter(id => id !== '900022').join(','), 'held forecast: the list does not re-sort');
+    const headline = await page.locator('#card .headline').innerText();
+    check(await page.locator('#card').getAttribute('data-level') === 'normal' && headline.includes('+40 с') && headline.includes('новая цель считается')
+      && await page.locator('#prediction-updating').isVisible() && !/устарел|Нет прогноза/.test(headline)
+      && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели'),
+    `held forecast card: value, target, quiet «обновляется», stops «прогноз модели» (${headline.replace(/\s+/g, ' ')})`);
+    check((await page.locator('.vehicle-label[data-id="900021"]').textContent()) === '900021 · +3 мин', 'held forecast: map label keeps the value');
+    await shot(page, 'regression-w14-held-forecast-1920.png');
+    // 'none' (the hold expired, no forecast for the new target yet): only then «нет прогноза».
+    setSnapshot(RUN('run-W14H-0001'), [{...held(w), prediction_state: 'none', prediction_s: null, status: 'degraded', reason: 'prediction_pending',
+      prediction_updating: false, target_stop_id: `N900021`}, held(n), z]);
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'nodata'
+      && (await page.locator('#vehicles .vehicle[data-id="900021"]').textContent()).includes('нет прогноза'), 'prediction_state none: «нет прогноза»');
     await page.close();
   }
 

@@ -21,6 +21,25 @@ test('missing, degraded or offline predictions are "no data", never a warning', 
   assert.equal(offline.hasPrediction, true);
 });
 
+test('a forecast held over a target change keeps its level; other degraded reasons and «none» do not', () => {
+  const held = (prediction_s, extra = {}) => ({tr_id: 'h', prediction_s, status: 'degraded', reason: 'prediction_held_previous_target',
+    prediction_state: 'updating', prediction_updating: true, ...extra});
+  assert.equal(assess(held(200), true).level, 'warning');
+  assert.equal(assess(held(40), true).level, 'normal');
+  assert.equal(assess(held(40), false).level, 'nodata'); // offline: still never current
+  assert.equal(assess(held(200, {reason: 'invalid_gps'}), true).level, 'nodata');
+  assert.equal(assess(held(200, {prediction_state: 'none'}), true).level, 'nodata');
+  assert.equal(assess({...bus('a', 90), prediction_state: 'none'}, true).hasPrediction, false);
+  assert.deepEqual(countByFilter([held(200), held(40), bus('n', null)], true), {all: 3, warning: 1, nodata: 1});
+  // A held switch in the middle of an episode changes nothing: same incident, still active.
+  const store = createIncidentStore();
+  observeSnapshot(store, [bus('h', 200)], {fresh: true, clock: 't1', wallS: 0});
+  observeSnapshot(store, [held(200)], {fresh: true, clock: 't2', wallS: 100});
+  const [incident] = orderedIncidents(store);
+  assert.equal(incident.state, 'active');
+  assert.equal(orderedIncidents(store).length, 1);
+});
+
 test('filter counts describe the current set only', () => {
   const rows = [bus('1', 30), bus('2', 200), bus('3', 400), bus('4', null), bus('5', 90, 'unavailable')];
   assert.deepEqual(countByFilter(rows, true), {all: 5, warning: 2, nodata: 2});

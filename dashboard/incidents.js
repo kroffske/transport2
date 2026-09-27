@@ -14,9 +14,18 @@ const RANK = {severe: 0, warning: 1, normal: 2, nodata: 3};
 const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 
 // `fresh` is false when the source is offline: a last-known prediction is never a current warning.
+// A forecast held over a target change (Backend W14): while the new target's first prediction is
+// computed, the row carries the previous target with its prediction as one pair. It is a current
+// forecast for that target, not degraded data: the same level as before, so no alert, list or
+// event state flips during the switch. Any other degraded reason (GPS, ML) still wins.
+export const HELD_REASON = 'prediction_held_previous_target';
+export const isHeld = vehicle => vehicle?.status === 'degraded' && vehicle?.reason === HELD_REASON
+  && (vehicle.prediction_state ?? 'updating') === 'updating';
+
 export function assess(vehicle, fresh) {
-  const hasPrediction = finite(vehicle?.prediction_s);
-  if (!fresh || vehicle.status !== 'normal' || !hasPrediction) return {level: 'nodata', hasPrediction};
+  const hasPrediction = finite(vehicle?.prediction_s) && vehicle?.prediction_state !== 'none';
+  const current = vehicle?.status === 'normal' || isHeld(vehicle);
+  if (!fresh || !current || !hasPrediction) return {level: 'nodata', hasPrediction};
   const seconds = Number(vehicle.prediction_s);
   return {level: seconds >= SEVERE_S ? 'severe' : seconds > WARNING_S ? 'warning' : 'normal', hasPrediction};
 }
