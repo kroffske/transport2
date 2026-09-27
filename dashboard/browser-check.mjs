@@ -1153,8 +1153,9 @@ try {
     check(JSON.stringify(await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.id))) === JSON.stringify(rowsBefore)
       && await pinned.getAttribute('data-group') === 'work' && (await pinned.locator('.sla').textContent()) === 'в работе' && await pinned.getAttribute('aria-current') === 'true',
     'W on the open event: its row keeps its place, badge «в работе» (Q6)');
-    // Deselect: the row moves to «В работе»; the bar shows the others.
+    // Deselect (§L4: the first Esc closes the card, the second clears the selection): the row moves to «В работе»; the bar shows the others.
     await page.locator('body').click({position: {x: 700, y: 600}}).catch(() => {});
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
     check(await page.locator('#events-list .event[data-group=work]').count() === 1 && !(await page.locator('#attention').textContent()).includes('900031')
@@ -1187,6 +1188,7 @@ try {
     await page.waitForTimeout(300);
     check((await incidentText(page)).includes('Закрыто: Пробка — повлиять нельзя') && await page.locator('#events-list .event[data-group=needs]').count() === 0
       && await page.locator(`#events-list .event.is-current[data-group=ended]`).count() === 1, 'close with a reason: history «Закрыто: …», the open row keeps its place until deselected (Q6)');
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
     check((await page.locator('#events-list').textContent()).includes('Завершены'), 'after deselect the closed event is in «Завершены»');
