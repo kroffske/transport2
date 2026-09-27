@@ -1,3 +1,5 @@
+import {delayText} from './route-context.js';
+
 // Dispatcher classification of vehicle rows (which row is a warning, which has no usable
 // prediction, which rows a filter/search shows) and the local incident store (events, their
 // lifecycle and the dispatcher's actions). The warning threshold matches the Backend alert rule
@@ -72,7 +74,7 @@ export function createIncidentStore(source) {
 }
 
 const log = (incident, at, kind, text) => { incident.history.push({at, kind, text}); };
-const minutesText = seconds => `${(seconds / 60).toFixed(1)} мин`;
+
 const openFor = (store, trId) => store.incidents.find(i => i.tr_id === trId && i.state !== 'resolved');
 
 function openIncident(store, vehicle, clock) {
@@ -96,7 +98,7 @@ function openIncident(store, vehicle, clock) {
     notes: [],
     history: [],
   };
-  log(incident, clock, 'lifecycle', `Событие открыто: ${trId} ${minutesText(incident.last_s)}`);
+  log(incident, clock, 'lifecycle', `Событие открыто: ${trId} ${delayText(incident.last_s)}`);
   store.incidents.push(incident);
   return incident;
 }
@@ -188,12 +190,12 @@ export function acknowledge(store, id, clock) {
   return true;
 }
 
-// «Вернуть в новые»: undo the dispatcher mark.
+// «Снять с работы»: undo the dispatcher mark.
 export function reopen(store, id, clock) {
   const incident = findIncident(store, id);
   if (!incident || incident.state === 'resolved' || incident.workflow !== 'in_work') return false;
   incident.workflow = 'new';
-  log(incident, clock, 'action', 'Возвращено в новые');
+  log(incident, clock, 'action', 'Снято с работы');
   return true;
 }
 

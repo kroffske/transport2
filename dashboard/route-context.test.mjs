@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BASIS, MIN_STOP_GAP_PX, offsetText, routeLayersFor, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
+import {BASIS, MIN_STOP_GAP_PX, delayText, offsetText, routeLayersFor, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
   thinStops, undrawnCount} from './route-context.js';
 
 const usable = {modelUsable: true, factUsable: true};
@@ -20,10 +20,10 @@ test('stops before the target carry the current delay as a fact, the target the 
   const rows = stopRows(route(), usable);
   assert.deepEqual(rows.map(r => [r.stop_id, r.plan, r.expected, r.basis]), [
     ['1', '06:41', null, null],
-    ['2', '06:52', '~06:53:35', 'fact'],
-    ['3', '06:55', '~06:56:35', 'fact'],
-    ['4', '06:58', '~07:00:20', 'model'],
-    ['5', '07:03', '~07:05:20', 'assumption'],
+    ['2', '06:52', '06:54', 'fact'],
+    ['3', '06:55', '06:57', 'fact'],
+    ['4', '06:58', '07:00:20', 'model'],
+    ['5', '07:03', '07:05', 'assumption'],
   ]);
   assert.equal(BASIS.fact, 'по факту, не прогноз');
   assert.equal(BASIS.model, 'прогноз модели');
@@ -47,9 +47,10 @@ test('no model value or no fact: only plan times, nothing borrowed from the othe
 });
 
 test('a negative delay moves the time earlier; the day wraps at midnight', () => {
-  assert.equal(shiftedText('06:52:00', -30), '~06:51:30');
-  assert.equal(shiftedText('23:59:00', 120), '~00:01:00');
-  assert.equal(shiftedText('2026-01-06T06:58:00', 140), '~07:00:20');
+  assert.equal(shiftedText('06:52:00', -30, {seconds: true}), '06:51:30');
+  assert.equal(shiftedText('23:59:00', 120), '00:01');
+  assert.equal(shiftedText('2026-01-06T06:58:00', 140), '07:00');
+  assert.equal(shiftedText('2026-01-06T06:58:00', 140, {seconds: true}), '07:00:20');
   assert.equal(planText('2026-01-06T06:58:00'), '06:58');
   assert.equal(shiftedText(null, 10), null);
   assert.equal(shiftedText('06:52:00', null), null);
@@ -129,4 +130,16 @@ test('route_line decides the selected-route layers; the UI never splits the line
   assert.equal(offsetText(3440), '~3,4 км');
   assert.equal(offsetText(410), '~410 м');
   assert.equal(offsetText(null), null);
+});
+
+test('one delay format: no decimal minutes, U+2212 for early, «по графику» under 30 s', () => {
+  assert.equal(delayText(10), 'по графику');
+  assert.equal(delayText(-29), 'по графику');
+  assert.equal(delayText(45), '+45 с');
+  assert.equal(delayText(335), '+5 мин 35 с');
+  assert.equal(delayText(300), '+5 мин');
+  assert.equal(delayText(-70), '\u22121 мин 10 с');
+  assert.equal(delayText(335, {short: true}), '+6 мин');
+  assert.equal(delayText(45, {short: true}), '+45 с');
+  assert.equal(delayText(null), null);
 });

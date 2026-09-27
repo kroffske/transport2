@@ -39,6 +39,21 @@ export function durationText(seconds) {
   return s ? `${m} мин ${s} с` : `${m} мин`;
 }
 
+// The one delay format of the screen (UI review F-1): «по графику» under 30 s, «+45 с»,
+// «+5 мин 35 с», early «−1 мин 10 с» (U+2212). `short` (map labels): whole minutes, «+6 мин».
+// Never decimal minutes.
+export function delayText(seconds, {short = false} = {}) {
+  if (!finite(seconds)) return null;
+  const value = Math.round(Number(seconds));
+  const size = Math.abs(value);
+  if (size < 30) return 'по графику';
+  const sign = value > 0 ? '+' : '\u2212';
+  if (size < 60) return `${sign}${size} с`;
+  if (short) return `${sign}${Math.round(size / 60)} мин`;
+  const m = Math.floor(size / 60), s = size % 60;
+  return `${sign}${m} мин${s ? ` ${s} с` : ''}`;
+}
+
 // «+2 мин 20 с», «−30 с», «0 с».
 export function signedDurationText(seconds) {
   if (!finite(seconds)) return null;
@@ -65,10 +80,12 @@ export function planText(time) {
   return seconds === null ? null : clock(seconds, false);
 }
 
-// Plan time shifted by a delay: «~06:53:35».
-export function shiftedText(time, delay) {
+// Plan time shifted by a delay: «06:54», or «06:53:35» with `seconds` (only the target shows them).
+export function shiftedText(time, delay, {seconds: withSeconds = false} = {}) {
   const seconds = daySeconds(time);
-  return seconds === null || !finite(delay) ? null : `~${clock(seconds + Number(delay), true)}`;
+  if (seconds === null || !finite(delay)) return null;
+  const at = seconds + Number(delay);
+  return withSeconds ? clock(at, true) : clock(Math.round(at / 60) * 60, false);
 }
 
 // One row per stop of the route payload, in the Backend's (time) order.
@@ -78,7 +95,7 @@ export function stopRows(route, {shiftAfterTarget = true, modelUsable, factUsabl
   const stops = Array.isArray(route?.stops) ? route.stops : [];
   const cur = factUsable && finite(route?.cur_dev_s) ? Number(route.cur_dev_s) : null;
   const prediction = modelUsable && finite(route?.prediction_s) ? Number(route.prediction_s) : null;
-  return stops.map(stop => {
+  return stops.map((stop, index) => {
     const role = stop.role;
     let delay = null, basis = null;
     if (role === 'before_target' && cur !== null) { delay = cur; basis = 'fact'; }
@@ -86,11 +103,14 @@ export function stopRows(route, {shiftAfterTarget = true, modelUsable, factUsabl
     else if (role === 'after_target' && prediction !== null && shiftAfterTarget) { delay = prediction; basis = 'assumption'; }
     return {
       stop_id: stop.stop_id == null ? null : String(stop.stop_id),
+      no: index + 1, // position in the window: stops have no names, two rows may share a time
       role,
+      time: stop.time ?? null,
       lon: Number(stop.lon), lat: Number(stop.lat),
       onMap: coordOk(stop.lon, stop.lat),
       plan: planText(stop.time),
-      expected: basis ? shiftedText(stop.time, delay) : null,
+      expected: basis ? shiftedText(stop.time, delay, {seconds: role === 'target'}) : null,
+      delay: basis ? delay : null,
       basis,
     };
   });
