@@ -3,8 +3,8 @@ title: Тексты для формы сдачи решения
 type: reference
 status: active
 owner: transport2
-description: "Ссылки формы сдачи и описание возможностей диспетчерского BI-терминала."
-updated: "2026-09-27T16:57:30Z"
+description: "Ссылки формы сдачи и описание возможностей со ссылкой на подробный обзор."
+updated: "2026-09-27T17:02:43Z"
 update_event: "user_request"
 ---
 
@@ -46,6 +46,8 @@ https://github.com/kroffske/transport2/blob/main/docs/index.md
 • Диагностика: качество GPS, приём NDTP, расчёты ML и ошибки, время и прогресс прогона. При сбое остаётся последний результат с отметкой неактуальности.
 • Стек: Python/FastAPI, CatBoost, MapLibre GL JS, Three.js, PMTiles/OpenStreetMap, Docker Compose. Карта и интерфейс раздаются локально.
 • Производительность: тест воспроизведения NDTP, 11 ТС, ×30 — от отправки кадра до нового прогноза в API медиана 143 мс, 95% измерений до 570 мс (156 измерений, без отрисовки браузера). Apple M5 Pro, Docker VM 18 vCPU / 7,75 ГиБ RAM.
+
+Подробное описание: https://github.com/kroffske/transport2/blob/main/docs/features.md
 ```
 
 Ссылки ведут в `main`: перед отправкой эта ветка должна содержать актуальные файлы и быть доступна жюри.

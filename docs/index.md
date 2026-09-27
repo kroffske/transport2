@@ -4,16 +4,18 @@ type: index
 status: active
 owner: transport2
 tags: [navigation]
-updated: "2026-09-27T16:46:22Z"
-source_commit: "50e3b1cde8db"
+updated: "2026-09-27T17:02:43Z"
+source_commit: "db5ee1031081"
 update_event: "user_request"
-context: "changes=L files=20"
-description: "Навигация: единое демо официального эмулятора, контракты, модель и проектное направление."
+context: "changes=L files=11"
+description: "Навигация по возможностям системы, запуску и документации API."
 ---
 
 # Документация transport2
 
 Начните с [инструкции для жюри](runbooks/jury-demo.md): запуск Docker, карта, прогнозы и события.
+
+[Возможности диспетчерского BI-терминала](features.md) — подробное описание карты, прогнозов и действий диспетчера.
 
 ## Документация кода и API
 
