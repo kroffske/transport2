@@ -207,7 +207,7 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .map-pane .map-tools { right: calc(14px + var(--card-overlay)); }
 .map-pane .toasts { right: calc(56px + var(--card-overlay)); }
 .map-pane .maplibregl-ctrl-bottom-right { right: var(--card-overlay); }
-.map-pane .legend { max-width: min(720px, calc(100% - 80px - var(--card-overlay))); }
+.map-pane .legend { max-width: min(920px, calc(100% - 80px - var(--card-overlay))); }
 .map-pane .attention { max-width: calc(100% - 540px - var(--card-overlay)); }
 @media (max-width: 1699px) { .map-pane .attention { max-width: calc(100% - 280px - var(--card-overlay)); } }
 /* «Следить за ТС …» (§L5) stands out from the other map tools: it is the way back to the frame. */
@@ -237,7 +237,9 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .attention-text { display: grid; gap: 1px; min-width: 0; }
 .attention-text > span:last-child { font-weight: 600; white-space: nowrap; }
 /* Q1: a one-line summary — «Требуют реакции: 2 · ближайший срок 0:37 · [Следующее J]». */
-.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; white-space: nowrap; font-weight: 600; }
+.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; font-weight: 600; }
+/* A narrow bar (card panel open at 1366) wraps between words onto a second line, never mid-word or clipped. */
+.attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { white-space: nowrap; }
 .attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { font-size: 14px; text-transform: none; letter-spacing: 0; }
 .attention[data-kind=open] .attention-title { color: var(--ink); }
 .attention-detail { font-variant-numeric: tabular-nums; }
@@ -294,7 +296,7 @@ details.steps:not([open]), details.incident:not([open]) { padding-top: 7px; padd
 .dim-toggle[aria-pressed=true] .switch { background: var(--navy); }
 .dim-toggle[aria-pressed=true] .switch i { left: 14px; }
 
-.legend { position: absolute; z-index: 2; left: 14px; bottom: 30px; display: grid; gap: 4px; max-width: 720px; padding: 6px 10px; background: rgba(255, 255, 255, .95); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.legend { position: absolute; z-index: 2; left: 14px; bottom: 30px; display: grid; gap: 4px; max-width: 920px; padding: 6px 10px; background: rgba(255, 255, 255, .95); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .legend-row[hidden] { display: none; }
 .legend-row b { min-width: 38px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
