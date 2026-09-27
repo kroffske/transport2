@@ -26,10 +26,11 @@ transport2/
 ├── README.md
 ├── transport_ml/                  # ML features, выбранный artifact и stateless API
 ├── transport_backend/             # NDTP/state/schedule и HTTP orchestration
-├── consumer/                      # минимальный live HTTP consumer
-├── scripts/                       # historical NDTP sender и измерения
+├── consumer/                      # HTTP consumer, собранный UI (static/) и карта (map/moscow.pmtiles, в Git)
+├── scripts/                       # драйвер официального эмулятора, historical NDTP sender для тестов
 ├── tests/                         # ML, NDTP, Backend и consumer contracts
-├── artifacts/                     # исходные модели, метрики и результаты
+├── artifacts/                     # исторические модели и метрики T-3/T-5
+├── models/final/                  # текущая модель ML-сервиса (в Git, SHA256SUMS)
 ├── Dockerfile
 ├── compose.yaml
 ├── requirements.txt
@@ -46,14 +47,16 @@ transport2/
 │   └── emulator/                  # локальный Docker-образ эмулятора
 ├── docs/
 │   ├── source/official/           # исходная постановка и критерии
+│   ├── prd/                       # рабочая постановка и scorecard критериев
 │   ├── api/                       # текущие OpenAPI и Backend v1 contract
-│   ├── pydoc/                     # исторический PyDoc snapshot
+│   ├── pydoc/                     # PyDoc 12 модулей; index.html с командой пересборки
 │   ├── runbooks/                  # текущий Docker demo и model provenance
+│   ├── submission-form.md         # тексты формы сдачи и C1
 │   ├── repository-layout.md
 │   └── source-map.md
 ├── reference/
 │   └── initial-solution/          # неизменённые документы исходного решения
-├── notebooks/                     # будущие исследования и обучение
+├── notebooks/                     # ноутбуки аудита и моделирования T-3
 └── dashboard/                     # диспетчерская карта (исходники UI; сборка → consumer/static)
 ```
 
@@ -61,9 +64,10 @@ transport2/
 
 - `transport_ml/` владеет подготовкой признаков, обучением, схемой модели и инференсом. `service.py` обслуживает выбранный final artifact отдельным stateless HTTP API; NDTP state ему не принадлежит.
 - `transport_backend/` владеет NDTP TCP boundary, bounded telemetry, unit mapping, source clocks, планом, computed current deviation и HTTP orchestration. Оно передаёт ML только разрешённые point/telemetry/plan поля.
-- `consumer/` владеет минимальным polling view и возрастом последнего HTTP snapshot. Оно читает Backend API, не model/data files, и не заменяет полный BI.
+- `consumer/` раздаёт собранный UI и локальные PMTiles, проксирует Backend (`/api/snapshot`, `/api/route`, `/api/routes`) и отдаёт `/api/build`. Оно читает Backend API, не model/data files, и не заменяет полный BI.
+- `models/final/` — единственный источник модели для compose (`MODEL_DIR=./models/final`); `.local/validate-tuning-2026-09-26/` (вне Git) хранит код обучения, отчёт и evidence.
 - `scripts/` владеет источниками телеметрии: `emulator_driver.py` регистрирует прогон в Backend и кормит официальный эмулятор точками датасета через его `POST /api/config` (единственный показ, compose profile `demo`); `replay_ndtp.py` — инструмент тестов прямой NDTP-отправки в Backend режима `dataset_wall`. Backend узнаёт данные только через NDTP.
-- `dashboard/` владеет диспетчерской картой: MapLibre/PMTiles, ТС прогона, путь и остановки выбранного ТС, карточка с фактом/прогнозом модели, события и diagnostics. Собирается в `consumer/static` командой `npm --prefix dashboard run build`.
+- `dashboard/` владеет диспетчерской картой: MapLibre/PMTiles, ТС прогона, маршруты по плановым остановкам наряда, маршрут и остановки выбранного ТС, карточка с фактом/прогнозом модели, события и diagnostics. Собирается в `consumer/static` командой `npm --prefix dashboard run build`.
 - `notebooks/` предназначен для аудита данных, экспериментов и воспроизводимого обучения. Производственный код не должен жить только в ноутбуках.
 - `data/` — локальный неизменяемый вход. Производные таблицы и кэши в будущем должны получить отдельные подкаталоги и правила воспроизводимости.
 

@@ -20,7 +20,7 @@ from transport_ml.data import prepare_traffic, prepare_plan
 from transport_ml.service import create_app
 
 
-ROOT = Path("/Users/ravius/projects/transport2")
+ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get("DATA_DIR", ROOT / "data")) / "validate"
 MODEL = Path(os.environ.get("MODEL_DIR", ROOT / "models/final"))
 SHA = "dc33437108c3e036089450c9b98771dacd014246fbb91d0df2a89d0c8e247122"

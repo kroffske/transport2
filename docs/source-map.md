@@ -17,7 +17,7 @@ description: "Карта механического переноса, исклю
 
 ## Официальная раздача
 
-Источник: `/Users/ravius/Downloads/dataset`.
+Источник: `~/Downloads/dataset`.
 
 | Исходный путь | Целевой путь | Решение |
 |---|---|---|
@@ -33,7 +33,7 @@ description: "Карта механического переноса, исклю
 
 ## Начальное ML-решение
 
-Источник: `/Users/ravius/Downloads/transport_ml_solution`.
+Источник: `~/Downloads/transport_ml_solution`.
 
 | Исходный путь | Целевой путь | Решение |
 |---|---|---|
@@ -44,7 +44,7 @@ description: "Карта механического переноса, исклю
 | `requirements.txt`, `requirements-torch.txt` | те же пути в корне | Скопированы без изменений |
 | `example_request.json` | `example_request.json` | Скопирован без изменений |
 | `docs/openapi.json` | `docs/api/openapi.json` | Скопирован без изменения содержимого |
-| `docs/pydoc/` | `docs/pydoc/` | Скопирован без изменений |
+| `docs/pydoc/` | `docs/pydoc/` | Скопирован без изменений; в T-8 заменён PyDoc текущих 12 модулей (`docs/pydoc/index.html`) |
 | `README.md`, `DATA_AUDIT.md`, `RESULTS.md`, `MLSD.md`, `MANIFEST.sha256.json` | `reference/initial-solution/` | Сохранены побайтно как оригинальная документация и provenance; вынесены из authored docs |
 | `docs/dataset_README.md` | — | Не перенесён: SHA-256 совпадает с `dataset/README.md` |
 | `docs/Emulator-and-Telematic-Packets-Specification.md` | — | Не перенесён: SHA-256 совпадает с официальной спецификацией из `dataset` |
@@ -54,7 +54,7 @@ description: "Карта механического переноса, исклю
 
 | Исходный путь | Целевой путь | Решение |
 |---|---|---|
-| `/Users/ravius/Downloads/Предиктор изменений в графике движения городского транспорта.pdf` | `docs/source/official/transport-delay-predictor.pdf` | Скопирован без изменений под стабильным именем |
+| `~/Downloads/Предиктор изменений в графике движения городского транспорта.pdf` | `docs/source/official/transport-delay-predictor.pdf` | Скопирован без изменений под стабильным именем |
 
 ## Создано в новом репозитории
 
