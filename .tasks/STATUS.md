@@ -47,4 +47,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 4 closed tasks total_
 
-_Generated: 2026-09-27T20:02:33.729Z_
+_Generated: 2026-09-27T20:02:58.244Z_
