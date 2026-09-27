@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T14:29:39.455Z"
-updated_at: "2026-09-27T14:29:39.455Z"
+updated_at: "2026-09-27T14:36:00.335Z"
 parent: null
 depends_on: []
 gstack_refs: {}

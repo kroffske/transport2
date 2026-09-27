@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T14:30:51.099Z",
+  "generated_at": "2026-09-27T14:41:41.977Z",
   "tasks": [
     {
       "id": "T-10",
@@ -35,7 +35,7 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T14:29:39.455Z",
-      "updated_at": "2026-09-27T14:29:39.455Z",
+      "updated_at": "2026-09-27T14:36:00.335Z",
       "stream": "T",
       "path": "T-11-2026-09-27-pitch-deck-q-a-5",
       "work_items_total": 6,
@@ -49,8 +49,16 @@
         "Репетиции (люди)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:29:39.464Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T14:36:00.343Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T14:36:00.343Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "User 2026-09-27 17:45: presentation is prepared and shown only at semifinal/final if the team advances; nothing to upload tonight → T-11 deferred until after the form deadline. The '5-second' human check is replaced by a designer-subagent analysis (gstack design-review skill, /Users/ravius/projects/locus-forge/locus-skills-private/.local/upstreams/gstack/design-review/SKILL.md). Plan review r1 = revise (PR-001 number verification by locator, PR-002 user decisions into binding) — repair when resumed.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
@@ -129,7 +137,7 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T11:24:42.661Z",
-      "updated_at": "2026-09-27T13:28:30.632Z",
+      "updated_at": "2026-09-27T14:36:00.489Z",
       "stream": "T",
       "path": "T-7-2026-09-27-ml",
       "work_items_total": 13,
@@ -143,12 +151,12 @@
         "Независимая финальная QA (agent D)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:12:38.806Z",
+      "last_event": "2026-09-27T14:36:00.503Z",
       "latest_status_note": {
-        "ts": "2026-09-27T13:28:30.650Z",
+        "ts": "2026-09-27T14:36:00.503Z",
         "event": "note",
         "actor": "manager",
-        "text": "Authorization (user, 2026-09-27): последующие проверенные этапы T-7 коммитить, пушить в origin/dev и сливать в main (fast-forward или merge) с push origin/main. Коллега получает доступ к репо: перед каждым merge — git fetch, проверить origin/main на чужие коммиты, при расхождении merge без force; force-push запрещён.",
+        "text": "User 2026-09-27 17:45: 5-second clarity check = designer subagent using gstack design-review skill (path in T-11 note), run after UI cutoff on the final UI at 1920×1080; findings feed W13 leftovers / W10.",
         "from": null,
         "to": null,
         "source": "status_note"
@@ -164,22 +172,29 @@
       "priority": "p0",
       "owner": "claude",
       "created_at": "2026-09-27T14:29:03.176Z",
-      "updated_at": "2026-09-27T14:29:03.176Z",
+      "updated_at": "2026-09-27T14:39:49.652Z",
       "stream": "T",
       "path": "T-8-2026-09-27-c1-c3",
-      "work_items_total": 6,
+      "work_items_total": 5,
       "work_items_done": 0,
       "work_items_remaining": [
-        "C1 durable proof (можно сейчас).",
-        "Manifest внешних артефактов и способ передачи (можно сейчас; способ — после Q3).",
-        "Актуальный PyDoc (после финального commit T-7).",
-        "Текст формы (черновик сейчас, финал после T-7 W10 и T-10).",
-        "Проверка чистого clone (после T-10 и W10 T-7).",
-        "Передача правок."
+        "C1 в форме (сейчас, до 18:30).",
+        "Таблица внешних файлов для README (сейчас, передать в T-7 W9 до 19:00).",
+        "Актуальный PyDoc (черновик сейчас, повторная генерация на финальном коде до финального commit).",
+        "Текст формы (полный черновик к 21:00, финал к 22:30).",
+        "Проверка чистого clone (первое окно эксклюзивного стека после push финального product commit; не ждёт T-10)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:29:03.197Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T14:41:41.904Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T14:39:49.670Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Plan repaired per T8-plan-r1 + user decision 18:00 MSK (commit-only scope: no Release/public links/anon curl/secret scan). Single final_commit identity; PyDoc before final commit; form text in docs/submission-form.md (draft 21:00, final 22:30); README external-files table (7 paths+SHA, 3 model files suffice) -> T-7 W9 by 19:00, T-8 fallback at 21:00; W5 clean clone not gated on T-10. Next: new plan-review id by coordinator.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
@@ -191,7 +206,7 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T14:29:39.166Z",
-      "updated_at": "2026-09-27T14:29:39.166Z",
+      "updated_at": "2026-09-27T14:38:04.228Z",
       "stream": "T",
       "path": "T-9-2026-09-27-onset-lead-time-c2",
       "work_items_total": 5,
@@ -204,8 +219,16 @@
         "Независимая проверка claim."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:29:39.177Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T14:38:04.236Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T14:38:04.236Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Coordinator 2026-09-27 18:00: plan review r1 = revise (PR-001 alert/target matching, PR-002 24 h window too long at x5, PR-003 needs own ports vs T-7/T-10 stack). User priority is working committed code → T-9 deferred until T-7 W10 is accepted; resume only if time remains before 22:00, else form says «не измерено».",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     }
