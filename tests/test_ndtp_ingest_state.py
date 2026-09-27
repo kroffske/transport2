@@ -7,6 +7,7 @@ from threading import Event
 import time
 
 import pytest
+from pathlib import Path
 
 from transport_backend import (ClockMapping, NDTPServer, RunPlan, RunRegistry, TelemetryState,
                                load_unit_mapping)
@@ -204,7 +205,7 @@ def test_receive_availability_negative_lag_and_bounded_history() -> None:
 
 
 def test_mapping_from_real_data_and_clock_domains() -> None:
-    path = "/Users/ravius/projects/transport2/data/validate/traffic.csv"
+    path = str(Path(__file__).resolve().parents[1] / "data/validate/traffic.csv")
     mapping = load_unit_mapping([path])
     assert mapping[UNIT] == TR
     assert MAPPING.to_epoch(MAPPING.from_epoch(1_700_000_010)) == 1_700_000_010
