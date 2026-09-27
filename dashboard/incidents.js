@@ -18,12 +18,22 @@ const finite = value => value !== null && value !== undefined && value !== '' &&
 // computed, the row carries the previous target with its prediction as one pair. It is a current
 // forecast for that target, not degraded data: the same level as before, so no alert, list or
 // event state flips during the switch. Any other degraded reason (GPS, ML) still wins.
+// W16: Backend holds the last pair on any forecast loss (up to 5 min of data time) and says so with
+// `prediction_state = 'updating'`, whatever its status (degraded or unavailable) — Backend's hold wins
+// (QA F-5), so the UI adds no flicker of its own. Rows without `prediction_state` (older Backend) are
+// held only for the W14 target-change reason. A GPS the dispatcher marked faulty is never held.
+// `warming` (W16): the vehicle is on its route and its first forecast is being computed — calm green
+// «по графику · прогноз готовится», never grey and never an alert.
 export const HELD_REASON = 'prediction_held_previous_target';
-export const isHeld = vehicle => vehicle?.status === 'degraded' && vehicle?.reason === HELD_REASON
-  && (vehicle.prediction_state ?? 'updating') === 'updating';
+const MARKED = 'gps_marked_faulty';
+export const isHeld = vehicle => vehicle?.reason !== MARKED && finite(vehicle?.prediction_s)
+  && (vehicle?.prediction_state === 'updating'
+    || (vehicle?.prediction_state == null && vehicle?.status === 'degraded' && vehicle?.reason === HELD_REASON));
+export const isWarming = vehicle => vehicle?.prediction_state === 'warming' && vehicle?.reason !== MARKED;
 
 export function assess(vehicle, fresh) {
-  const hasPrediction = finite(vehicle?.prediction_s) && vehicle?.prediction_state !== 'none';
+  const hasPrediction = finite(vehicle?.prediction_s) && vehicle?.prediction_state !== 'none' && vehicle?.reason !== MARKED;
+  if (fresh && isWarming(vehicle) && !hasPrediction) return {level: 'normal', hasPrediction, warming: true};
   const current = vehicle?.status === 'normal' || isHeld(vehicle);
   if (!fresh || !current || !hasPrediction) return {level: 'nodata', hasPrediction};
   const seconds = Number(vehicle.prediction_s);
@@ -134,11 +144,17 @@ export function observeSnapshot(store, rows, {fresh, clock = null, wallS}) {
     if (incident.state === 'resolved') continue;
     const vehicle = byId.get(incident.tr_id);
     const assessment = vehicle ? assess(vehicle, fresh) : {level: 'nodata'};
-    if (assessment.level === 'nodata') {
+    // A warming forecast has no value yet: it neither resolves nor feeds an episode.
+    if (assessment.level === 'nodata' || assessment.warming) {
       incident.vehicle_state = 'nodata';
       incident.nodata_since ??= wallS;
-      // A short gap is neither a loss nor a resolution: the episode stays as it was.
-      if (wallS - incident.nodata_since >= LOST_AFTER_S && incident.state !== 'monitoring_lost') {
+      // W16: presence is Backend's (`lost` only after 300 s without frames): a row that carries `lost`
+      // is lost exactly when Backend says so, with no UI timer. Only a row without the field (older
+      // Backend), a row gone or an offline source use the short LOST_AFTER_S gap. A shorter gap is
+      // neither a loss nor a resolution: the episode stays as it was.
+      const lost = vehicle && fresh && typeof vehicle.lost === 'boolean' ? vehicle.lost
+        : wallS - incident.nodata_since >= LOST_AFTER_S;
+      if (lost && incident.state !== 'monitoring_lost') {
         incident.state = 'monitoring_lost';
         incident.updated_at = clock;
         log(incident, clock, 'lifecycle', `Мониторинг потерян: нет актуальных данных по ${incident.tr_id} — событие не закрыто`);

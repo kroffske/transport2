@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {LOST_AFTER_S, acknowledge, addNote, assess, countByFilter, createIncidentStore, incidentCounts,
+import {LOST_AFTER_S, acknowledge, isHeld, addNote, assess, countByFilter, createIncidentStore, incidentCounts,
   incidentForVehicle, markRead, normalizeNote, observeSnapshot, orderedIncidents, reopen,
   visibleRows} from './incidents.js';
 
@@ -27,7 +27,7 @@ test('a forecast held over a target change keeps its level; other degraded reaso
   assert.equal(assess(held(200), true).level, 'warning');
   assert.equal(assess(held(40), true).level, 'normal');
   assert.equal(assess(held(40), false).level, 'nodata'); // offline: still never current
-  assert.equal(assess(held(200, {reason: 'invalid_gps'}), true).level, 'nodata');
+  assert.equal(assess(held(200, {reason: 'invalid_gps', prediction_state: undefined}), true).level, 'nodata'); // older Backend: only the W14 reason
   assert.equal(assess(held(200, {prediction_state: 'none'}), true).level, 'nodata');
   assert.equal(assess({...bus('a', 90), prediction_state: 'none'}, true).hasPrediction, false);
   assert.deepEqual(countByFilter([held(200), held(40), bus('n', null)], true), {all: 3, warning: 1, nodata: 1});
@@ -175,4 +175,46 @@ test('a nodata gap shorter than LOST_AFTER_S is neither monitoring_lost nor reso
 
 test('observeSnapshot requires the wall time', () => {
   assert.throws(() => observeSnapshot(createIncidentStore('run-1'), [], {fresh: true, clock: 't0'}), /wallS/);
+});
+
+test('W16: Backend «updating» is a held forecast whatever the status or reason (F-5); a dispatcher GPS mark never is', () => {
+  const updating = (prediction_s, extra = {}) => ({tr_id: 'u', prediction_s, prediction_state: 'updating', ...extra});
+  for (const extra of [{status: 'unavailable', reason: 'no_fresh_frames'}, {status: 'degraded', reason: 'invalid_gps'}, {status: 'normal'}]) {
+    assert.equal(assess(updating(200, extra), true).level, 'warning', JSON.stringify(extra));
+    assert.equal(isHeld(updating(200, extra)), true);
+  }
+  assert.equal(assess(updating(40, {status: 'unavailable'}), true).level, 'normal');
+  assert.equal(assess(updating(200, {status: 'unavailable'}), false).level, 'nodata', 'offline source: never current');
+  assert.equal(assess(updating(null, {status: 'unavailable'}), true).level, 'nodata', 'nothing to hold');
+  assert.equal(assess(updating(200, {status: 'degraded', reason: 'gps_marked_faulty'}), true).level, 'nodata');
+  // A warning episode lives through the hold: same incident, no loss, no history line.
+  const store = createIncidentStore();
+  observeSnapshot(store, [bus('u', 200)], {fresh: true, clock: 't0', wallS: 0});
+  for (let t = 1; t <= 10; t += 1) observeSnapshot(store, [updating(200, {status: 'unavailable'})], {fresh: true, clock: `t${t}`, wallS: t * LOST_AFTER_S});
+  const [incident] = orderedIncidents(store);
+  assert.equal(incident.state, 'active');
+  assert.equal(incident.history.length, 1);
+});
+
+test('W16: «warming» is calm green without a value, never grey or an alert, and never ends an episode', () => {
+  const warming = extra => ({tr_id: 'w', prediction_s: null, prediction_state: 'warming', status: 'degraded', ...extra});
+  assert.deepEqual(assess(warming(), true), {level: 'normal', hasPrediction: false, warming: true});
+  assert.equal(assess(warming(), false).level, 'nodata', 'offline: no claim about the schedule');
+  assert.equal(assess(warming({reason: 'gps_marked_faulty'}), true).level, 'nodata');
+  assert.deepEqual(countByFilter([warming(), bus('n', null)], true), {all: 2, warning: 0, nodata: 1});
+  const store = createIncidentStore();
+  observeSnapshot(store, [bus('w', 200)], {fresh: true, clock: 't0', wallS: 0});
+  observeSnapshot(store, [warming()], {fresh: true, clock: 't1', wallS: 1});
+  assert.notEqual(orderedIncidents(store)[0].state, 'resolved');
+});
+
+test('W16: with Backend `lost` the UI has no timer of its own: lost exactly when Backend says so', () => {
+  const store = createIncidentStore();
+  observeSnapshot(store, [{...bus('1', 200), lost: false}], {fresh: true, clock: 't0', wallS: 0});
+  const gap = {tr_id: '1', prediction_s: null, status: 'unavailable', reason: 'prediction_pending', prediction_state: 'none', lost: false};
+  for (const wallS of [1, 20, 60, 200]) observeSnapshot(store, [gap], {fresh: true, clock: 't1', wallS});
+  const [incident] = orderedIncidents(store);
+  assert.equal(incident.state, 'active', 'no «пропало» before Backend says so, however long the gap');
+  observeSnapshot(store, [{...gap, reason: 'vehicle_lost', lost: true}], {fresh: true, clock: 't2', wallS: 201});
+  assert.equal(incident.state, 'monitoring_lost');
 });

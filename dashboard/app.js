@@ -47,6 +47,7 @@ const NOT_ON_ROUTE_REASONS = new Set(['no_target_in_horizon']);
 const UPDATING_REASONS = new Set(['prediction_pending', 'prediction_waiting_new_telemetry', 'prediction_behind_input', 'prediction_held_previous_target']);
 function noForecastText(v) {
   if (v.reason === 'gps_marked_faulty') return 'GPS неисправен — отмечено диспетчером';
+  if (v.lost === true || v.reason === 'vehicle_lost') return 'ТС пропало (нет данных > 5 мин)';
   if (v.gps_suspect === 'no_plan') return 'нет наряда — маршрута и прогноза нет';
   if (v.route_not_started === true || NOT_ON_ROUTE_REASONS.has(v.reason)) return 'прогноз появится, когда ТС выйдет на маршрут';
   if (v.prediction_state === 'updating' || v.prediction_updating === true || UPDATING_REASONS.has(v.reason)) return 'обновляется';
@@ -151,6 +152,21 @@ const shown = trId => { const key = routeByVehicle.get(String(trId)); return key
 // The queue's two clocks (event-queue.js): the reaction SLA runs on wall seconds (epoch, so it
 // survives a reload), history and snooze on the run's data clock.
 const wallNow = () => Date.now() / 1000;
+// F-6: once the run is completed nothing more arrives, so reaction timers stop: the SLA clock freezes
+// at the moment the page saw the run end, and an open event's badge says «прогон завершён».
+let slaFrozenAt = null;
+const slaWall = () => {
+  if (currentRun()?.state !== 'completed') { slaFrozenAt = null; return wallNow(); }
+  slaFrozenAt ??= wallNow();
+  return slaFrozenAt;
+};
+const RUN_ENDED_BADGE = {text: 'прогон завершён', tone: 'ended'};
+const runEndedView = view => (view?.sla && currentRun()?.state === 'completed' ? {...view, sla: null, badge: RUN_ENDED_BADGE} : view);
+const queueGroups = () => {
+  const all = Q.groups(queue, slaWall(), shown);
+  for (const key of ['needs', 'work', 'snoozed', 'ended']) all[key] = all[key].map(runEndedView);
+  return all;
+};
 const dataNow = () => sourceClock() ?? undefined;
 const currentRun = () => feed?.snapshot?.run ?? null;
 // Values are current only while Backend answers.
@@ -163,7 +179,7 @@ const shownRoute = () => (route.data && route.id === selected && selected
 // Which values of the selected row may be shown on its stops (route-context.js stopRows): the model
 // value only while the row is a current `normal` prediction (the same rule as the headline), the
 // fact only while Backend answers.
-const usability = v => ({modelUsable: Boolean(v) && assess(v, isFresh()).level !== 'nodata', factUsable: Boolean(v) && isFresh()});
+const usability = v => ({modelUsable: Boolean(v) && assess(v, isFresh()).level !== 'nodata' && !assess(v, isFresh()).warming, factUsable: Boolean(v) && isFresh()});
 const routeRows = data => (data ? stopRows(data, {shiftAfterTarget, ...usability(findRow(selected))}) : []);
 
 // ---- Map: MapLibre base, locked top-down view, local PMTiles ------------------------------
@@ -400,7 +416,7 @@ function renderStopLabels(vehicle, target) {
     const assessment = assess(vehicle, isFresh());
     const expected = shiftedText(vehicle.target_time_begin, assessment.level !== 'nodata' ? vehicle.prediction_s : null, {seconds: true});
     stopLabel('target', target, `Цель · план ${planText(vehicle.target_time_begin) ?? '?'}${expected ? ` → ${expected} · ${BASIS.model}`
-      : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`);
+      : assessment.warming ? ' · прогноз готовится' : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`);
   } else stopLabel('target', null);
   const next = labelledStops(routeRows(shownRoute())).next;
   stopLabel('next', next ? [next.lon, next.lat] : null,
@@ -626,6 +642,7 @@ function refreshRoute() {
 // ---- Panels ------------------------------------------------------------------------------
 // The delay of a row: full in the list, whole minutes on map labels (F-1).
 function shortValue(vehicle, assessment, {short = false} = {}) {
+  if (assessment.warming) return 'по графику'; // W16: on its route, the first forecast is being computed
   if (assessment.level !== 'nodata') return delayText(vehicle.prediction_s, {short});
   if (runOver(currentRun())) return 'прогон завершён';
   return assessment.hasPrediction ? `${delayText(vehicle.prediction_s, {short})} · устарел` : '—';
@@ -635,7 +652,7 @@ const capital = value => value ? value[0].toUpperCase() + value.slice(1) : value
 const updatingText = v => `обновляется · возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'} (время данных)`;
 
 function rowNote(vehicle, assessment) {
-  let note = LEVEL[assessment.level].label;
+  let note = assessment.warming ? 'Прогноз готовится' : LEVEL[assessment.level].label;
   const incident = incidentForVehicle(store(), vehicle.tr_id);
   if (incident?.unread && incident.state !== 'resolved' && assessment.level !== 'nodata') note = `Новое · ${note.toLowerCase()}`;
   if (assessment.level === 'nodata') {
@@ -759,7 +776,7 @@ function renderCard() {
     el('span', {className: 'card-kind'}, 'Автобус'),
     el('h2', {}, text(v.tr_id)),
     el('span', {className: 'level-chip', dataset: {level: assessment.level}, 'data-gps-marked': gpsMarks.has(String(v.tr_id)) ? 'true' : null},
-      gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен' : assessment.level === 'nodata' && assessment.hasPrediction ? 'Прогноз устарел' : LEVEL[assessment.level].label),
+      gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен' : assessment.warming ? 'По графику' : assessment.level === 'nodata' && assessment.hasPrediction ? 'Прогноз устарел' : LEVEL[assessment.level].label),
     close);
 
   // Headline (C-2): the value, one line about the target, one line about the source.
@@ -769,14 +786,23 @@ function renderCard() {
   const value = el('strong');
   const targetLine = el('small', {id: 'headline-target'});
   const source = el('small', {className: 'headline-source'});
-  if (assessment.level !== 'nodata') {
+  if (assessment.warming) {
+    value.textContent = 'По графику · прогноз готовится';
+    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}`;
+    const eta = Number.isFinite(Number(v.warming_eta_s)) && v.warming_eta_s !== null ? durationText(v.warming_eta_s) : null;
+    source.textContent = `ТС вышло на маршрут; первый прогноз считается${eta ? ` — примерно через ${eta} (время данных)` : ''} и появится здесь сам.`;
+  } else if (assessment.level !== 'nodata') {
     value.textContent = delayText(v.prediction_s);
     const held = isHeld(v);
-    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}, ожидаем ≈ ${expected ?? '?'}${held ? ' · новая цель считается' : ''}`;
+    // W16: Backend says why it holds; only a target change means «новая цель считается».
+    const newTarget = held && (v.prediction_hold_reason === 'target_changed' || (v.prediction_hold_reason == null && v.reason === 'prediction_held_previous_target'));
+    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}, ожидаем ≈ ${expected ?? '?'}${newTarget ? ' · новая цель считается' : ''}`;
     source.append(`${BASIS.model} · обновлён ${ageText(v.prediction_age_s)}`);
     if (v.prediction_updating === true || held) {
       source.append(' ', el('span', {id: 'prediction-updating', className: 'pulse',
-        title: held
+        title: held && !newTarget
+          ? `Нового прогноза пока нет; показан последний (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных). Backend держит его до 5 мин, пока не придёт новый.`
+          : held
           ? `Цель сменилась по плану; прогноз для новой цели считается первым в очереди. Пока показан прогноз прошлой цели вместе с этой целью (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`
           : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний прогноз для этой цели (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`}, 'обновляется'));
     }
@@ -810,7 +836,7 @@ function renderCard() {
     v.cur_dev_s == null ? reasonText(v.reason) ?? 'факт не определён' : 'на последней пройденной остановке; это факт, не прогноз');
   field(facts, 'Цель прогноза', !v.target_stop_id ? 'цель не определена'
     : outsideRun ? 'Цель за пределами окна данных прогона'
-    : `план ${planText(v.target_time_begin) ?? '?'}${expected ? ` → ${expected} (${BASIS.model})` : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`,
+    : `план ${planText(v.target_time_begin) ?? '?'}${expected ? ` → ${expected} (${BASIS.model})` : assessment.warming ? ' · прогноз готовится' : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`,
   v.target_stop_id ? `первая плановая остановка через 10–15 мин${targetPoint(v) ? '' : ' · координаты нет — на карте не показана'}` : null);
 
   // Technical details (C-1): identifiers and revisions for engineers, collapsed by default.
@@ -839,7 +865,7 @@ function renderCard() {
 
   // v2: the vehicle's event (status, SLA) and the dispatcher's actions sit in the sticky top.
   const eventId = Q.eventForVehicle(queue, v.tr_id);
-  const view = eventId ? Q.eventView(queue, eventId, wallNow()) : null;
+  const view = eventId ? runEndedView(Q.eventView(queue, eventId, slaWall())) : null;
   const incident = eventId ? findIncident(store(), eventId) : null;
   top.append(...eventControls(view, v));
   const notes = [];
@@ -1107,7 +1133,7 @@ function renderAttention() {
   }
   // v2 attention bar: the event that most needs a reaction (overdue first), except the one whose
   // card is open (L-5); otherwise a calm line. Vehicles without a forecast are never counted here.
-  const {needs, work, snoozed} = Q.groups(queue, wallNow(), shown);
+  const {needs, work, snoozed} = queueGroups();
   const open = needs.filter(view => view.tr_id !== selected && findIncident(store(), view.id)?.vehicle_state === 'warning')
     .sort((a, b) => (b.sla?.over ?? false) - (a.sla?.over ?? false) || (a.sla?.left_s ?? 0) - (b.sla?.left_s ?? 0) || a.number - b.number);
   if (!open.length && needs.some(view => view.tr_id === selected)) {
@@ -1159,7 +1185,7 @@ function queueItem(view) {
 }
 
 function renderEvents() {
-  const all = Q.groups(queue, wallNow(), shown);
+  const all = queueGroups();
   const {counts} = all;
   const side = document.querySelector('.side');
   side.dataset.tab = sideTab;
@@ -1529,7 +1555,7 @@ function onPanelClick(event) {
   else if (action === 'card-menu') { cardMenu = cardMenu === control.dataset.menu ? null : control.dataset.menu; renderCard(); }
   else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
   else if (action === 'tab') setTab(control.dataset.tab);
-  else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, wallNow(), shown));
+  else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, slaWall(), shown));
   else if (action === 'toggle-ended') { endedOpen = !endedOpen; renderEvents(); }
   else if (action === 'read-ended') queueAction(q => Q.markEndedRead(q, shown));
   else if (action === 'bulk-take') queueAction(q => Q.take(q, q.selection, dataNow()));

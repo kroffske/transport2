@@ -384,3 +384,6 @@ textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .vehicle[data-gps-marked=true] { border-left-color: var(--gps-marked); border-left-style: solid; background: #f6f1fd; }
 .vehicle[data-gps-marked=true] .vehicle-value, .vehicle[data-gps-marked=true] .vehicle-note { color: #3f2270; }
 .level-chip[data-gps-marked=true] { background: #e9ddfa; color: #3f2270; }
+/* W16: the self-explanatory dimming label takes two short lines, so the map tools stay as narrow as before. */
+.map-tool.dim-toggle { white-space: normal; max-width: 228px; text-align: left; line-height: 1.2; padding: 6px 12px; }
+.dim-toggle .switch { flex: none; }

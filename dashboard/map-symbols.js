@@ -5,6 +5,7 @@
 //   warning      — badge «!» (≥ 5 min: «!!») at the top-right corner;
 //   no current prediction (stale, degraded, Backend offline) — hollow white icon, dashed border;
 //   invalid GPS  — grey icon with badge «?», drawn at the last valid position;
+//   GPS marked faulty by the dispatcher — violet icon with badge «×», never dimmed or grey;
 //   selected     — larger icon inside a dark ring; hovered — thin blue ring;
 //   off route    — badge «≠» at the bottom-left corner (coordinates do not match the assignment);
 //   heading      — a separate dark arrowhead outside the icon, turned by the transport layer
@@ -22,9 +23,16 @@ const PAD = 10; // room around the body for the ring and the badge
 const INK = '#1b2a36';
 const GREY = '#5d6b76';
 const LEVEL_FILL = {severe: '#c8412f', warning: '#e39a2d', normal: '#23845f', nodata: '#ffffff'};
+export const MARKED_FILL = '#7b4cc2'; // «GPS неисправен — отмечено диспетчером»
+const MARKED_BADGE = '#3f2270';
 
 // level: severe | warning | normal | nodata (incidents.js assess).
-export function vehicleLook(level, {gpsValid = true, selected = false, hovered = false, offRoute = false} = {}) {
+// gpsMarked: the dispatcher marked the vehicle's GPS faulty; its own look wins over level and GPS.
+export function vehicleLook(level, {gpsValid = true, selected = false, hovered = false, offRoute = false, gpsMarked = false} = {}) {
+  if (gpsMarked) {
+    return {kind: 'vehicle', size: selected ? SELECTED_SIZE : VEHICLE_SIZE, fill: MARKED_FILL, glyph: '#ffffff', border: 'solid',
+      badge: '×', ring: selected ? 'selected' : hovered ? 'hovered' : null, offRoute: false};
+  }
   const stale = level === 'nodata';
   return {
     kind: 'vehicle',
@@ -85,7 +93,7 @@ function drawVehicle(ctx, look) {
   ctx.stroke();
   ctx.setLineDash([]);
   strokeIcon(ctx, bus, s * 0.66, look.glyph);
-  if (look.badge) badge(ctx, s / 2 - 2, -s / 2 + 2, look.badge, look.badge === '?' ? GREY : INK);
+  if (look.badge) badge(ctx, s / 2 - 2, -s / 2 + 2, look.badge, look.badge === '?' ? GREY : look.badge === '×' ? MARKED_BADGE : INK);
   if (look.offRoute) badge(ctx, -s / 2 + 2, s / 2 - 2, '≠', '#6b3fa0');
 }
 

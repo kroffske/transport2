@@ -9,6 +9,7 @@ const LABELS = {
   invalid_gps: 'последняя позиция GPS недостоверна',
   stale_gps: 'GPS устарел',
   disconnected: 'устройство отключено',
+  vehicle_lost: 'ТС пропало (нет данных > 5 мин)', // W16: Backend `lost`, only after 300 s without frames
   // Timetable and observed stops (Orchestrator._vehicle)
   no_target_in_horizon: 'у ТС нет плановой остановки через 10–15 мин',
   no_confident_observed_stop: 'не определена пройденная остановка — нет факта опоздания',

@@ -274,7 +274,7 @@ try {
     const drawn = await symbolsOnMap(page);
     check(drawn.length > 0 && drawn.every(symbolMatchesLevel), `map symbols: every vehicle is a bus icon whose non-colour marks match its state (${drawn.map(d => `${d.id}:${d.symbol}`).join(', ')})`);
     const legend = await page.locator('img.legend-symbol').evaluateAll(images => images.map(img => img.src));
-    check(legend.length === 7 && new Set(legend).size === 7 && legend.every(src => src.startsWith('data:image/png')), 'legend shows the 7 map symbols, all different, drawn locally');
+    check(legend.length === 8 && new Set(legend).size === 8 && legend.every(src => src.startsWith('data:image/png')), 'legend shows the 8 map symbols (W16: + violet «GPS неисправен»), all different, drawn locally');
     const legendBox = await page.locator('.legend').boundingBox();
     check(legendBox.height <= 56 && legendBox.width <= 720 && await page.locator('#legend-route').isHidden()
       && (await page.locator('#legend-help').getAttribute('title')).includes('Цвет ТС'), `legend without a selection: one row ≤ 56 px, route row hidden, note in «?» (${Math.round(legendBox.width)}×${Math.round(legendBox.height)})`);
@@ -355,7 +355,9 @@ try {
 
     // A vehicle without a current prediction: honest reason, not a green state.
     // A forecast held over a target change is a current forecast (W14), not «no prediction».
-    const noForecast = v => v.status !== 'normal' && v.reason !== 'prediction_held_previous_target';
+    // W16: a Backend hold («updating» with a value) and «warming» are current and calm, not «no prediction».
+    const noForecast = v => v.status !== 'normal' && v.reason !== 'prediction_held_previous_target' && v.prediction_state !== 'warming'
+      && !(v.prediction_state === 'updating' && v.prediction_s != null);
     const freshRows = async () => (await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? [];
     const now = await freshRows();
     const without = now.find(v => noForecast(v) && v.location_valid) ?? now.find(noForecast);
@@ -365,7 +367,7 @@ try {
       const text = await cardText(page);
       const after = (await freshRows()).find(v => String(v.tr_id) === String(without.tr_id));
       if (!after || !noForecast(after) || after.reason !== without.reason) skipped.push(`live: ${without.tr_id} changed state during the check — no-prediction card not asserted`);
-      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел|Прогон завершён|нет наряда/.test(text)
+      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел|Прогон завершён|нет наряда|ТС пропало/.test(text)
         && (!without.reason || text.includes(reasonText(without.reason)) || run?.state === 'completed' || text.includes('Прогон завершён')), `no prediction (${without.reason}): «${reasonText(without.reason)}», not green`);
       await shot(page, 'live-4-no-prediction-1920.png');
     } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
@@ -971,6 +973,61 @@ try {
     await page.close();
   }
 
+  // W16: Backend holds the last pair on any forecast loss (`prediction_state` updating, even with status
+  // unavailable — QA F-5); «warming» is calm green «по графику · прогноз готовится»; after the run ends
+  // the reaction SLA stops (QA F-6).
+  {
+    const w = bus('900041', center[0], center[1], {prediction_s: 90});
+    const g = bus('900043', center[0] - 0.02, center[1] - 0.01, {prediction_s: null, prediction_state: 'warming', status: 'degraded', reason: 'prediction_pending'});
+    const x = bus('900044', center[0] + 0.02, center[1] - 0.012, {prediction_s: null, status: 'unavailable', reason: 'no_target_in_horizon', route_not_started: true});
+    const lostBus = bus('900045', center[0] + 0.01, center[1] + 0.015, {prediction_s: null, status: 'unavailable', reason: 'vehicle_lost', lost: true, connected: false, prediction_state: 'none'});
+    setSnapshot(RUN('run-W16-0001'), [w, g, x, lostBus]);
+    state.routes = null;
+    state.route = {900041: routeOf(w), 900043: routeOf(g), 900044: routeOf(x)};
+    const page = await open({setup, allow: /\/api\/route\//});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(POLL_SPAN_MS);
+    setSnapshot(RUN('run-W16-0001'), [{...w, prediction_s: 200}, g, x, lostBus]);
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    const rowOf = id => page.locator(`#vehicles .vehicle[data-id="${id}"]`);
+    // F-5 / hold: frames stopped, Backend status unavailable, the held pair with «updating».
+    const heldW = {...w, prediction_s: 200, status: 'unavailable', reason: 'no_fresh_frames', prediction_state: 'updating', prediction_updating: true, connected: false};
+    setSnapshot(RUN('run-W16-0001'), [heldW, g, x, lostBus]);
+    await page.waitForTimeout(3 * POLL_SPAN_MS);
+    const rowW = await rowOf('900041').textContent();
+    check(await rowOf('900041').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется') && !/устарел|нет прогноза|пропал/i.test(rowW)
+      && await page.locator('#events-list .event[data-group=needs]').count() === 1 && !(await page.locator('#events-list').textContent()).includes('нет данных'),
+    `W16 hold (F-5): status unavailable + «updating» keeps level and value, quiet «обновляется», the event stays open, no «устарел» (${rowW.replace(/\s+/g, ' ')})`);
+    // Warming: green, «по графику», «прогноз готовится», not counted as «Без прогноза», never dimmed.
+    const rowG = await rowOf('900043').textContent();
+    check(await rowOf('900043').getAttribute('data-level') === 'normal' && rowG.includes('по графику') && rowG.includes('Прогноз готовится')
+      && (await page.locator('[data-filter=nodata] b').textContent()) === '2'
+      && (await page.locator('.vehicle-label[data-id="900043"]').textContent()) === '900043 · по графику'
+      && await page.locator('.vehicle-label[data-id="900043"]').evaluate(l => !l.classList.contains('is-dimmed') && l.dataset.level === 'normal'),
+    `W16 warming: green row «по графику · Прогноз готовится», map label «по графику», not in «Без прогноза» (${rowG.replace(/\s+/g, ' ')})`);
+    check((await rowOf('900045').textContent()).includes('ТС пропало (нет данных > 5 мин)') && await rowOf('900045').getAttribute('data-level') === 'nodata',
+      'W16 lost: Backend `lost` / vehicle_lost reads «ТС пропало (нет данных > 5 мин)»');
+    await rowOf('900043').click();
+    await page.waitForTimeout(500);
+    const headG = await page.locator('#card .headline').innerText();
+    check(await page.locator('#card').getAttribute('data-level') === 'normal' && headG.includes('По графику · прогноз готовится')
+      && (await page.locator('#card .level-chip').textContent()) === 'По графику' && !/нет прогноза|устарел|NaN|undefined/i.test(headG),
+    `W16 warming card: «По графику · прогноз готовится», chip «По графику» (${headG.replace(/\s+/g, ' ')})`);
+    await shot(page, 'regression-w16-hold-warming-1920.png');
+    // F-6: the run completed — the SLA of the open event stops and says «прогон завершён».
+    setSnapshot(RUN('run-W16-0001', {state: 'completed', progress: 1, dataset_time: '2026-01-06T08:30:00'}), [heldW, g, x, lostBus]);
+    await page.waitForFunction(() => document.getElementById('run').dataset.state === 'completed', null, {timeout: 8000});
+    await page.locator('#tab-events').click();
+    await page.waitForTimeout(400);
+    const slaText = () => page.locator('#events-list .event .sla').allInnerTexts();
+    const first = await slaText();
+    await page.waitForTimeout(2200);
+    const second = await slaText();
+    check(first.length === 1 && first[0] === 'прогон завершён' && second.join() === first.join() && await page.locator('#events-list .sla-bar').count() === 0,
+      `W16 run completed (F-6): the reaction SLA stops, badge «прогон завершён», no countdown bar (${first.join()} → ${second.join()})`);
+    await page.close();
+  }
+
   // v2 reaction queue: «События» tab with groups, attention bar with SLA, toast «Новое событие»,
   // take / snooze / close with a reason, reaction steps, hotkeys, bulk actions, GPS mark, dimming.
   {
@@ -1040,7 +1097,7 @@ try {
     await page.waitForTimeout(300);
     check(await page.locator('#events-list .event[data-group=work], #events-list .event[data-group=snoozed]').count() === 0 && await page.locator('#events-bulk').isHidden(),
       'bulk close: both events closed, the bar disappears');
-    // GPS mark: a quiet suggestion from Backend, the dispatcher marks, the vehicle turns grey «?».
+    // GPS mark: a quiet suggestion from Backend, the dispatcher marks, the vehicle turns violet «×» (W16).
     await page.locator('#tab-vehicles').click();
     await page.locator('#vehicles .vehicle[data-id="900035"]').click();
     await page.waitForTimeout(500);
@@ -1048,19 +1105,45 @@ try {
     await page.locator('#gps-mark').click();
     await page.waitForTimeout(POLL_SPAN_MS);
     check((await page.locator('#vehicles .vehicle[data-id="900035"]').textContent()).includes('GPS неисправен — отмечено диспетчером')
-      && (await page.locator('.vehicle-label[data-id="900035"]').getAttribute('data-symbol'))?.includes('|?|')
+      && (await page.locator('.vehicle-label[data-id="900035"]').getAttribute('data-symbol'))?.includes('|×|')
       && await page.locator('#vehicles .vehicle[data-id="900035"]').getAttribute('data-level') === 'nodata' && (await page.locator('#gps-mark').textContent()) === 'Снять отметку',
-    'GPS mark: list says «GPS неисправен — отмечено диспетчером», grey «?» icon, no forecast level');
+    'GPS mark: list says «GPS неисправен — отмечено диспетчером», violet «×» icon, no forecast level');
+    const markedLook = await page.evaluate(() => ({
+      row: document.querySelector('#vehicles .vehicle[data-id="900035"]')?.getAttribute('data-gps-marked'),
+      chip: document.querySelector('#card .level-chip')?.textContent,
+      label: document.querySelector('.vehicle-label[data-id="900035"]')?.classList.contains('is-gps-marked'),
+      greyRows: [...document.querySelectorAll('#vehicles .vehicle[data-level=nodata]:not([data-gps-marked])')].map(r => getComputedStyle(r).borderLeftColor),
+      markedRow: getComputedStyle(document.querySelector('#vehicles .vehicle[data-id="900035"]')).borderLeftColor,
+      legend: document.querySelector('#legend-vehicles')?.textContent.includes('GPS неисправен (отмечено)')
+        && Boolean(document.querySelector('#legend-vehicles img[data-symbol=marked]')?.src.startsWith('data:image')),
+    }));
+    check(markedLook.row === 'true' && markedLook.chip === 'GPS неисправен' && markedLook.label && markedLook.legend
+      && markedLook.greyRows.length > 0 && !markedLook.greyRows.includes(markedLook.markedRow),
+    `GPS mark (W16): violet row, chip «GPS неисправен», violet label and legend row «GPS неисправен (отмечено)», unlike grey no-forecast rows (${JSON.stringify(markedLook)})`);
+    // A marked vehicle is the dispatcher's decision: «Приглушить…» never dims it, unlike a grey one.
+    await page.locator('#card-close').click();
+    await page.waitForTimeout(300);
+    check(await page.locator('.vehicle-label[data-id="900035"]').evaluate(l => !l.classList.contains('is-dimmed') && l.classList.contains('is-gps-marked'))
+      && await page.locator('.vehicle-label[data-id="900034"]').evaluate(l => l.classList.contains('is-dimmed')),
+    'GPS mark (W16): the marked vehicle stays visible with the dimming on; a grey no-forecast one is dimmed');
+    await page.locator('#vehicles .vehicle[data-id="900035"]').click();
+    await page.waitForTimeout(300);
     await page.locator('#gps-mark').click();
     await page.waitForTimeout(POLL_SPAN_MS);
-    check(await page.locator('#vehicles .vehicle[data-id="900035"]').getAttribute('data-level') === 'normal', 'GPS unmark: the vehicle is back to its forecast');
-    // «Приглушить без прогноза»: labels of vehicles without a forecast hidden; off shows them.
+    check(await page.locator('#vehicles .vehicle[data-id="900035"]').getAttribute('data-level') === 'normal'
+      && await page.locator('#vehicles .vehicle[data-id="900035"]').getAttribute('data-gps-marked') === null
+      && !(await page.locator('.vehicle-label[data-id="900035"]').evaluate(l => l.classList.contains('is-gps-marked'))),
+    'GPS unmark: the vehicle is back to its forecast, no violet mark left');
+    // «Приглушить ТС без наряда и без данных»: labels of vehicles without a forecast hidden; off shows them.
     await page.locator('#card-close').click();
     const dimmedLabel = () => page.locator('.vehicle-label[data-id="900034"]').evaluate(l => l.classList.contains('is-dimmed'));
     const dimOn = await dimmedLabel();
     await page.locator('#dim-nodata').click();
     await page.waitForTimeout(300);
-    check(dimOn && !(await dimmedLabel()) && await page.locator('#dim-nodata').getAttribute('aria-pressed') === 'false', '«Приглушить без прогноза»: on hides grey labels, off shows them');
+    check(dimOn && !(await dimmedLabel()) && await page.locator('#dim-nodata').getAttribute('aria-pressed') === 'false', '«Приглушить ТС без наряда и без данных»: on hides grey labels, off shows them');
+    const dimTool = await page.locator('#dim-nodata').evaluate(b => ({text: b.textContent.trim(), title: b.title}));
+    check(dimTool.text === 'Приглушить ТС без наряда и без данных' && ['без наряда', 'вне окна наряда', 'сбоем GPS', 'Не приглушаются', 'GPS неисправен'].every(w => dimTool.title.includes(w)),
+      `W16: the dimming toggle says whom it dims, the tooltip lists them and the exceptions («${dimTool.text}»)`);
     check((await page.locator('#hotkeys').textContent()).includes('J / K — следующее / предыдущее событие'), 'hotkeys hint shown');
     // The queue of this run survives a reload of the page (sessionStorage).
     await page.reload({waitUntil: 'domcontentloaded'});
