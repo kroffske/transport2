@@ -876,6 +876,7 @@ function forecastBlock(v, rows) {
     el('summary', {'aria-label': 'Что такое цель прогноза', title: 'Что такое цель прогноза'}, 'ⓘ'), el('p', {}, f.help));
   const box = el('section', {className: 'forecast', id: 'forecast', 'data-key': 'forecast', 'aria-label': 'Прогноз опоздания на целевой остановке',
     dataset: {state: f.state, tone: f.tone}}, el('div', {className: 'forecast-head'}, el('b', {}, f.head), help));
+  if (f.horizon) box.append(el('p', {className: 'forecast-horizon', id: 'forecast-horizon'}, f.horizon));
   if (f.rows.length) {
     box.append(el('dl', {className: 'forecast-rows'}, ...f.rows.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)])));
   }
