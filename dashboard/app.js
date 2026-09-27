@@ -149,7 +149,7 @@ let framedTarget = null; // the target the camera last framed; a new target refr
 let routesFeed = {status: 'idle', data: null, at: 0, inFlight: false};
 const ROUTES_MS = 10000;
 // «Мои маршруты» (route-scope.js): the operator's routes. Kept in localStorage, so it survives reloads and
-// new runs; the map, lists, queue views, attention bar and toasts show only vehicles of these routes.
+// new runs; the map, lists, queue views and toasts show only vehicles of these routes.
 const SETTINGS_KEY = 'dispatcher-settings';
 let settings = (() => { try { return parseSettings(localStorage.getItem(SETTINGS_KEY)) ?? defaultSettings(); } catch { return defaultSettings(); } })();
 const routeByVehicle = new Map(); // tr_id → route key, from every snapshot row seen (events outlive rows)
@@ -680,7 +680,7 @@ function choose(id, focus) {
   const incident = selected ? incidentForVehicle(store(), selected) : null;
   if (incident) setQueue(Q.markOpened(queue, incident.id));
   if (changed) { clearRoute(); if (selected) loadRoute(); follow = Boolean(selected); cardMenu = null; }
-  renderEvents(); renderAttention(); renderToasts();
+  renderEvents(); renderToasts();
   renderList();
   renderCard();
   renderMapObjects();
@@ -695,7 +695,6 @@ function closeCard() {
   cardOpen = false;
   cardMenu = null;
   renderCard();
-  renderAttention(); // «Открыто: ТС …» only while the card is open
   layoutLabels();
   renderEdgeArrow();
 }
@@ -1276,42 +1275,28 @@ function contactBlock(incident, vehicle) {
   return box;
 }
 
-// One line over the map (L-5, H-2, Q1): Backend or run state when it matters, else a summary of
-// the reaction queue; the queue stays the only owner of the events and their actions.
-function renderAttention() {
-  const box = $('attention');
-  if (!feed?.snapshot || !snapshotRows().length) { box.hidden = true; return; }
-  box.hidden = false;
-  box.dataset.kind = 'status';
-  if (!isFresh()) {
-    box.dataset.level = 'nodata';
-    patchText(box, 'Backend недоступен: показан последний снимок, предупреждения не оцениваются.');
-    return;
-  }
+// One line over the map (L-5, H-2): Backend or run state only when it matters, else hidden. Events
+// are announced by the toasts and listed in the queue, never summarised here.
+function systemStatus() {
+  if (!isFresh()) return {level: 'nodata', text: 'Backend недоступен: показан последний снимок, предупреждения не оцениваются.'};
   const run = currentRun();
   if (runOver(run)) {
     const minutesShown = run.speedup ? Math.round((Date.parse(run.dataset_end) - Date.parse(run.dataset_start)) / 60000 / Number(run.speedup)) : null;
-    box.dataset.level = 'normal';
-    patchText(box, `Прогон завершён: показано окно ${planText(run.dataset_start) ?? '?'}–${planText(run.dataset_end) ?? '?'}${Number.isFinite(minutesShown) ? ` за ${minutesShown} мин` : ''}. `
-      + 'Прогнозов больше нет — это конец данных, не сбой. Новый прогон — командой перезапуска (README).');
-    return;
+    return {level: 'normal', text: `Прогон завершён: показано окно ${planText(run.dataset_start) ?? '?'}–${planText(run.dataset_end) ?? '?'}${Number.isFinite(minutesShown) ? ` за ${minutesShown} мин` : ''}. `
+      + 'Прогнозов больше нет — это конец данных, не сбой. Новый прогон — командой перезапуска (README).'};
   }
   if (run?.state === 'failed' || run?.state === 'stalled') {
-    box.dataset.level = 'severe';
-    patchText(box, `Прогон ${runStateText(run)}. Прогнозы не обновляются — перезапустите прогон (README).`);
-    return;
+    return {level: 'severe', text: `Прогон ${runStateText(run)}. Прогнозы не обновляются — перезапустите прогон (README).`};
   }
-  // Q1: a summary of the queue, never a copy of its actions — how many need a reaction and the
-  // nearest deadline, or which event is open and how many more wait; «Следующее J» walks them.
-  const summary = Q.attentionSummary(queue, slaWall(), cardOpen ? currentEventId() : null, shown);
-  box.dataset.level = summary.level;
-  box.dataset.kind = summary.kind;
-  if (summary.kind === 'calm') { patchText(box, summary.detail ? `${summary.title} · ${summary.detail}` : summary.title); return; }
-  const text = el('div', {className: 'attention-text', 'data-key': 'text'},
-    el('span', {className: 'attention-title'}, summary.title), ' · ',
-    el('span', {className: 'attention-detail', title: summary.kind === 'needs' ? `Срок реакции — ${Q.CLOCK_TEXT.wall}` : null}, summary.detail));
-  patchChildren(box, [text, summary.next ? el('button', {type: 'button', className: 'primary', 'data-key': 'next', id: 'attention-next',
-    title: 'Открыть следующее событие, требующее реакции', dataset: {action: 'next-event'}}, 'Следующее', el('kbd', {}, 'J')) : null].filter(Boolean));
+  return null;
+}
+function renderAttention() {
+  const box = $('attention');
+  const status = feed?.snapshot && snapshotRows().length ? systemStatus() : null;
+  box.hidden = !status;
+  if (!status) return;
+  box.dataset.level = status.level;
+  patchText(box, status.text);
 }
 
 // ---- Reaction queue (v2), toasts --------------------------------------------------------------
@@ -1504,7 +1489,7 @@ function queueAction(fn) {
   queue = next;
   saveQueue();
   cardMenu = null; bulkMenu = null;
-  renderCard(); renderEvents(); renderAttention(); renderToasts(); renderList();
+  renderCard(); renderEvents(); renderToasts(); renderList();
   return true;
 }
 // Taking an event opens its «Шаги реакции» (C1), even if they were closed before.
@@ -1784,7 +1769,6 @@ function onPanelClick(event) {
   else if (action === 'stops-after') { afterOpen = !afterOpen; renderCard(); }
   else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
   else if (action === 'tab') setTab(control.dataset.tab);
-  else if (action === 'next-event') goNext(+1);
   else if (action === 'queue-filter') setQueueFilter(control.dataset.queueFilter);
   else if (action === 'search-pick') pickSearch(id);
   else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, slaWall(), shown));
@@ -1861,7 +1845,7 @@ $('route-settings').addEventListener('toggle', () => { if ($('route-settings').o
 $('diagnostics').addEventListener('toggle', () => { if ($('diagnostics').open) $('route-settings').open = false; });
 // The header «События» opens the queue tab (v2: the queue replaces the dropdown).
 $('events-toggle').addEventListener('click', () => { $('diagnostics').open = false; $('route-settings').open = false; setTab('events'); });
-// J / K and «Следующее J» (Q6): over the displayed queue; after an action, the next event that needs a reaction.
+// J / K (Q6): over the displayed queue; after an action, the next event that needs a reaction.
 function goNext(step) {
   const next = Q.nextQueueEvent(queue, currentEventId(), step, slaWall(), {pin: queuePin, filter: queueFilter}, shown);
   if (!next || !findIncident(store(), next)) return false;

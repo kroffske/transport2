@@ -232,22 +232,8 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .attention { position: absolute; z-index: 3; top: 14px; left: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; max-width: calc(100% - 540px); padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--nodata); border-radius: 8px; box-shadow: 0 6px 18px rgba(10, 30, 45, .14); font-size: 14px; }
 .attention[hidden] { display: none; }
 .attention[data-level=severe] { border-left-color: var(--severe); }
-.attention[data-level=warning] { border-left-color: var(--warning); }
 .attention[data-level=normal] { border-left-color: var(--normal); }
-.attention-title { font-weight: 800; text-transform: uppercase; font-size: 12px; letter-spacing: .04em; color: var(--severe); }
-.attention[data-level=warning] .attention-title { color: #9a5c00; }
-.attention button, .card-actions button, .search-row button { border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; padding: 6px 12px; }
-.attention button { white-space: nowrap; }
-.attention button.primary { background: var(--navy); color: #fff; border-color: var(--navy); font-weight: 600; }
-.attention-text { display: grid; gap: 1px; min-width: 0; }
-.attention-text > span:last-child { font-weight: 600; white-space: nowrap; }
-/* Q1: a one-line summary — «Требуют реакции: 2 · ближайший срок 0:37 · [Следующее J]». */
-.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; font-weight: 600; }
-/* A narrow bar (card panel open at 1366) wraps between words onto a second line, never mid-word or clipped. */
-.attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { white-space: nowrap; }
-.attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { font-size: 14px; text-transform: none; letter-spacing: 0; }
-.attention[data-kind=open] .attention-title { color: var(--ink); }
-.attention-detail { font-variant-numeric: tabular-nums; }
+.card-actions button, .search-row button { border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; padding: 6px 12px; }
 
 kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 0 4px; border: 1px solid #b7c1c8; border-radius: 3px; color: var(--muted); }
 .primary kbd { border-color: rgba(255, 255, 255, .45); color: #fff; }
@@ -291,7 +277,7 @@ details.steps:not([open]), details.incident:not([open]) { padding-top: 7px; padd
 .gps-marked { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: #e7ebee; color: var(--nodata); font-size: 13px; font-weight: 600; }
 
 .map-tools { position: absolute; z-index: 3; top: 14px; right: 14px; display: flex; gap: 8px; }
-/* Below 1700 px the tools stack on the right so the attention bar keeps its buttons clear of them. */
+/* Below 1700 px the tools stack on the right so the attention bar keeps clear of them. */
 @media (max-width: 1699px) { .map-tools { flex-direction: column; align-items: flex-end; } .attention { max-width: calc(100% - 280px); } }
 .overview[hidden] { display: none; }
 .overview, .map-tool { padding: 8px 14px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; font-weight: 600; box-shadow: 0 4px 12px rgba(10, 30, 45, .12); white-space: nowrap; }
