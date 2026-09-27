@@ -1,7 +1,59 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T14:12:38.835Z",
+  "generated_at": "2026-09-27T14:30:51.099Z",
   "tasks": [
+    {
+      "id": "T-10",
+      "title": "Benchmark производительности и восстановления финальной сборки (C5)",
+      "status": "planning",
+      "type": "feature",
+      "priority": "p1",
+      "owner": "claude",
+      "created_at": "2026-09-27T14:29:39.311Z",
+      "updated_at": "2026-09-27T14:29:39.311Z",
+      "stream": "T",
+      "path": "T-10-2026-09-27-benchmark-c5",
+      "work_items_total": 4,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "Задержки и очереди на 10-мин прогоне ×5.",
+        "Timed cold start ×3.",
+        "ML outage и Backend restart.",
+        "Итог."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T14:29:39.321Z",
+      "latest_status_note": null,
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-11",
+      "title": "Pitch: история, deck, демо-сценарий, запись, Q&A, проверка за 5 секунд",
+      "status": "planning",
+      "type": "feature",
+      "priority": "p1",
+      "owner": "claude",
+      "created_at": "2026-09-27T14:29:39.455Z",
+      "updated_at": "2026-09-27T14:29:39.455Z",
+      "stream": "T",
+      "path": "T-11-2026-09-27-pitch-deck-q-a-5",
+      "work_items_total": 6,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "История и таблица чисел (сейчас).",
+        "Deck 8–10 слайдов.",
+        "Демо-сценарий и резервная запись (после T-7 W10).",
+        "Q&A и mock-review.",
+        "Проверка «за 5 секунд» (после T-7 W10).",
+        "Репетиции (люди)."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T14:29:39.464Z",
+      "latest_status_note": null,
+      "parent_id": "",
+      "subtasks": []
+    },
     {
       "id": "T-5",
       "title": "Оптимизировать ML для score выше 0.70",
@@ -101,6 +153,59 @@
         "to": null,
         "source": "status_note"
       },
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-8",
+      "title": "Пакет сдачи формы и долговечные доказательства C1/C3",
+      "status": "planning",
+      "type": "feature",
+      "priority": "p0",
+      "owner": "claude",
+      "created_at": "2026-09-27T14:29:03.176Z",
+      "updated_at": "2026-09-27T14:29:03.176Z",
+      "stream": "T",
+      "path": "T-8-2026-09-27-c1-c3",
+      "work_items_total": 6,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "C1 durable proof (можно сейчас).",
+        "Manifest внешних артефактов и способ передачи (можно сейчас; способ — после Q3).",
+        "Актуальный PyDoc (после финального commit T-7).",
+        "Текст формы (черновик сейчас, финал после T-7 W10 и T-10).",
+        "Проверка чистого clone (после T-10 и W10 T-7).",
+        "Передача правок."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T14:29:03.197Z",
+      "latest_status_note": null,
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-9",
+      "title": "Раннее предупреждение: onset → первый алерт → lead time (C2)",
+      "status": "planning",
+      "type": "research",
+      "priority": "p1",
+      "owner": "claude",
+      "created_at": "2026-09-27T14:29:39.166Z",
+      "updated_at": "2026-09-27T14:29:39.166Z",
+      "stream": "T",
+      "path": "T-9-2026-09-27-onset-lead-time-c2",
+      "work_items_total": 5,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "Spike источника окна (≤1 ч).",
+        "Разметка инцидентов по D1 с тестом.",
+        "Сбор алертов на потоке и сопоставление по D2.",
+        "Отчёт и итог.",
+        "Независимая проверка claim."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T14:29:39.177Z",
+      "latest_status_note": null,
       "parent_id": "",
       "subtasks": []
     }
