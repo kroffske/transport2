@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from scripts.replay_ndtp import handshake
 from transport_backend.ingest import NDTPServer
 from transport_backend.ndtp import NAV, encode_frame
-from transport_backend.orchestration import MAP_BBOX, Orchestrator
+from transport_backend.orchestration import MAP_BBOX, Orchestrator, PredictionJob
 from transport_backend.run import RunConflict, RunNotFound, RunPlan, RunRegistry
 from transport_backend.schedule import Schedule
 from transport_backend.service import create_app
@@ -338,16 +338,81 @@ def test_fresh_prediction_stays_normal_updating_then_target_change_and_aging(tmp
         now[0] = DAY + timedelta(minutes=2, seconds=31)
         target = flow.snapshot()["vehicles"][0]
         _wait(lambda: len(model.requests) == 2)
-        assert target["target_stop_id"] == "v13"
-        # v13 is a new target: the v12 value is not shown for it; a job was queued at once.
-        assert target["status"] == "degraded" and target["reason"] == "prediction_pending"
-        assert target["prediction_s"] is None
+        # v13 is a new target: its job was queued at once; meanwhile the row keeps
+        # the whole v12 pair (target and its prediction), never v13 with the v12 value.
         assert model.requests[1]["point"]["target_stop_id"] == "v13"
+        assert target["planned_target_stop_id"] == "v13"
+        assert target["target_stop_id"] == "v12" and target["prediction_s"] == 150.0
+        assert target["target_time_begin"] == "2026-01-06T00:12:00"
+        assert (target["target_lon"], target["target_lat"]) == (37.512, 55.7)
+        assert target["prediction_state"] == "updating"
+        assert target["prediction_held_from_target"] == "v12"
+        assert target["status"] == "degraded" and target["reason"] == "prediction_held_previous_target"
+        assert target["prediction_updating"] is True and target["alert"] is None
+        assert target["last_success_at"] == first["last_success_at"]
+        # Holding is quiet: an unchanged held row keeps its revision.
+        assert flow.snapshot()["vehicles"][0]["revision"] == target["revision"]
     finally:
         model.release.set()
+    # The answer for v13 replaces the held pair.
     current = _wait(lambda: (lambda r: r if r["status"] == "normal" else None)(
         flow.snapshot()["vehicles"][0]))
     assert current["target_stop_id"] == "v13" and current["prediction_s"] == 150.0
+    assert current["prediction_state"] == "fresh" and current["prediction_held_from_target"] is None
+    assert current["planned_target_stop_id"] == "v13"
+    assert current["last_success_at"] == "2026-01-06T00:02:31"
+
+
+def test_held_pair_expires_after_prediction_hold(tmp_path, flows):
+    path = tmp_path / "plan.csv"
+    _simple_plan(path)
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall", stale_after_s=600)
+    state.connected(1, "s")
+    now = [DAY + timedelta(minutes=1, seconds=30)]
+    run = RunRegistry("dataset_wall", state.unit_mapping,
+                      mapping=ClockMapping(1_700_000_000, DAY), clock=lambda: now[0])
+    server = NDTPServer(state, run=run)
+    model = _Model(gate_after=1)
+    flow = flows(state, server, Schedule(read_plan(path)), model,
+                 predict_interval_s=60, prediction_hold_s=20)
+    try:
+        assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.501))
+        first = _wait(lambda: (lambda r: r if r["status"] == "normal" else None)(
+            flow.snapshot()["vehicles"][0]))
+        assert first["prediction_state"] == "fresh" and first["target_stop_id"] == "v12"
+        now[0] = DAY + timedelta(minutes=2, seconds=31)  # target v13, its answer is gated
+        held = flow.snapshot()["vehicles"][0]
+        assert held["prediction_state"] == "updating" and held["target_stop_id"] == "v12"
+        now[0] = DAY + timedelta(minutes=2, seconds=51)  # 20 s of data: still within the hold
+        assert flow.snapshot()["vehicles"][0]["prediction_state"] == "updating"
+        now[0] = DAY + timedelta(minutes=2, seconds=52)  # past the hold
+        gone = flow.snapshot()["vehicles"][0]
+        assert gone["prediction_state"] == "none" and gone["prediction_held_from_target"] is None
+        assert gone["target_stop_id"] == gone["planned_target_stop_id"] == "v13"
+        assert gone["prediction_s"] is None and gone["last_success_at"] is None
+        assert gone["status"] == "degraded" and gone["reason"] == "prediction_pending"
+        assert gone["revision"] > held["revision"]
+    finally:
+        model.release.set()
+
+
+def test_new_target_job_goes_ahead_of_other_vehicles(tmp_path):
+    path = tmp_path / "plan.csv"
+    _simple_plan(path)
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall")
+    run = RunRegistry("dataset_wall", state.unit_mapping,
+                      mapping=ClockMapping(1_700_000_000, DAY), clock=lambda: DAY)
+    flow = Orchestrator(state, NDTPServer(state, run=run), Schedule(read_plan(path)), _Model())
+
+    def job(tr_id: str) -> PredictionJob:
+        return PredictionJob(1, tr_id, DAY, "t", "f", 1, None, 0.0, {})
+
+    with flow._lock:
+        flow._queue(job("a"))
+        flow._queue(job("b"))
+        flow._queue(job("c"), first=True)
+        flow._queue(job("b"), first=True)  # coalesced and moved ahead
+    assert list(flow._jobs) == ["b", "c", "a"]
 
 
 def test_prediction_older_than_fresh_window_degrades_as_aging(tmp_path, flows):

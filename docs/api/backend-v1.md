@@ -86,12 +86,15 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "target_time_begin": "2026-01-06T03:50:00",
       "target_lon": 37.42318933,
       "target_lat": 55.7338932,
+      "planned_target_stop_id": "53700172828",
       "cur_dev_s": 95.0,
       "cur_dev_source": "computed_stop",
       "prediction_s": 120.0,
       "predicted_arrival": "2026-01-06T03:52:00",
       "model_version": "canonical_rmse_d8",
       "artifact_sha256": "dc33437108c3e036089450c9b98771dacd014246fbb91d0df2a89d0c8e247122",
+      "prediction_state": "fresh",
+      "prediction_held_from_target": null,
       "status": "normal",
       "reason": null,
       "prediction_pending": false,
@@ -120,7 +123,17 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
 
 `vehicles` — только ТС текущего прогона (`units` регистрации); в `dataset_wall`/`utc` — все ТС реестра. `target_lon/target_lat` — координаты плановой цели (`null` без цели или без валидной координаты). `clock_time=null` до регистрации прогона.
 
-**Свежесть прогноза в живом потоке.** Успешный прогноз относится к цели, для которой его посчитали; при смене цели прежнее значение не выдаётся (`prediction_s=null`), новый прогноз ставится сразу, и пока он в работе строка — `degraded` с `reason="prediction_pending"`. Если последний успех относится к текущей цели, его `quality="normal"` и возраст во времени данных `≤ PREDICTION_FRESH_S = 1.5 × PREDICT_INTERVAL_S` (90 с при 60 с), строка остаётся `status="normal"` даже при более новых кадрах; тогда `prediction_updating=true` (есть вход новее прогноза или задача в работе). Возраст больше порога → `degraded`, `prediction_aging`. Прежняя причина `prediction_behind_input` больше не выдаётся: её заменил флаг `prediction_updating`. Alert создаётся только прогнозом, посчитанным на полном текущем контексте (`normal` и `prediction_updating=false`).
+**Свежесть прогноза в живом потоке.** Успешный прогноз относится к цели, для которой его посчитали. Если последний успех относится к текущей цели, его `quality="normal"` и возраст во времени данных `≤ PREDICTION_FRESH_S = 1.5 × PREDICT_INTERVAL_S` (90 с при 60 с), строка остаётся `status="normal"` даже при более новых кадрах; тогда `prediction_updating=true` (есть вход новее прогноза или задача в работе). Возраст больше порога → `degraded`, `prediction_aging`. Прежняя причина `prediction_behind_input` больше не выдаётся: её заменил флаг `prediction_updating`. Alert создаётся только прогнозом, посчитанным на полном текущем контексте (`normal` и `prediction_updating=false`).
+
+**Смена цели: удержание прошлой пары (W14).** Когда цель плана меняется, задание для новой цели ставится в очередь сразу (не ждёт `PREDICT_INTERVAL_S`) и первым среди других ТС. Пока его ответа нет, но не дольше `PREDICTION_HOLD_S=180` (env, секунды времени данных, отсчёт от первой строки с удержанием этого успеха; `0` выключает), строка показывает прошлый прогноз **целой парой**: `target_stop_id`, `target_time_begin`, `target_lon/lat` — прошлой цели, `prediction_s`, `predicted_arrival`, `model_version`, `artifact_sha256`, `last_success_at`, `prediction_*` — её прогноза. Новая цель с прошлым значением никогда не смешивается. Поля строки:
+
+| поле | значение |
+|---|---|
+| `prediction_state` | `"fresh"` — показан прогноз для текущей цели плана (его возраст и новизна — в `status`/`reason`/`prediction_updating`); `"updating"` — показана удержанная пара прошлой цели, прогноз для новой считается; `"none"` — прогноза нет (`prediction_s=null`) |
+| `prediction_held_from_target` | при `"updating"` — `stop_id` удержанной цели (равен `target_stop_id`), иначе `null` |
+| `planned_target_stop_id` | текущая цель плана всегда; отличается от `target_stop_id` только при удержании; `null`, если цели нет |
+
+При удержании: `status="degraded"`, `reason="prediction_held_previous_target"` (или причина деградации GPS/ошибки ML, если она есть), `prediction_updating=true`, `alert=null`. Ответ для новой цели заменяет пару (`"fresh"`). Если за `PREDICTION_HOLD_S` ответа нет — `"none"`, `target_stop_id` = новая цель, `prediction_s=null`, `reason="prediction_pending"` (задание в работе) или `"prediction_waiting_new_telemetry"`. Без цели плана (`no_target_in_horizon`, конец плана) ничего не удерживается. Удержание меняет `revision` только на переходах (начало, конец, замена), не на каждом тике. `/v1/route/{tr_id}` берёт цель из той же строки: при удержании роль `target` — у прошлой цели; там же отдаются `prediction_state`, `prediction_held_from_target`, `planned_target_stop_id`.
 
 Отсутствующие значения — JSON `null`, не ноль. `target_stop_id` — ID планового прибытия (`tt_action_item_id`). Долгота/широта — WGS84 degrees, с флагом валидности. `revision` меняется при принятом новом состоянии или изменении статуса; consumer использует его для live readback. `status` сообщает `normal`, `degraded` или `unavailable`, а `reason` объясняет отсутствие свежего прогноза. При сбое ML либо NDTP последнее число может оставаться только вместе с `degraded`, возрастом и `last_success_at`; его нельзя выдавать за свежий прогноз.
 
@@ -161,6 +174,8 @@ Same-event correction, отзывающая GPS evidence первого набл
  "stops_dropped": 0, "stops_truncated": 0,
  "target_stop_id": "53700641292", "target_time_begin": "2026-01-06T06:45:00",
  "cur_dev_s": -40.0, "prediction_s": 30.46, "prediction_updating": true,
+ "prediction_state": "fresh", "prediction_held_from_target": null,
+ "planned_target_stop_id": "53700641292",
  "model_version": "canonical_rmse_d8", "artifact_sha256": "dc33…7122",
  "route_line": {"line": [[37.41266478, 55.73372104], "..."],
                 "passed": [[37.41266478, 55.73372104], [37.4162, 55.7336]],

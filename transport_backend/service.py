@@ -155,7 +155,8 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
                                     tick_interval_s=(float(os.environ.get("PREDICT_TICK_S", "1"))
                                                      if domain == "simulation" else None),
                                     off_route_m=float(os.environ.get("OFF_ROUTE_M", "400")),
-                                    off_route_clear_m=float(os.environ.get("OFF_ROUTE_CLEAR_M", "250")))
+                                    off_route_clear_m=float(os.environ.get("OFF_ROUTE_CLEAR_M", "250")),
+                                    prediction_hold_s=float(os.environ.get("PREDICTION_HOLD_S", "180")))
         api.state.backend = Runtime(state, server, orchestrator, replay_clock, run)
         orchestrator.start()
         try:

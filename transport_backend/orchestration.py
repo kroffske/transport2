@@ -124,13 +124,16 @@ class Orchestrator:
     A success for the current target stays ``normal`` while its dataset age is
     at most ``fresh_s`` (1.5 x ``predict_interval_s``); newer input then only
     sets ``prediction_updating``.
+    When the target changes, a job for the new target jumps the queue; until
+    it answers, for at most ``prediction_hold_s`` of dataset time, the row
+    keeps the last success as a whole pair (its target and its prediction).
     """
 
     def __init__(self, state: TelemetryState, server: NDTPServer, schedule: Schedule,
                  model: ModelClient, *, predict_interval_s: float = 60.0,
                  alert_cooldown_s: float = 300.0, queue_limit: int = 32,
                  tick_interval_s: float | None = None, off_route_m: float = 400.0,
-                 off_route_clear_m: float = 250.0):
+                 off_route_clear_m: float = 250.0, prediction_hold_s: float = 180.0):
         if (not math.isfinite(predict_interval_s) or not math.isfinite(alert_cooldown_s)
                 or predict_interval_s <= 0 or alert_cooldown_s <= 0 or queue_limit < 1):
             raise ValueError("prediction interval/cooldown must be finite and positive; queue_limit >= 1")
@@ -138,10 +141,13 @@ class Orchestrator:
             raise ValueError("tick_interval_s must be finite and positive")
         if not (math.isfinite(off_route_m) and 0 < off_route_clear_m < off_route_m):
             raise ValueError("off-route thresholds need 0 < clear < set")
+        if not (math.isfinite(prediction_hold_s) and prediction_hold_s >= 0):
+            raise ValueError("prediction_hold_s must be finite and >= 0")
         self.state, self.server, self.schedule = state, server, schedule
         self.run, self.model = server.run, model
         self.predict_interval_s = predict_interval_s
         self.fresh_s = 1.5 * predict_interval_s
+        self.prediction_hold_s = prediction_hold_s
         self.tick_interval_s = tick_interval_s
         self.off_route_m, self.off_route_clear_m = off_route_m, off_route_clear_m
         self.alert_cooldown_s = alert_cooldown_s
@@ -168,6 +174,8 @@ class Orchestrator:
         self._rows: dict[str, dict] = {}
         self._row_times: dict[str, datetime] = {}
         self._off_route: dict[str, bool] = {}  # hysteresis state per tr_id
+        # (held success key, dataset time the hold started) per tr_id.
+        self._hold_started: dict[str, tuple[tuple[str, str], datetime]] = {}
         self._revision = 0
         self._seen_accepted = 0
 
@@ -347,6 +355,9 @@ class Orchestrator:
                     "target_time_begin": row["target_time_begin"],
                     "cur_dev_s": row["cur_dev_s"], "prediction_s": row["prediction_s"],
                     "prediction_updating": row["prediction_updating"],
+                    "prediction_state": row["prediction_state"],
+                    "prediction_held_from_target": row["prediction_held_from_target"],
+                    "planned_target_stop_id": row["planned_target_stop_id"],
                     "model_version": row["model_version"],
                     "artifact_sha256": row["artifact_sha256"],
                     "route_line": self._route_line(tr_id, row, at)}
@@ -467,10 +478,14 @@ class Orchestrator:
                            "telemetry": [{key: row[key] for key in TRAFFIC_COLUMNS}
                                          for row in traffic],
                            "schedule_plan": self.schedule.ml_rows(tr_id)}
+                # A new target is answered first: its row holds the old pair meanwhile.
                 self._queue(PredictionJob(unit_id, tr_id, now, target_id,
-                                          frame_id, context_revision, context, float(cur_dev), request))
+                                          frame_id, context_revision, context, float(cur_dev), request),
+                            first=self._last_attempt_target.get(tr_id) != target_id)
         success = self._last_success.get(tr_id)
+        held = None
         if success is not None and success["target_stop_id"] != target_id:
+            held = self._held_pair(tr_id, success, target_id, now)
             success = None
         pending = (tr_id in self._jobs or self._active is not None and self._active.tr_id == tr_id)
         failure = self._last_failure.get(tr_id)
@@ -489,19 +504,27 @@ class Orchestrator:
         elif cur_dev is None:
             reason = "no_confident_observed_stop"
         elif state["degraded"]:
-            status = "degraded" if success else "unavailable"
+            status = "degraded" if success or held else "unavailable"
             reason = str(state["reason"])
         elif failure_reason is not None:
-            status = "degraded" if success else "unavailable"
+            status = "degraded" if success or held else "unavailable"
             reason = failure_reason
+        elif held is not None:
+            status, reason = "degraded", "prediction_held_previous_target"
         elif success is None:
-            # A changed target never shows the previous target's value.
             status, reason = (("degraded", "prediction_pending") if pending
                               else ("unavailable", "prediction_waiting_new_telemetry"))
         elif age_s > self.fresh_s or success["quality"] != "normal":
             status, reason = "degraded", "prediction_aging"
         else:
             status = "normal"
+        # The shown pair: the current target with its own prediction, or, while
+        # held, the previous target with its prediction. Never mixed.
+        shown, shown_target = ((held, held["target"]) if held is not None
+                               else (success, target))
+        if held is not None:
+            age_s = (now - datetime.fromisoformat(held["last_success_at"])).total_seconds()
+            updating = True
         return {"tr_id": tr_id, "unit_id": unit_id,
                 "input_frame_id": frame_id,
                 "input_context_revision": context_revision,
@@ -515,25 +538,55 @@ class Orchestrator:
                 "gps_age_s": state["gps_age_s"], "connected": state["connected"],
                 "heading": _heading(history, now),
                 **self._route_check(tr_id, state["lon"], state["lat"], now),
-                "target_stop_id": target_id,
-                "target_time_begin": target.time.isoformat() if target else None,
-                "target_lon": target.lon if target and _finite(target.lon, target.lat) else None,
-                "target_lat": target.lat if target and _finite(target.lon, target.lat) else None,
+                "target_stop_id": shown_target.stop_id if shown_target else None,
+                "target_time_begin": shown_target.time.isoformat() if shown_target else None,
+                "target_lon": (shown_target.lon if shown_target
+                               and _finite(shown_target.lon, shown_target.lat) else None),
+                "target_lat": (shown_target.lat if shown_target
+                               and _finite(shown_target.lon, shown_target.lat) else None),
+                "planned_target_stop_id": target_id,
                 "cur_dev_s": cur_dev, "cur_dev_source": "computed_stop" if cur_dev is not None else None,
-                "prediction_s": success["prediction_s"] if success else None,
-                "predicted_arrival": success["predicted_arrival"] if success else None,
-                "model_version": success["model_version"] if success else None,
-                "artifact_sha256": success["artifact_sha256"] if success else None,
+                "prediction_s": shown["prediction_s"] if shown else None,
+                "predicted_arrival": shown["predicted_arrival"] if shown else None,
+                "model_version": shown["model_version"] if shown else None,
+                "artifact_sha256": shown["artifact_sha256"] if shown else None,
+                "prediction_state": ("updating" if held is not None
+                                     else "fresh" if success is not None else "none"),
+                "prediction_held_from_target": held["target_stop_id"] if held is not None else None,
                 "status": status, "reason": reason, "prediction_pending": pending,
                 "prediction_updating": updating,
-                "last_success_at": success["last_success_at"] if success else None,
-                "prediction_input_frame_id": success["prediction_input_frame_id"] if success else None,
-                "prediction_context_revision": success["prediction_context_revision"] if success else None,
-                "prediction_published_unix_ns": success["prediction_published_unix_ns"] if success else None,
+                "last_success_at": shown["last_success_at"] if shown else None,
+                "prediction_input_frame_id": shown["prediction_input_frame_id"] if shown else None,
+                "prediction_context_revision": shown["prediction_context_revision"] if shown else None,
+                "prediction_published_unix_ns": shown["prediction_published_unix_ns"] if shown else None,
                 "prediction_age_s": max(0.0, age_s) if age_s is not None else None,
                 "alert": (self._alerts.get(tr_id)
                           if success and self._alerts.get(tr_id, {}).get("target_stop_id") == target_id
                           else None), "revision": 0}
+
+    def _held_pair(self, tr_id: str, success: dict, target_id: str | None,
+                   now: datetime) -> dict | None:
+        """The last success for another target while its hold lasts, with its plan stop.
+
+        The hold starts when the row first shows this success held and lasts
+        ``prediction_hold_s`` of dataset time. No current target means the run
+        has nothing left to predict, so nothing is held.
+        """
+        if target_id is None or self.prediction_hold_s <= 0:
+            self._hold_started.pop(tr_id, None)
+            return None
+        key = (success["target_stop_id"], success["last_success_at"])
+        started = self._hold_started.get(tr_id)
+        if started is None or started[0] != key or now < started[1]:
+            started = self._hold_started[tr_id] = (key, now)
+        if (now - started[1]).total_seconds() > self.prediction_hold_s:
+            return None
+        stop = next((stop for stop in self.schedule.by_vehicle.get(tr_id, ())
+                     if stop.stop_id == success["target_stop_id"]
+                     and stop.time.isoformat() == success.get("target_time_begin")), None)
+        if stop is None:
+            return None
+        return {**success, "target": stop}
 
     def _route_check(self, tr_id: str, lon: float | None, lat: float | None, now: datetime) -> dict:
         """Spatial check of the last valid position against the day's planned-stop line."""
@@ -552,7 +605,8 @@ class Orchestrator:
         return {"route_offset_m": int(round(offset / 10.0)) * 10 if offset is not None else None,
                 "off_route": off_route, "route_not_started": not_started}
 
-    def _queue(self, job: PredictionJob) -> None:
+    def _queue(self, job: PredictionJob, *, first: bool = False) -> None:
+        """Queue or coalesce ``job``; ``first`` puts it ahead of other vehicles."""
         if self._stopping:
             return
         if job.tr_id in self._jobs:
@@ -566,6 +620,8 @@ class Orchestrator:
             self._last_attempt_contexts[job.tr_id] = job.context
             return
         self._jobs[job.tr_id] = job
+        if first:
+            self._jobs.move_to_end(job.tr_id, last=False)
         self._last_attempt[job.tr_id] = job.at
         self._last_attempt_target[job.tr_id] = job.target_id
         self._last_attempt_context_revision[job.tr_id] = job.context_revision
@@ -612,6 +668,7 @@ class Orchestrator:
                         "predicted_arrival": response["predicted_arrival"],
                         "model_version": response["model_version"],
                         "artifact_sha256": response["artifact_sha256"],
+                        "target_time_begin": job.request["point"]["target_time_begin"],
                         "last_success_at": job.at.isoformat(), "quality": response["quality"],
                         "prediction_input_frame_id": job.frame_id,
                         "prediction_context_revision": job.context_revision,
