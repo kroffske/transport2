@@ -3,16 +3,16 @@
 <body>
 <header class="topbar">
   <div class="brand"><h1>Диспетчерская карта задержек</h1><span>Москва</span></div>
+  <div id="data-clock" class="data-clock" role="timer" aria-live="off"><small id="data-clock-prefix" class="data-clock-prefix" hidden></small><b id="data-clock-time">—</b><small id="data-clock-label">время данных</small></div>
   <div id="run" class="run" role="status" aria-live="polite" aria-label="Прогон эмулятора" data-state="unknown">
     <span id="run-source" class="run-source">Источник…</span>
     <span id="run-id" class="run-id"></span>
     <span id="run-speed" class="run-speed"></span>
-    <span id="run-clock" class="run-clock"></span>
     <span class="run-state"><i class="run-progress" aria-hidden="true"><b id="run-progress-bar"></b></i><span id="run-state"></span></span>
   </div>
   <div id="data-status" class="data-status" role="status" aria-live="polite">Загрузка…</div>
   <div class="events">
-    <button type="button" id="events-toggle" class="events-toggle" aria-controls="events-panel">События <b id="events-unread" class="events-unread" hidden>0</b></button>
+    <button type="button" id="events-toggle" class="events-toggle" aria-controls="events-panel" title="Непрочитанные события — открыть очередь">Непрочитано <b id="events-unread" class="events-unread" data-count="0">0</b></button>
   </div>
   <details id="route-settings" class="diagnostics route-settings"><summary id="route-settings-summary">Маршруты: все</summary><div id="route-settings-panel" class="route-panel"></div></details>
   <details id="diagnostics" class="diagnostics"><summary>Диагностика</summary><dl id="diag-list"></dl></details>
@@ -29,17 +29,30 @@
     </div>
     <div id="toasts" class="toasts" aria-live="polite"></div>
     <div class="legend" aria-label="Условные обозначения">
-      <div class="legend-row" id="legend-vehicles"><b>ТС</b><span><img class="legend-symbol" data-symbol="normal" alt="">≤ 2 мин</span><span><img class="legend-symbol" data-symbol="warning" alt="">&gt; 2 мин «!»</span><span><img class="legend-symbol" data-symbol="severe" alt="">≥ 5 мин «!!»</span><span><img class="legend-symbol" data-symbol="nodata" alt="">без прогноза</span><span><img class="legend-symbol" data-symbol="invalid" alt="">нет GPS «?»</span><span><img class="legend-symbol" data-symbol="marked" alt="">GPS неисправен (отмечено)</span><span><img class="legend-symbol" data-symbol="selected" alt="">выбрано</span><span class="legend-help" id="legend-help" tabindex="0" role="note" aria-label="Пояснение к легенде" title="Цвет ТС — прогноз задержки у цели, не вероятность. Форма значка дублирует цвет: «!» и «!!» — задержка, серый пунктир — прогноза пока нет (обычно до выхода ТС на маршрут), «?» — последний кадр без валидного GPS, фиолетовый «×» — GPS отмечен диспетчером как неисправный, «≠» — вне маршрута наряда; треугольник у значка — направление движения. Линии — плановые маршруты нарядов, не GPS-треки; каждая сдвинута вправо по ходу движения, встречные направления идут рядом.">?</span></div>
-      <div class="legend-row" id="legend-route" hidden><b>Маршрут</b><span><i class="line ahead"></i>впереди →</span><span><i class="line passed"></i>пройдено</span><span><i class="stop"></i>остановка</span><span><img class="legend-symbol" data-symbol="target" alt="">цель</span><span><i class="line leader"></i>вне маршрута</span></div>
+      <div class="legend-row" id="legend-vehicles"><b>ТС</b><span><img class="legend-symbol" data-symbol="normal" alt="">≤ 2 мин</span><span><img class="legend-symbol" data-symbol="warning" alt="">2–5 мин «!»</span><span><img class="legend-symbol" data-symbol="severe" alt="">≥ 5 мин «!!»</span><span><img class="legend-symbol" data-symbol="nodata" alt="">без прогноза</span><span><img class="legend-symbol" data-symbol="invalid" alt="">нет GPS «?»</span><span><img class="legend-symbol" data-symbol="marked" alt="">GPS неисправен (отмечено)</span><span><img class="legend-symbol" data-symbol="selected" alt="">выбрано</span><span class="legend-help" id="legend-help" tabindex="0" role="note" aria-label="Пояснение к легенде" title="Цвет ТС — прогноз задержки у цели, не вероятность. Форма значка дублирует цвет: «!» и «!!» — задержка, серый пунктир — прогноза пока нет (обычно до выхода ТС на маршрут), «?» — последний кадр без валидного GPS, фиолетовый «×» — GPS отмечен диспетчером как неисправный, «≠» — вне маршрута наряда; треугольник у значка — направление движения. Линии — плановые маршруты нарядов, не GPS-треки; каждая сдвинута вправо по ходу движения, встречные направления идут рядом.">?</span></div>
+      <div class="legend-group" id="legend-route" hidden>
+        <div class="legend-row"><b>Маршрут</b><span><i class="line passed" aria-hidden="true"></i>пройдено</span><span><i class="line ahead" aria-hidden="true"></i>впереди →</span><span><i class="line after" aria-hidden="true"></i>после цели</span><span><i class="line leader" aria-hidden="true"></i>вне маршрута</span></div>
+        <div class="legend-row"><b>Остановки</b><span><i class="legend-stop" data-stop="passed" aria-hidden="true"></i>пройдена</span><span><i class="legend-stop" data-stop="ahead" aria-hidden="true"></i>до цели</span><span><img class="legend-symbol" data-symbol="target" alt="">цель прогноза</span><span><i class="legend-stop" data-stop="after" aria-hidden="true"></i>после цели (допущение)</span></div>
+      </div>
     </div>
-    <div id="hotkeys" class="hotkeys" aria-label="Горячие клавиши"><span>J / K — следующее / предыдущее событие</span><span>W — взять</span><span>S — отложить 5 мин</span><span>C — закрыть</span><span>Esc — снять выбор</span></div>
   </section>
+  <section id="card" class="card" aria-label="Карточка ТС" aria-live="polite" data-open="false"></section>
   <aside class="side">
+    <div class="side-head">
+      <div class="vehicle-search">
+        <input id="vehicle-search" type="search" placeholder="Поиск ТС по номеру (/)" aria-label="Поиск ТС по номеру" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="vehicle-search-results" aria-autocomplete="list">
+        <div id="vehicle-search-results" class="search-results" role="listbox" aria-label="Найденные ТС" hidden></div>
+      </div>
+      <details id="hotkeys-help" class="hotkeys-help"><summary aria-label="Горячие клавиши" title="Горячие клавиши (?)">?</summary>
+        <dl aria-label="Горячие клавиши"><dt><kbd>J</kbd> / <kbd>K</kbd></dt><dd>следующее / предыдущее событие</dd><dt><kbd>W</kbd></dt><dd>взять в работу</dd><dt><kbd>S</kbd></dt><dd>отложить на 5 мин данных</dd><dt><kbd>C</kbd></dt><dd>закрыть с причиной</dd><dt><kbd>/</kbd></dt><dd>поиск ТС по номеру</dd><dt><kbd>Esc</kbd></dt><dd>закрыть меню, затем карточку</dd><dt><kbd>?</kbd></dt><dd>эта подсказка</dd></dl>
+      </details>
+    </div>
     <div class="side-tabs" role="tablist" aria-label="Панель">
       <button type="button" role="tab" id="tab-events" data-tab="events" aria-controls="events-panel">События <b id="events-count">0</b></button>
       <button type="button" role="tab" id="tab-vehicles" data-tab="vehicles" aria-controls="list-panel">Транспорт <b id="vehicles-count">0</b></button>
     </div>
     <section id="events-panel" class="events-panel" aria-label="Очередь событий">
+      <div id="queue-filters" class="queue-filters" role="group" aria-label="Фильтр очереди"></div>
       <div id="events-list" class="events-list"></div>
       <div id="events-bulk" class="events-bulk" hidden></div>
     </section>
@@ -52,7 +65,6 @@
       <div class="search-row"><input id="search" type="search" placeholder="Поиск по ID" aria-label="Поиск по ID" autocomplete="off"><button type="button" id="clear-selection">Сбросить выбор</button></div>
       <div id="vehicles" class="vehicle-list">Загрузка…</div>
     </section>
-    <section id="card" class="card" aria-live="polite"></section>
   </aside>
 </main>
 <script src="/static/app.js" defer></script>

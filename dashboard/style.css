@@ -6,6 +6,8 @@
   --focus: #2f6f9f;
   font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--ink); background: var(--bg);
 }
+/* stop role tokens (spec §S): map symbols (map-symbols.js STOP_COLOR), legend and card stop icons */
+:root { --stop-passed: #a9b3ba; --stop-ahead: #1b2a36; --stop-after: #6b7780; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { display: flex; flex-direction: column; overflow: hidden; }
@@ -37,7 +39,15 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .run-source { font-weight: 700; color: #fff; }
 .run-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d8e2; }
 .run-speed { font-weight: 700; color: #ffe6ad; }
-.run-clock { color: #fff; font-variant-numeric: tabular-nums; }
+/* Q7: the data clock, large, with its clock named under it; the full time once the run is over. */
+.data-clock { flex: none; display: grid; grid-template-columns: auto; justify-items: start; line-height: 1; padding: 0 12px; border-left: 1px solid #3f5a70; border-right: 1px solid #3f5a70; cursor: default; }
+.data-clock b { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.data-clock small { font-size: 11px; color: #9fb8c7; margin-top: 2px; }
+.data-clock-prefix[hidden] { display: none; }
+.data-clock[data-over=true] { grid-template-columns: auto auto; column-gap: 6px; align-items: baseline; }
+.data-clock[data-over=true] .data-clock-prefix { font-size: 12px; margin: 0; color: #c9d8e2; }
+.data-clock[data-over=true] b { font-size: 18px; color: #c9d8e2; }
+.data-clock[data-over=true] #data-clock-label { grid-column: 1 / -1; }
 .run-state { display: inline-flex; align-items: center; gap: 7px; color: #c9ecdf; }
 .run-progress { display: inline-block; width: 54px; height: 6px; border-radius: 3px; background: #3f5a70; overflow: hidden; }
 .run-progress b { display: block; height: 100%; width: 0; background: #45c28d; }
@@ -66,19 +76,46 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .events-toggle[data-active]:not([data-active="0"]) { border-color: #e39a2d; color: #fff; }
 .events-toggle[aria-expanded=true] { background: #2c4a63; color: #fff; }
 .events-unread { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--severe); color: #fff; font-size: 12px; line-height: 18px; text-align: center; }
-.events-unread[hidden] { display: none; }
+.events-unread[data-count="0"] { background: #3f5a70; color: #c9d8e2; }
 .events-toggle[data-tab-open=true] { background: #2c4a63; color: #fff; }
 /* v2 side panel: «События» (the reaction queue) and «Транспорт» (the vehicle list) tabs. */
+/* Q5/Q8: the right column's header — «Поиск ТС по номеру (/)» with a dropdown, and the «?» hotkeys popover. */
+.side-head { flex: none; position: relative; z-index: 4; display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; }
+.vehicle-search { position: relative; flex: 1; min-width: 0; }
+.vehicle-search input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #f8fafa; }
+.vehicle-search input:focus { background: #fff; }
+.search-results { position: absolute; left: 0; right: 0; top: calc(100% + 4px); display: grid; max-height: 320px; overflow: auto; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 26px rgba(10, 30, 45, .2); }
+.search-results[hidden] { display: none; }
+.search-results button { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 0; border-left: 4px solid var(--nodata); border-radius: 4px; background: transparent; text-align: left; }
+.search-results button[data-level=warning] { border-left-color: var(--warning); }
+.search-results button[data-level=severe] { border-left-color: var(--severe); }
+.search-results button[data-level=normal] { border-left-color: var(--normal); }
+.search-results button[aria-selected=true], .search-results button:hover { background: #eef3f6; }
+.search-id { font-weight: 700; font-variant-numeric: tabular-nums; }
+.search-value { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.search-empty { margin: 0; padding: 8px 10px; color: var(--muted); font-size: 12px; }
+.hotkeys-help { position: relative; flex: none; }
+.hotkeys-help summary { list-style: none; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 50%; background: #f5f7f8; font-weight: 700; color: var(--muted); cursor: pointer; }
+.hotkeys-help summary::-webkit-details-marker { display: none; }
+.hotkeys-help[open] summary { background: var(--navy); border-color: var(--navy); color: #fff; }
+.hotkeys-help dl { position: absolute; right: 0; top: 38px; width: 300px; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin: 0; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(10, 30, 45, .22); font-size: 13px; }
+.hotkeys-help dt { white-space: nowrap; }
+.hotkeys-help dd { margin: 0; color: var(--ink); }
+.hotkeys-help kbd { margin: 0; font-size: 11px; }
 .side-tabs { flex: none; display: flex; padding: 0 14px; border-bottom: 1px solid var(--line); }
 .side-tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 0 9px; border: 0; border-bottom: 3px solid transparent; background: transparent; font-weight: 700; color: var(--muted); }
 .side-tabs button[aria-selected=true] { border-bottom-color: var(--navy); color: var(--ink); }
 .side-tabs b { min-width: 20px; padding: 0 6px; border-radius: 999px; background: #e7ebee; color: var(--ink); font-size: 12px; line-height: 18px; }
 #tab-events b[data-open]:not([data-open="0"]) { background: var(--severe); color: #fff; }
 .side[data-tab=events] .list-panel, .side[data-tab=vehicles] .events-panel { display: none; }
-.events-panel { flex: 0 1 auto; display: flex; flex-direction: column; min-height: 150px; max-height: 42%; border-bottom: 1px solid var(--line); }
-.side[data-tab=events]:has(.card header) .events-panel { max-height: 36%; }
-.side[data-tab=events]:not(:has(.card header)) .events-panel { flex: 1 1 auto; max-height: none; }
-.events-list { overflow: auto; display: grid; gap: 6px; align-content: start; padding: 10px 14px; }
+.events-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+/* Rows keep their content height; the list scrolls (a grid item with overflow ≠ visible may otherwise shrink below its content). */
+.events-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; gap: 6px; align-content: start; grid-auto-rows: max-content; padding: 10px 14px; }
+/* Q6: queue filter chips «Все · Новые · В работе · Отложены». */
+.queue-filters { flex: none; display: flex; gap: 4px; padding: 10px 14px 0; }
+.queue-filters button { flex: 1 1 auto; padding: 4px 6px; border: 1px solid var(--line); background: #f5f7f8; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.queue-filters button b { margin-left: 2px; font-variant-numeric: tabular-nums; }
+.queue-filters button[aria-pressed=true] { background: var(--navy); border-color: var(--navy); color: #fff; }
 .events-empty { margin: 0 0 2px; color: var(--muted); font-size: 12px; }
 .queue-group { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .queue-group::after { content: ''; order: 1; flex: 1; height: 1px; background: #e3e8eb; }
@@ -91,6 +128,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .event[data-group=needs] { background: #fffaf0; border-color: #efcf95; }
 .event[data-group=ended] { opacity: .8; }
 .event.is-current { outline: 2px solid var(--navy); outline-offset: -1px; }
+/* Q6: the open event after an action keeps its row; its own group's look, a dashed frame says «moved». */
+.event.is-pinned { border-style: dashed; border-left-style: solid; }
 .event-check { grid-row: 1 / span 2; align-self: start; margin: 2px 0 0; width: 16px; height: 16px; }
 .event-title { font-weight: 700; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .event[data-unread=true] .event-title::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--severe); }
@@ -103,6 +142,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .sla[data-tone=snoozed], .sla[data-tone=closed] { background: #e7ebee; color: var(--nodata); }
 .sla[data-tone=ended] { background: #d8efe4; color: #155c40; }
 .event .sla { grid-column: 3; }
+.sla[data-clock]:not([data-clock=""]) { cursor: help; }
+.sla-stack { display: inline-grid; justify-items: end; gap: 1px; }
+.sla-clock { color: var(--muted); font-size: 11px; line-height: 1.1; white-space: nowrap; }
 .sla-bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--focus); transition: width 1s linear; }
 .sla-bar[data-tone=sla_low] { background: var(--warning); }
 .sla-bar[data-tone=overdue] { background: var(--severe); }
@@ -134,20 +176,47 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .route-meta { color: var(--muted); font-size: 12px; }
 .route-note { color: var(--muted); font-size: 12px; margin: 10px 0 6px; }
 .route-json { display: block; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
-.toast { position: relative; overflow: hidden; pointer-events: auto; display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 2px 8px; padding: 10px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--warning); border-radius: 8px; box-shadow: 0 8px 22px rgba(10, 30, 45, .2); animation: toast-in .25s ease-out; }
+.toast { position: relative; overflow: hidden; pointer-events: auto; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 2px 8px; padding: 10px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--warning); border-radius: 8px; box-shadow: 0 8px 22px rgba(10, 30, 45, .2); animation: toast-in .25s ease-out; }
 .toast[data-level=severe] { border-left-color: var(--severe); }
 .toast[data-kind=remind] { border-left-color: var(--focus); }
+.toast[data-kind=lost] { border-left-color: var(--nodata); }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
 .toast b { grid-column: 1; color: #9a5c00; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .toast[data-level=severe] b { color: var(--severe); }
 .toast[data-kind=remind] b { color: var(--focus); }
+.toast[data-kind=lost] b { color: var(--nodata); }
 .toast span { grid-column: 1; grid-row: 2; font-weight: 600; }
 .toast-open { grid-column: 2; grid-row: 1 / span 2; border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; padding: 6px 10px; }
-.toast-take { grid-column: 3; grid-row: 1 / span 2; border: 1px solid var(--navy); background: var(--navy); color: #fff; border-radius: 6px; padding: 6px 10px; font-weight: 600; }
-.toast-close { grid-column: 4; grid-row: 1 / span 2; border: 0; background: transparent; font-size: 18px; color: var(--muted); padding: 0 2px; }
+.toast-close { grid-column: 3; grid-row: 1 / span 2; border: 0; background: transparent; font-size: 18px; color: var(--muted); padding: 0 2px; }
 
-/* Map-first layout: the map takes everything except a 360 px panel. */
-.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 0; }
+/* Layout (merged UX spec §L): map | card | queue. From 1600 px the card is its own 440 px column,
+   always present (a shift summary while nothing is open). Below 1600 px the grid is map | queue and
+   the card is a 420 px panel over the map's right edge, next to the queue, shown only while open:
+   the map never changes size on open or close. Card and queue scroll independently. */
+.layout { --card-w: 440px; --queue-w: 360px; --card-overlay: 0px; position: relative; flex: 1; display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--card-w) var(--queue-w); grid-template-rows: minmax(0, 1fr); min-height: 0; }
+@media (max-width: 1599px) {
+  .layout { --card-w: 420px; --queue-w: 330px; grid-template-columns: minmax(0, 1fr) var(--queue-w); }
+  .layout:has(> .card[data-open=true]) { --card-overlay: var(--card-w); }
+  .layout > .card { position: absolute; z-index: 4; top: 0; bottom: 0; right: var(--queue-w); width: var(--card-w);
+    border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(10, 30, 45, .18); }
+  .layout > .card[data-open=false] { display: none; }
+}
+@media (max-width: 1399px) { .layout { --queue-w: 320px; } }
+/* Panels drawn over the map keep clear of the card panel (0 px when the card is a column). */
+.map-pane .map-tools { right: calc(14px + var(--card-overlay)); }
+.map-pane .toasts { right: calc(56px + var(--card-overlay)); }
+.map-pane .maplibregl-ctrl-bottom-right { right: var(--card-overlay); }
+.map-pane .legend { max-width: min(720px, calc(100% - 80px - var(--card-overlay))); }
+.map-pane .attention { max-width: calc(100% - 540px - var(--card-overlay)); }
+@media (max-width: 1699px) { .map-pane .attention { max-width: calc(100% - 280px - var(--card-overlay)); } }
+/* «Следить за ТС …» (§L5) stands out from the other map tools: it is the way back to the frame. */
+.map-tools .follow { background: var(--navy); border-color: var(--navy); color: #fff; }
+/* §L6: a selected vehicle far off its route, as an arrow at the edge of the visible map. */
+.edge-arrow { position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1.5px dashed #6b3fa0; border-radius: 6px;
+  background: #fff; color: #4b2a75; font-size: 12px; font-weight: 700; white-space: nowrap; box-shadow: 0 2px 8px rgba(10, 30, 45, .2); }
+.edge-arrow[hidden] { display: none; }
+.edge-arrow i { display: inline-block; font-style: normal; font-size: 14px; }
 .map-pane { position: relative; min-width: 0; min-height: 0; background: #e6eae7; }
 #map { position: absolute; inset: 0; }
 .map-pane[data-state=unavailable] #map { opacity: .35; filter: grayscale(1); }
@@ -165,10 +234,14 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .attention button, .card-actions button, .search-row button { border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; padding: 6px 12px; }
 .attention button { white-space: nowrap; }
 .attention button.primary { background: var(--navy); color: #fff; border-color: var(--navy); font-weight: 600; }
-.attention button.more { border: 0; background: transparent; color: var(--focus); font-size: 13px; font-weight: 600; padding: 0; }
 .attention-text { display: grid; gap: 1px; min-width: 0; }
 .attention-text > span:last-child { font-weight: 600; white-space: nowrap; }
-.attention-actions { display: flex; gap: 6px; }
+/* Q1: a one-line summary — «Требуют реакции: 2 · ближайший срок 0:37 · [Следующее J]». */
+.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; white-space: nowrap; font-weight: 600; }
+.attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { font-size: 14px; text-transform: none; letter-spacing: 0; }
+.attention[data-kind=open] .attention-title { color: var(--ink); }
+.attention-detail { font-variant-numeric: tabular-nums; }
+
 kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 0 4px; border: 1px solid #b7c1c8; border-radius: 3px; color: var(--muted); }
 .primary kbd { border-color: rgba(255, 255, 255, .45); color: #fff; }
 /* v2 card: the event row, its actions and menus, and the reaction steps. */
@@ -183,11 +256,22 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .card-buttons #card-show { margin-left: auto; }
 .card-menu { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #f6f8f8; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .card-menu button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 12px; font-size: 12px; font-weight: 600; color: var(--ink); }
+/* Q7: snooze options name both clocks, one per line. */
+.snooze-menu { display: grid; justify-items: start; gap: 4px; }
+.snooze-menu button { border-radius: 6px; font-weight: 500; }
+.snooze-blocked { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .card-menu.reasons { display: grid; gap: 4px; }
 .card-menu.reasons button { text-align: left; border-radius: 6px; padding: 5px 10px; font-size: 13px; font-weight: 400; }
 .steps { margin: 12px 0 2px; padding: 10px 12px; border: 1px solid #efcf95; border-radius: 8px; background: #fffaf0; }
 .steps-head { display: flex; align-items: center; gap: 6px; }
 .steps-head b { margin-right: auto; }
+/* Collapsed card sections (C1): «▸ Шаги реакции 0/3», «▸ История события». */
+details.steps > summary, details.incident > summary { list-style: none; cursor: pointer; }
+details.steps > summary::-webkit-details-marker, details.incident > summary::-webkit-details-marker { display: none; }
+details.steps > summary b::before, details.incident > summary b::before { content: '▸ '; color: var(--muted); }
+details.steps[open] > summary b::before, details.incident[open] > summary b::before { content: '▾ '; }
+details.steps:not([open]), details.incident:not([open]) { padding-top: 7px; padding-bottom: 7px; }
+.incident-count { font-size: 12px; color: var(--muted); }
 .steps-head span { font-size: 12px; font-weight: 700; color: #7c4b00; }
 .step { display: grid; grid-template-columns: 18px 1fr; gap: 1px 8px; margin-top: 8px; cursor: pointer; }
 .step input { grid-row: 1 / span 2; margin: 2px 0 0; }
@@ -209,8 +293,6 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .2s; }
 .dim-toggle[aria-pressed=true] .switch { background: var(--navy); }
 .dim-toggle[aria-pressed=true] .switch i { left: 14px; }
-/* v2: keyboard hints under the legend. */
-.hotkeys { position: absolute; z-index: 2; left: 220px; bottom: 6px; display: flex; gap: 10px; font-size: 11px; color: var(--muted); pointer-events: none; }
 
 .legend { position: absolute; z-index: 2; left: 14px; bottom: 30px; display: grid; gap: 4px; max-width: 720px; padding: 6px 10px; background: rgba(255, 255, 255, .95); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
@@ -222,8 +304,13 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .line.ahead { background: #1565c0; height: 5px; box-shadow: 0 0 0 1.5px #fff; }
 .line.leader { height: 0; border-top: 2px dashed #1b2a36; border-radius: 0; }
 .line.passed { background: #a4b0b9; height: 5px; }
-.stop { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2.5px solid #1b2a36; }
-.stop.passed { width: 8px; height: 8px; border: 1.5px solid #a9b3ba; }
+.line.after { height: 3.5px; border-radius: 0; background: repeating-linear-gradient(90deg, var(--stop-after) 0 7px, transparent 7px 12px); }
+.legend-group { display: grid; gap: 4px; }
+.legend-group[hidden] { display: none; }
+/* Stop roles as on the map (map-symbols.js stopLook): shape and ring, never a severity colour. */
+.legend-stop { display: inline-block; flex: none; width: 15px; height: 15px; border-radius: 50%; background: #fff; border: 3px solid var(--stop-ahead); }
+.legend-stop[data-stop=passed] { width: 8px; height: 8px; margin: 0 3.5px; border: 0; background: var(--stop-passed); }
+.legend-stop[data-stop=after] { border: 3px dashed var(--stop-after); }
 .legend-symbol { display: inline-block; margin: -5px -4px; } /* bitmaps from map-symbols.js, padding included */
 .maplibregl-ctrl-bottom-left .maplibregl-ctrl-attrib { font-size: 11px; }
 
@@ -244,7 +331,7 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 
 /* Right panel: filters, search, list, card. */
 .side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); }
-.list-panel { flex: 0 1 auto; display: flex; flex-direction: column; min-height: 150px; max-height: 42%; padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+.list-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; padding: 12px 14px 8px; }
 .filters { display: flex; gap: 4px; margin-bottom: 8px; }
 .filters button { flex: 1 1 auto; padding: 5px 6px; border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; font-size: 12px; white-space: nowrap; }
 .filters button b { margin-left: 3px; }
@@ -252,7 +339,7 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .search-row { display: flex; gap: 6px; margin-bottom: 8px; }
 .search-row input { flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
 .search-row button { font-size: 12px; white-space: nowrap; }
-.vehicle-list { overflow: auto; display: grid; gap: 3px; align-content: start; color: var(--muted); }
+.vehicle-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; gap: 3px; align-content: start; grid-auto-rows: max-content; color: var(--muted); }
 .vehicle { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; text-align: left; background: #f6f8f8; border: 1px solid #dde3e6; border-left: 6px solid var(--nodata); border-radius: 5px; padding: 4px 9px; color: var(--ink); }
 .vehicle[data-level=severe] { border-left-color: var(--severe); }
 .vehicle[data-level=warning] { border-left-color: var(--warning); }
@@ -265,10 +352,40 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .vehicle[data-level=nodata] .vehicle-value { color: var(--muted); font-weight: 500; }
 .vehicle-note { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
 
-.card { flex: 1 1 0; min-height: 0; overflow: auto; padding: 0 16px 18px; border-top: 5px solid transparent; }
+.card { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 16px 18px; background: var(--panel);
+  border-left: 1px solid var(--line); border-top: 5px solid transparent; }
 /* Sticky top of the card (L-1): ID, level, the forecast and its target stay visible while scrolling. */
 .card-top { position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px 6px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.card-top .headline { margin: 6px 0 0; padding: 6px 10px; }
+/* Forecast block (C2–C3): target, plan, expected, the delay large, the fact and the age. `quiet`
+   states (stale, held, no forecast, …) keep every number grey — no alarm colour on old values. */
+.forecast { position: relative; margin: 8px 0 0; padding: 8px 10px; background: #f4f6f7; border-radius: 8px; }
+.forecast-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.forecast-head b { font-weight: 700; }
+.forecast-rows { display: grid; grid-template-columns: auto 1fr; gap: 0 12px; margin: 4px 0 0; font-size: 13px; }
+.card .forecast-rows dt { margin: 0; font-size: 13px; color: var(--muted); }
+.card .forecast-rows dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.forecast-big { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; }
+.forecast-big span { font-size: 13px; color: var(--muted); }
+.forecast-big strong { font-size: 26px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.forecast-big[data-size=medium] strong { font-size: 16px; line-height: 1.3; }
+.card[data-level=severe] .forecast[data-tone=live] .forecast-big strong { color: #9d2a1a; }
+.card[data-level=warning] .forecast[data-tone=live] .forecast-big strong { color: #7c4b00; }
+.card[data-level=normal] .forecast[data-tone=live] .forecast-big strong { color: #155c40; }
+.forecast[data-tone=quiet] .forecast-big strong { color: var(--nodata); }
+.forecast-line, .forecast-fact { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+.forecast-fact { color: var(--ink); }
+.forecast-line[data-kind=strong], .forecast-line[data-kind=updating] { font-size: 13px; color: var(--ink); font-weight: 600; }
+.forecast[data-tone=live] .forecast-line[data-kind=updating] { font-size: 12px; }
+.forecast-line.pulse { display: block; }
+.forecast-line.pulse::before { display: inline-block; margin: 0 6px 1px 0; vertical-align: middle; }
+.forecast-line[data-kind=muted] { color: #7a8791; }
+.forecast-line[data-kind=reason] { color: var(--ink); }
+/* «ⓘ» / «?» help: a click-to-open note over the card (keyboard and touch too, not only hover). */
+.help { display: inline-block; }
+.help summary { list-style: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border: 1px solid #b7c1c8; border-radius: 50%; font-size: 11px; font-weight: 700; color: var(--muted); cursor: pointer; background: #fff; }
+.help summary::-webkit-details-marker { display: none; }
+.help[open] summary { border-color: var(--focus); color: var(--focus); }
+.help p { position: absolute; z-index: 4; left: 8px; right: 8px; margin: 6px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 4px 14px rgba(10, 30, 45, .18); font-size: 12px; font-weight: 400; color: var(--ink); }
 .card-tech { margin: 12px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .card-tech summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted); }
 .pulse { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--ink); }
@@ -286,10 +403,6 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .level-chip[data-level=severe] { background: #fbe1dc; color: #9d2a1a; }
 .level-chip[data-level=warning] { background: #fdebc8; color: #7c4b00; }
 .level-chip[data-level=normal] { background: #d8efe4; color: #155c40; }
-.headline { display: grid; margin: 12px 0 4px; padding: 10px 12px; background: #f4f6f7; border-radius: 8px; }
-.headline span { font-size: 12px; color: var(--muted); }
-.headline strong { font-size: 24px; line-height: 1.15; }
-.headline small { color: var(--muted); }
 .updating { display: inline-block; margin-top: 2px; padding: 0 7px; border-radius: 999px; background: #e3eef5; color: #1f4f73; font-size: 11px; font-weight: 700; }
 .card dl { margin: 0; }
 .card dt { font-size: 12px; color: var(--muted); margin-top: 9px; }
@@ -338,36 +451,47 @@ textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .route-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink); cursor: pointer; }
 .route-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .route-note[data-kind=warn] { color: #9a5c00; font-weight: 600; }
+/* C6: groups with headers that stick under the card's sticky top (--card-top-h, set by app.js);
+   the role is an icon (✓ ◉ ◆ ◌) as well as the group, the target row is inverted. */
+.route { position: relative; }
+.card.is-short .card-top { position: static; }
+.route-head { justify-content: flex-start; }
+.route-head .route-toggle { margin-left: auto; }
 .stops { margin: 6px 0 4px; padding: 0; list-style: none; display: grid; gap: 1px; font-size: 13px; font-variant-numeric: tabular-nums; }
-.stops li { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; padding: 2px 6px; border-left: 3px solid transparent; border-radius: 3px; }
-.stops li.stop-group { display: block; margin-top: 6px; padding: 0 2px; border: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+.stops li { display: grid; grid-template-columns: 16px 50px 1fr auto; align-items: baseline; gap: 6px; padding: 2px 6px; border-radius: 3px; }
+.stops li.stop-group { position: sticky; top: var(--card-top-h, 0); z-index: 1; display: block; margin: 6px -4px 0; padding: 3px 6px; border-radius: 0; background: #fafbfb; font-size: 12px; font-weight: 700; color: var(--muted); box-shadow: 0 1px 0 #e3e8eb; }
 .stops li.stop-group:first-child { margin-top: 0; }
-.stop-no { color: var(--muted); }
-.stop-delta { font-weight: 700; text-align: right; }
+.stop-caveat { display: block; font-weight: 400; font-style: italic; color: var(--stop-after); }
+.stops li.stop-more { display: block; padding: 0 6px 0 28px; }
+.stop-more button { border: 0; background: none; padding: 1px 0; font-size: 12px; font-weight: 600; color: var(--focus); }
+.stop-icon { font-size: 14px; text-align: center; line-height: 1; }
+.stop-no { color: var(--muted); white-space: nowrap; }
+.stop-delta { font-weight: 700; text-align: right; white-space: nowrap; }
 .stop-time { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-.stop-basis { color: var(--muted); }
+.stop-tag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--stop-ahead); border-radius: 3px; font-size: 11px; font-style: normal; font-weight: 700; }
 .stops li[data-role=passed] { color: #5f6b74; }
+.stops li[data-role=passed] .stop-icon { color: var(--stop-passed); font-weight: 700; }
 .stops li[data-role=passed] .stop-time { font-weight: 400; }
-.stops li[data-role=before_target] { border-left-color: #8795a0; }
-.stops li[data-role=target] { background: #1b2a36; color: #fff; border-left-color: #1b2a36; }
+.stops li[data-role=before_target] .stop-icon { color: var(--stop-ahead); }
+.stops li[data-role=target] { background: var(--stop-ahead); color: #fff; }
 .stops li[data-role=target] .stop-no { color: #d9e4ea; }
-.stops li[data-role=after_target] { border-left-color: #d3dade; border-left-style: dashed; }
-.stop-basis[data-basis=assumption] { font-style: italic; }
+.stops li[data-role=after_target] { color: var(--stop-after); }
+.stops li[data-role=after_target] .stop-icon { color: var(--stop-after); }
+.stops li[data-basis=assumption] .stop-time, .stops li[data-basis=assumption] .stop-delta { font-style: italic; font-weight: 500; }
 .route-caption { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
-/* With a card open the list yields height to it. */
-.side:has(.card header) .list-panel { max-height: 36%; }
-/* Without a selection the list takes the panel; the card hint shrinks to one line under it (L-2). */
-.side:not(:has(.card header)) .list-panel { flex: 1 1 auto; max-height: none; }
-.side:not(:has(.card header)) .card { flex: none; padding-bottom: 8px; }
-.side:not(:has(.card header)) .card-empty { margin-top: 6px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The card column without an open card: a summary of the shift (§L1). */
+.shift { display: grid; gap: 10px; padding: 16px 0; }
+.shift h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.shift dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin: 0; }
+.shift dt { margin: 0; font-size: 14px; color: var(--ink); }
+.shift dd { margin: 0; font-size: 14px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.shift dd[data-tone=needs] { color: #9d2a1a; }
+.shift .card-empty { margin: 0; font-size: 13px; }
 
-/* Full HD and wider: a roomier panel so list rows and card actions fit on one line. */
-@media (min-width: 1700px) { .layout { grid-template-columns: minmax(0, 1fr) 420px; } }
 @media (max-width: 1920px) { .brand span { display: none; } }
 @media (max-width: 1400px) {
   .topbar { gap: 10px; padding: 0 12px; }
   .brand h1 { font-size: 16px; }
-  .layout { grid-template-columns: minmax(0, 1fr) 330px; }
 }
 
 /* v2 details */

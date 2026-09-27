@@ -69,8 +69,15 @@ const labelOverlaps = page => page.locator('.vehicle-label, .stop-label:not([hid
 });
 const rows = page => page.locator('#vehicles .vehicle');
 const cardTitle = page => page.locator('#card h2').textContent();
-const cardText = page => page.locator('#card').textContent();
+// Values keep non-breaking spaces inside («+1 мин 49 с», C4); texts are compared with plain spaces.
+const norm = text => String(text ?? '').replaceAll(' ', ' ');
+const cardText = page => page.locator('#card').textContent().then(norm);
+// × hides the card and keeps the selection (merged UX spec §L4); Esc then deselects.
+const deselect = async page => { await page.locator('#card-close').click(); await page.keyboard.press('Escape'); };
 const incidentText = page => page.locator('#card .incident').textContent();
+const forecastText = page => page.locator('#card .forecast').textContent().then(norm);
+// Collapsed card sections (C1) are opened before their controls are used.
+const openSection = (page, id) => page.locator(`#${id}`).evaluate(d => { if (!d.open) d.querySelector('summary').click(); });
 const api = (page, url) => page.evaluate(async u => { const r = await fetch(u, {cache: 'no-store'}); return {status: r.status, body: await r.json().catch(() => null)}; }, url);
 // A control is usable when the element at its centre is the control itself (nothing drawn over it).
 const uncovered = (page, selector) => page.locator(selector).first().evaluate(el => {
@@ -113,7 +120,7 @@ async function headerFits(page, label) {
     await page.setViewportSize({width, height: VIEWPORT.height});
     await page.waitForTimeout(250);
     const r = await page.evaluate(() => {
-      const parts = [...document.querySelectorAll('.topbar > .brand, .run > span, .topbar > .data-status, .topbar > .events, .topbar > .diagnostics')]
+      const parts = [...document.querySelectorAll('.topbar > .brand, .topbar > .data-clock, .run > span, .topbar > .data-status, .topbar > .events, .topbar > .diagnostics')]
         .filter(e => e.getClientRects().length).map(e => ({name: e.id || e.className, r: e.getBoundingClientRect()}));
       const hits = [];
       for (let i = 0; i < parts.length; i++) for (let j = i + 1; j < parts.length; j++) {
@@ -141,7 +148,7 @@ async function headerFits(page, label) {
 // W13 acceptance (ui-review §5): card order, sticky head, no technical identifiers outside
 // «Технические подробности», one delay formatter, and the camera following the selection.
 const TECH_PATTERNS = [/[0-9a-f]{12,}/, /rev \d+/, /контекст №/, /кадр NDTP/, /canonical_/, /запись расписания/, /\d{4}-\d\d-\d\dT/];
-const LABEL_TEXT = /^\S+ · ([+−]\d+ (мин|с)|по графику)$/;
+const LABEL_TEXT = /^\S+ · ((опозд\.|опереж\.) [+−]\d+:\d\d|по графику)$/;
 async function w13Card(page, label, frameId) {
   const layout = await page.evaluate(() => {
     const box = s => document.querySelector(s)?.getBoundingClientRect();
@@ -174,7 +181,7 @@ async function w13Card(page, label, frameId) {
   const body = await page.locator('body').innerText();
   const labels = await page.locator('.vehicle-label').allInnerTexts();
   const badLabels = labels.map(t => t.trim()).filter(t => !(LABEL_TEXT.test(t) || /^\S+$/.test(t)));
-  check(!/\d+\.\d+ мин/.test(body) && badLabels.length === 0, `${label}: one delay formatter, no decimal minutes; map labels «ID · +N мин» or ID only (${badLabels.join(' | ') || 'ok'}, F-1)`);
+  check(!/\d+\.\d+ мин/.test(body) && badLabels.length === 0, `${label}: one delay formatter, no decimal minutes; map labels «ID · опозд. +м:сс» or ID only (C5) (${badLabels.join(' | ') || 'ok'}, F-1)`);
 }
 async function w13Follow(page, label) {
   await page.waitForTimeout(20000);
@@ -212,11 +219,17 @@ async function dispatcherPath(page, label) {
   await page.waitForTimeout(900);
   check(await page.locator(`.toast[data-id="${eventId}"]`).count() === 0, `${label}: opening the event hides its toast`);
   check(await page.locator('#card .incident').getAttribute('data-id') === eventId, `${label}: event → its vehicle's card with the same event`);
-  check((await page.locator('#incident-action').textContent()).startsWith('Взять в работу') && /на реакцию|просрочено/.test(await page.locator('#event-sla').textContent()),
-    `${label}: primary action «Взять в работу», SLA badge on the event`);
+  check((await page.locator('#incident-action').textContent()).startsWith('Взять в работу') && /реакция|просрочено/.test(await page.locator('#event-sla').textContent())
+    && (await page.locator('#event-sla-clock').textContent()) === 'реальное время'
+    && await page.locator('#incident-action').getAttribute('class') === 'primary' && await page.locator('#card-show').getAttribute('class') === null
+    && !(await page.locator('#card .event-row').textContent()).includes(' с 0'),
+    `${label}: primary action «Взять в работу», «Показать на карте» secondary, SLA badge labelled «реальное время», «открыто …» not «с …» (C5, C7, Q7)`);
   await page.locator('#incident-action').click();
   check(await page.locator('#card .incident-flow').textContent() === 'В работе' && (await incidentText(page)).includes('Взято в работу')
     && await page.locator(`#events-list .event[data-id="${eventId}"]`).getAttribute('data-group') === 'work', `${label}: take moves the event to «В работе»`);
+  check(await page.locator('#close-open').getAttribute('class') === 'primary' && await page.locator('#steps').evaluate(d => d.open),
+    `${label}: in work — «Закрыть ▾» is the primary action, «Шаги реакции» opened by themselves (C1, C7)`);
+  await openSection(page, 'card-history');
   const hostile = '<img src=x onerror="window.__xss=1"><b>жирный</b> позвонить водителю';
   await page.locator('#note-input').fill(hostile);
   await page.locator('.note-form button').click();
@@ -260,13 +273,13 @@ try {
     // Stable DOM on live polls: rows and the banner button stay the same nodes; a slow real click works.
     if (vehicles.length >= 2) {
       await survivesPolls(page, '#vehicles .vehicle', 'live list row');
-      if (await page.locator('#attention button').count()) await survivesPolls(page, '#attention button', 'live «Открыть карточку»');
+      if (await page.locator('#attention button').count()) await survivesPolls(page, '#attention button', 'live «Следующее J»');
       else skipped.push('live: no warning banner button at this moment — its node check runs in regression only');
       const pick = await page.locator('#vehicles .vehicle').nth(1).getAttribute('data-id');
       await pressAcrossPoll(page, `#vehicles .vehicle[data-id="${pick}"]`);
       check(await cardTitle(page) === pick && await page.locator(`#vehicles .vehicle[data-id="${pick}"]`).getAttribute('aria-current') === 'true',
         `live: mouse down → poll → up on row ${pick} selects it`);
-      await page.locator('#card-close').click();
+      await deselect(page);
     } else skipped.push('live: fewer than 2 vehicles — DOM stability checks run in regression only');
     await page.locator('#overview').click();
     await page.waitForTimeout(1200);
@@ -299,7 +312,7 @@ try {
       check(routeStatus === 200 && Array.isArray(routeBody?.stops), `/api/route/${id} answers with stops`);
       check(await page.locator('#route').getAttribute('data-status') === 'ok', `route context of ${id} loaded`);
       const text = await cardText(page);
-      check(text.includes('Текущее опоздание') && text.includes('(факт)'), 'card: current delay labelled as fact');
+      check(/Сейчас: .*\(факт|Факт опоздания пока не определён/.test(text), 'card: the current delay is the fact, next to the forecast (C2)');
       const roles = (routeBody?.stops ?? []).map(s => s.role);
       const target = (routeBody?.stops ?? []).find(s => s.role === 'target');
       // Live rows change: if the vehicle lost its current forecast since the snapshot (e.g. its GPS
@@ -308,14 +321,14 @@ try {
       if (!modelNow) skipped.push(`live: ${id} lost its current forecast during the check — model-specific card checks not asserted`);
       if (target && modelNow) {
         const targetRow = page.locator('.stops li[data-role=target]');
-        const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s, {seconds: true}) : null;
+        const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s) : null;
         // Live forecasts move between two reads: the row is compared with the route read before and after.
         // The card redraws its route every few seconds: give it up to ~4 s to catch up with the latest read.
         let shown = await targetRow.textContent(), expected2 = null;
         for (let i = 0; i < 6; i += 1) {
           const again = (await api(page, `/api/route/${encodeURIComponent(id)}`)).body;
           const target2 = (again?.stops ?? []).find(s => s.role === 'target');
-          expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s, {seconds: true}) : null;
+          expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s) : null;
           shown = await targetRow.textContent();
           if (!expected || shown.includes(expected) || (expected2 && shown.includes(expected2))) break;
           await page.waitForTimeout(700);
@@ -325,12 +338,12 @@ try {
         check(await page.locator('.stop-label[data-kind=target]').count() === 1
           && inside(await page.locator('.stop-label[data-kind=target]').boundingBox(), await page.locator('#map-pane').boundingBox()), 'map: target time label drawn inside the map (never at 0/0)');
       } else if (!target) skipped.push(`live: route of ${id} has no target stop at this moment`);
-      if (roles.includes('before_target') && routeBody.cur_dev_s != null) check((await page.locator('.stops li[data-group=before_target]').textContent()).includes('по факту, не прогноз'), 'card: stops before the target = plan + cur_dev_s, group «по факту, не прогноз»');
-      check((await page.locator('#route').textContent()).split('по факту, не прогноз').length - 1 <= 1 && await page.locator('.stops li:not(.stop-group)').evaluateAll(items => items.every(li => li.querySelector('.stop-no'))),
+      if (roles.includes('before_target') && routeBody.cur_dev_s != null) check((await page.locator('.stops li[data-group=before_target]').textContent()).includes('факт, не прогноз'), 'card: stops before the target = plan + cur_dev_s, group «(факт, не прогноз)»');
+      check((await page.locator('#route').textContent()).split('факт, не прогноз').length - 1 <= 1 && await page.locator('.stops li.stop-row').evaluateAll(items => items.every(li => li.querySelector('.stop-no'))),
         'card: the fact note once per group, every stop numbered (C-3)');
       if (roles.includes('passed')) check(!/→/.test(await page.locator('.stops li[data-role=passed]').first().textContent()), 'card: passed stops show the plan time only');
       if (roles.includes('after_target') && routeBody.prediction_s != null && modelNow) {
-        check(await page.locator('#shift-after-target').isChecked() && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('допущение: тот же сдвиг'), 'card: after the target «допущение: тот же сдвиг», toggle on by default');
+        check(await page.locator('#shift-after-target').isChecked() && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('После цели · допущение') && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('Не прогноз модели'), 'card: after the target «допущение», «Не прогноз модели», toggle on by default (C6)');
         await page.locator('#shift-after-target').uncheck();
         check(!(await page.locator('.stops').textContent()).includes('допущение') && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели'), 'card: toggle off hides the assumption, keeps the model value');
         await page.locator('#shift-after-target').check();
@@ -379,7 +392,7 @@ try {
       const text = await cardText(page);
       const after = (await freshRows()).find(v => String(v.tr_id) === String(without.tr_id));
       if (!after || !noForecast(after) || after.reason !== without.reason) skipped.push(`live: ${without.tr_id} changed state during the check — no-prediction card not asserted`);
-      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел|Прогон завершён|нет наряда|ТС пропало/.test(text)
+      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Цель прогноза не выбрана|Прогноза для цели пока нет|Прогноз устарел|Прогноза не будет|Прогон завершён|Прогноз не обновляется|ТС пропало|нет наряда/.test(text)
         && (!without.reason || text.includes(reasonText(without.reason)) || run?.state === 'completed' || text.includes('Прогон завершён')), `no prediction (${without.reason}): «${reasonText(without.reason)}», not green`);
       await shot(page, 'live-4-no-prediction-1920.png');
     } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
@@ -417,6 +430,7 @@ try {
     // Diagnostics: full build identity exactly as /api/build reports it, and the run's thinning.
     const {body: build} = await api(page, '/api/build');
     await page.locator('#card-close').click().catch(() => {});
+    await page.keyboard.press('Escape');
     await page.locator('#diagnostics summary').click();
     await page.waitForTimeout(1200);
     const diag = await page.locator('#diag-list').textContent();
@@ -513,23 +527,35 @@ try {
     setSnapshot(RUN('run-A-0001'), [a, b, out]);
     state.route = {900001: routeOf(a), 900002: routeOf(b)};
     await page.waitForFunction(() => document.getElementById('run').dataset.state === 'running', null, {timeout: 8000});
-    check(await page.locator('#run-speed').textContent() === 'Ускорение ×7: 1 мин показа = 7 мин данных', 'speed-up ×7 from the run, not a fixed ×5');
-    check((await page.locator('#run-state').textContent()) === 'идёт · 14 %' && (await page.locator('#run-clock').textContent()).includes('06:47:10'), 'lifecycle, progress and data time from the run');
-    check(await page.locator('#events-unread').textContent() === '1' && await page.locator('.toast').count() === 0, 'first snapshot of a run: existing warning counted, no toast');
+    check(await page.locator('#run-speed').textContent() === '×7 · 1 мин на экране = 7 мин данных', 'speed-up ×7 from the run, not a fixed ×5');
+    check((await page.locator('#run-state').textContent()) === 'идёт · 14 %' && (await page.locator('#data-clock-time').textContent()) === '06:47'
+      && (await page.locator('#data-clock-label').textContent()) === 'время данных' && (await page.locator('#data-clock').getAttribute('title')).includes('06:47:10'),
+    'lifecycle, progress and the large data clock «06:47 · время данных» from the run (Q7)');
+    check(await page.locator('#events-unread').textContent() === '1' && (await page.locator('#events-toggle').textContent()).startsWith('Непрочитано')
+      && await page.locator('.toast').count() === 0, 'first snapshot of a run: existing warning counted as «Непрочитано 1» (Q4), no toast');
     check((await page.locator('#vehicles .vehicle[data-id="900009"]').textContent()).includes('вне карты')
       && await page.locator('.vehicle-label[data-id="900009"]').count() === 0, 'valid GPS outside the data extent: listed «вне карты», not drawn');
     await survivesPolls(page, '#vehicles .vehicle[data-id="900002"]', 'list row');
-    await survivesPolls(page, '#attention button', '«Открыть карточку»');
+    await survivesPolls(page, '#attention button', '«Следующее J»');
     await pressAcrossPoll(page, '#vehicles .vehicle[data-id="900002"]');
     check(await cardTitle(page) === '900002', 'mouse down → poll → up on a list row selects the vehicle');
+    // §L4: × hides the card, the selection and its ring stay; a click on the row shows it again; Esc deselects.
     await page.locator('#card-close').click();
+    const closed = {open: await page.locator('#card').getAttribute('data-open'), row: await page.locator('#vehicles .vehicle[data-id="900002"]').getAttribute('aria-current'),
+      ring: await page.locator('.vehicle-label.is-selected').count(), summary: await page.locator('#card .shift').count()};
+    await page.locator('#vehicles .vehicle[data-id="900002"]').click();
+    const reopened = await cardTitle(page).catch(() => null);
+    await deselect(page);
+    check(closed.open === 'false' && closed.row === 'true' && closed.ring === 1 && closed.summary === 1 && reopened === '900002'
+      && await page.locator('#vehicles .vehicle[aria-current=true]').count() === 0 && await page.locator('.vehicle-label.is-selected').count() === 0,
+    `× hides the card (column shows the shift summary) and keeps the selection; the row shows it again; Esc deselects (${JSON.stringify(closed)}, reopened ${reopened}, §L4)`);
     await pressAcrossPoll(page, '#attention button');
-    check(await cardTitle(page) === '900001', 'mouse down → poll → up on «Открыть карточку» opens the card');
+    check(await cardTitle(page) === '900001', 'mouse down → poll → up on «Следующее J» opens the card');
     await survivesPolls(page, '#card-close', 'card close button');
     await page.locator('#shift-after-target').focus();
     await page.waitForTimeout(POLL_SPAN_MS);
     check(await page.evaluate(() => document.activeElement?.id) === 'shift-after-target', 'the toggle keeps keyboard focus across a poll');
-    await page.locator('#card-close').click();
+    await deselect(page);
     setSnapshot(RUN('run-A-0001'), [a, b]);
     await page.waitForTimeout(POLL_SPAN_MS);
 
@@ -546,13 +572,13 @@ try {
 
     // Short nodata (a new target's prediction pending) shorter than LOST_AFTER_S: nothing changes.
     const historyBefore = await page.locator('.incident-history li').count();
-    await page.locator('#card-close').click();
+    await deselect(page);
     setSnapshot(RUN('run-A-0001'), [{...a, status: 'degraded', reason: 'prediction_pending', prediction_s: null}, b]);
     await page.waitForTimeout(Math.max(3000, (LOST_AFTER_S - 8) * 1000));
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
     check(await page.locator('#card .incident').getAttribute('data-state') === 'active' && await page.locator('.incident-history li').count() === historyBefore
-      && await page.locator('#events-unread').isHidden(), `nodata shorter than ${LOST_AFTER_S} s: still «Активно», no history line, no unread`);
-    check((await page.locator('#card .headline').textContent()).includes('Обновляется') && (await cardText(page)).includes('Причина: прогноз обновляется для новой цели'), 'prediction_pending: quiet «Обновляется», reason in the card');
+      && await page.locator('#events-unread').getAttribute('data-count') === '0', `nodata shorter than ${LOST_AFTER_S} s: still «Активно», no history line, no unread`);
+    check((await forecastText(page)).includes('Прогноза для цели пока нет') && (await cardText(page)).includes('Причина: прогноз обновляется для новой цели'), 'prediction_pending: quiet «Прогноза для цели пока нет», reason in the card (C3)');
     await page.waitForTimeout((LOST_AFTER_S - 4) * 1000);
     check(await page.locator('#card .incident').getAttribute('data-state') === 'monitoring_lost', `nodata for ≥ ${LOST_AFTER_S} s: «Мониторинг потерян»`);
     setSnapshot(RUN('run-A-0001'), [a, b]);
@@ -565,19 +591,22 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900002"]').click();
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
     await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
-    const stops = page.locator('.stops li:not(.stop-group)');
+    const stops = page.locator('.stops li.stop-row');
     const group = role => page.locator(`.stops li[data-group=${role}]`).textContent();
     check((await stops.nth(0).textContent()).includes('06:44') && !(await stops.nth(0).textContent()).includes('→') && (await group('passed')).includes('Пройдено'), 'passed stop: plan time only');
-    check((await stops.nth(1).textContent()).includes('06:52 → 06:54') && (await group('before_target')).includes('по факту, не прогноз') && (await group('before_target')).includes('+1 мин 35 с'), 'before target: plan + cur_dev_s, group «+1 мин 35 с … по факту, не прогноз»');
-    check((await stops.nth(2).textContent()).includes('06:58 → 07:01:20') && (await group('target')).includes('прогноз модели') && (await stops.nth(2).textContent()).includes('+3 мин 20 с'), 'target: plan + prediction_s with seconds, «прогноз модели»');
-    check((await stops.nth(3).textContent()).includes('07:03 → 07:06') && (await group('after_target')).includes('допущение: тот же сдвиг'), 'after target: «допущение: тот же сдвиг»');
+    check((await stops.nth(1).textContent()).includes('06:52 → 06:54') && (await group('before_target')).includes('(факт, не прогноз)') && norm(await group('before_target')).includes('+1 мин 35 с') && (await stops.nth(1).textContent()).includes('+1:35'), 'before target: plan + cur_dev_s «+1:35», group «перенесено текущее опоздание +1 мин 35 с (факт, не прогноз)»');
+    check((await stops.nth(2).textContent()).includes('06:58 → 07:01') && (await group('target')).includes('прогноз модели') && (await stops.nth(2).textContent()).includes('+3:20') && !/\d\d:\d\d:\d\d/.test(await stops.nth(2).textContent()), 'target: plan + prediction_s «+3:20», no seconds in the card (C4), «прогноз модели»');
+    check((await stops.nth(3).textContent()).includes('07:03 → ≈07:06') && (await group('after_target')).includes('допущение') && (await group('after_target')).includes('Не прогноз модели. Показан тот же сдвиг, что у цели.'), 'after target: «≈» time, «допущение», the caveat line (C6)');
     check(!/~|\d+\.\d+ мин/.test(await page.locator('#card').innerText()), 'card: no tilde and no decimal minutes (F-1)');
+    check(await page.locator('.stops li[data-stop=ZN]').count() === 0 && (await page.locator('[data-action=stops-after]').textContent()).includes('Ещё 1'),
+      'after the target: two rows, then «Ещё N» (C6)');
+    await page.locator('[data-action=stops-after]').click();
     check(await page.locator('.stops li[data-stop=Z0]').getAttribute('title') === 'Координаты нет — на карте не показана'
       && await page.locator('.stops li[data-stop=ZN]').getAttribute('title') === 'Координаты нет — на карте не показана'
       && (await page.locator('#route').textContent()).includes('2 остановок без координат на карте не показаны')
       && (await page.locator('#route').textContent()).includes('2 остановок без координат исключены Backend'), 'stops at 0/0 or without coordinates are listed but not drawn, and counted');
-    check(await page.locator('.stop-label').count() === 2 && (await page.locator('.stop-label[data-kind=target]').textContent()).includes('07:01:20')
-      && (await page.locator('.stop-label[data-kind=next]').textContent()).includes('06:54'), 'map labels: target and nearest future stop only');
+    check(await page.locator('.stop-label').count() === 2 && (await page.locator('.stop-label[data-kind=target]').textContent()).includes('ЦЕЛЬ · ост. 3 · 06:58 → 07:01 · +3:20')
+      && (await page.locator('.stop-label[data-kind=next]').textContent()).includes('след. ост. 2 · 06:52 → 06:54 · по факту'), 'map labels: target and nearest future stop only, C5 texts');
     const pane = await page.locator('#map-pane').boundingBox();
     for (const kind of ['target', 'next']) check(inside(await page.locator(`.stop-label[data-kind=${kind}]`).boundingBox(), pane), `map label ${kind} inside the map`);
     await page.locator('#shift-after-target').uncheck();
@@ -628,7 +657,7 @@ try {
     await page.waitForFunction(() => document.getElementById('run-id').dataset.runId === 'run-B-0002', null, {timeout: 8000});
     await page.waitForTimeout(500);
     await page.locator('#events-toggle').click();
-    check(await page.locator('#events-list .event').count() === 0 && await page.locator('#events-unread').isHidden() && await page.locator('#card .card-empty').count() === 1
+    check(await page.locator('#events-list .event').count() === 0 && await page.locator('#events-unread').getAttribute('data-count') === '0' && await page.locator('#card .card-empty').count() === 1
       && await page.locator('.stop-label').count() === 0 && await page.locator('.toast').count() === 0, 'new run_id: events, history, selection and route context cleared');
     await page.locator('#tab-vehicles').click();
     // Outside SOURCE_CLOCK=simulation Backend has no run: said so, no invented run or speed-up.
@@ -655,11 +684,15 @@ try {
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForFunction(() => document.querySelector('#attention button'), null, {timeout: 8000});
     await headerFits(page, 'regression running');
-    const first = (await page.locator('#attention').textContent()).includes('900001') ? '900001' : '900003';
-    await page.locator('#attention button').first().click();
+    check(/^Требуют реакции: 2 · (ближайший срок|просрочено) \d+:\d\d/.test((await page.locator('#attention .attention-text').textContent()).replace(/\s+/g, ' ')),
+      'banner: a summary «Требуют реакции: 2 · ближайший срок M:SS», no IDs, no actions but «Следующее J» (Q1)');
+    await page.locator('#attention [data-action=next-event]').click();
     await page.waitForTimeout(POLL_SPAN_MS);
-    check(await cardTitle(page) === first && !(await page.locator('#attention').textContent()).includes(first)
-      && (await page.locator('#attention button').first().textContent()) === 'Показать', `banner «Показать» opens ${first}; the banner then shows another warning, not the selected one (L-5)`);
+    const first = await cardTitle(page);
+    const openBar = (await page.locator('#attention').innerText()).replace(/\s+/g, ' ');
+    check(['900001', '900003'].includes(first) && openBar.includes(`Открыто: ТС ${first}`) && openBar.includes('ещё 1 требует реакции')
+      && (await page.locator('#attention button').count()) === 1 && (await page.locator('#attention button').textContent()).startsWith('Следующее'),
+    `banner «Следующее J» opens ${first}; the banner then says it is open and how many more wait, never repeats the card's actions (Q1, L-5)`);
     await w13Card(page, 'regression W13', `r:${first}`);
     // L-3: a manual pan stops following; «Следить за X» next to «Все ТС» turns it back on.
     const pane = await page.locator('#map-pane').boundingBox();
@@ -668,8 +701,8 @@ try {
     await page.waitForTimeout(400);
     const followBox = await page.locator('#follow').boundingBox();
     const overviewBox = await page.locator('#overview').boundingBox();
-    check(await page.locator('#follow').isVisible() && (await page.locator('#follow').textContent()) === `Следить за ${first}` && !overlap(followBox, overviewBox),
-      `manual pan: «Следить за ${first}» appears beside «Все ТС» (L-3)`);
+    check(await page.locator('#follow').isVisible() && (await page.locator('#follow').textContent()) === `Следить за ТС ${first}` && !overlap(followBox, overviewBox),
+      `manual pan: «Следить за ТС ${first}» appears beside «Все ТС» (L-3, §L5)`);
     await page.locator('#follow').click();
     await page.waitForTimeout(900);
     check(await page.locator('#follow').isHidden() && inside(await page.locator('.vehicle-label.is-selected').boundingBox(), pane), '«Следить» brings the vehicle back and hides the button (L-3)');
@@ -677,7 +710,7 @@ try {
     await page.locator('#incident-action').click();
     check(await page.locator('#incident-action').textContent() === 'Вернуть в новые' && await page.locator('#card .incident-flow').textContent() === 'В работе'
       && await page.locator('#event-sla').textContent() === 'в работе', '«Взять в работу» → chip and badge «В работе», «Вернуть в новые» offered');
-    await page.locator('#card-close').click();
+    await deselect(page);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     check(!(await page.locator('#attention').textContent()).includes(first), `${first} in work: not back in the banner for two polls (L-5)`);
     // Two new events while 900001's card is open: at most two toasts, none for the open card, none «в норме».
@@ -685,7 +718,7 @@ try {
     setSnapshot(RUN('run-W13-0001'), [{...w, prediction_s: 400}, {...x, prediction_s: 420}, {...calm, prediction_s: 260}, late]);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     const toastTexts = await page.locator('.toast').allInnerTexts();
-    check(toastTexts.length <= 2 && toastTexts.every(t => !t.includes(first) && !t.includes('в норме')) && toastTexts.every(t => /\+\d+ мин( \d+ с)?|по графику/.test(t)),
+    check(toastTexts.length <= 2 && toastTexts.every(t => !t.includes(first) && !t.includes('в норме')) && toastTexts.every(t => /\+\d+ мин( \d+ с)?|по графику/.test(norm(t))),
       `toasts: ≤ 2, none for the open card ${first}, no «в норме», delay as «+N мин M с» (${toastTexts.map(t => t.replace(/\s+/g, ' ')).join(' | ') || 'none'}, E-1)`);
     // L-4: one panel at a time, and an open panel hides the toasts under it.
     await page.locator('#diagnostics summary').click();
@@ -703,7 +736,7 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900005"]').click();
     await page.waitForTimeout(700);
     const lateText = await cardText(page);
-    check(lateText.includes('Цель за пределами окна данных прогона') && !lateText.includes('план 08:51'), 'target after dataset_end: «Цель за пределами окна данных прогона» (C-5)');
+    check(lateText.includes('Прогноза не будет: цель по расписанию позже конца данных прогона.') && !lateText.includes('прогноза нет'), 'target after dataset_end: «Прогноза не будет: цель по расписанию позже конца данных прогона.» (C3)');
     await shot(page, 'regression-w13-target-outside-run-1920.png');
     // H-2: the run completed; every vehicle has lost its prediction (the device is disconnected).
     const ended = [w, x, calm, late].map(v => ({...v, status: 'nodata', reason: 'disconnected', prediction_s: null, connected: false}));
@@ -717,7 +750,7 @@ try {
     check((await page.locator('.vehicle-label').allInnerTexts()).every(t => /^\S+$/.test(t.trim())), 'run completed: map labels are the ID only, no «нет прогноза» (H-2)');
     await shot(page, 'regression-w13-run-completed-1920.png');
     // L-2: without a selection 16 rows fit the list without scrolling.
-    await page.locator('#card-close').click();
+    await deselect(page);
     setSnapshot(RUN('run-W13-0001', {state: 'completed', progress: 1, dataset_time: '2026-01-06T08:30:00'}),
       Array.from({length: 16}, (_, i) => ({...ended[i % ended.length], tr_id: String(910000 + i), lon: center[0] + (i % 4) * 0.01, lat: center[1] + Math.floor(i / 4) * 0.006})));
     await page.waitForFunction(() => document.querySelectorAll('#vehicles .vehicle').length === 16, null, {timeout: 6000});
@@ -756,9 +789,11 @@ try {
     const overlaps = await labelOverlaps(page);
     check(overlaps.length === 0, `symbols: no two map labels intersect (${overlaps.join(', ') || 'none'})`);
     await shot(page, 'regression-8-symbols-selected-1920.png');
-    // M-2: at z11 and z12 no two drawn stops closer than 12 px; at z14 every stop is drawn.
+    // M-2: at z11 and z12 no two drawn stops closer than 12 px; at z14 every stop is drawn. The view is
+    // centred on the dense stretch (~2.8 km, ~520 px at z14) so it fits the 1120 px map column (§L1).
+    const denseMiddle = [(dense[0].lon + dense.at(-1).lon) / 2, (dense[0].lat + dense.at(-1).lat) / 2];
     for (const zoom of [11, 12, 14]) {
-      await page.evaluate(z => window.__map.jumpTo({zoom: z}), zoom);
+      await page.evaluate(([z, c]) => window.__map.jumpTo({zoom: z, center: c}), [zoom, denseMiddle]);
       await page.waitForTimeout(700);
       const {count, minGap} = await page.evaluate(() => {
         const map = window.__map;
@@ -852,7 +887,7 @@ try {
     // The assignment has not started yet.
     await page.locator('#vehicles .vehicle[data-id="900007"]').click();
     await page.waitForTimeout(800);
-    check((await page.locator('#card .headline').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут') && (await page.locator('#card .headline').textContent()).includes('Наряд ещё не начался')
+    check((await forecastText(page)).includes('Цель прогноза не выбрана') && (await forecastText(page)).includes('наряд ещё не начался. Прогноз появится, когда ТС выйдет на маршрут')
       && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут'), 'route_not_started: «прогноз появится, когда ТС выйдет на маршрут» in card and list');
     await page.close();
   }
@@ -917,7 +952,8 @@ try {
       return runs.map(([a, b]) => [a / on.ratio - 20, b / on.ratio - 20]);
     }, [layers, lon, lat]);
     const mid = v => [v.lon + 0.005, v.lat];
-    const selectedBands = await bands(['route-ahead'], ...mid(sel));
+    // T-17: the line is solid up to the target (the turnaround here) and dashed after it, so both parts count.
+    const selectedBands = await bands(['route-ahead', 'route-after'], ...mid(sel));
     check(selectedBands.length >= 2 && selectedBands.some(([a]) => a > 0) && selectedBands.some(([, b]) => b < 0),
       `selected out-and-back: the two directions are two separate bands, one each side of the street (${JSON.stringify(selectedBands.map(b => b.map(Math.round)))})`);
     // Eastbound (outbound) runs south of the street = right of travel; westbound north.
@@ -929,7 +965,7 @@ try {
     await shot(page, 'regression-w14-out-and-back-z15-1920.png');
     // Stops from the route's stops: 3 stops (1 is the target symbol), not 201 line vertices.
     const stops = await page.evaluate(() => new Set(window.__map.queryRenderedFeatures({layers: ['route-stops']}).map(f => f.geometry.coordinates.join(','))).size);
-    check(stops === 2 && (await page.locator('.stops li:not(.stop-group)').count()) === 3,
+    check(stops === 2 && (await page.locator('.stops li.stop-row').count()) === 3,
       `dense road-following line: stops drawn from the route's stops (${stops} on the map + target, 3 in the card), not from its vertices`);
     await page.close();
   }
@@ -951,7 +987,8 @@ try {
     await page.waitForTimeout(POLL_SPAN_MS);
     const order = () => page.locator('#vehicles .vehicle').evaluateAll(rs => rs.map(r => r.dataset.id).join(','));
     const nodataCount = () => page.locator('[data-filter=nodata]').textContent().catch(() => '');
-    const bannerText = () => page.locator('#attention .attention-text, #attention').first().evaluate(b => (b.querySelector('.attention-text') ?? b).textContent);
+    // Q1: the summary's deadline ticks every second; the title («Требуют реакции: N») is what must not change.
+    const bannerText = () => page.locator('#attention').evaluate(b => (b.querySelector('.attention-title') ?? b).textContent);
     const before = {order: await order(), nodata: await nodataCount(), attention: await bannerText()};
     await page.locator('#vehicles .vehicle[data-id="900022"]').click();
     setSnapshot(RUN('run-W14H-0001'), [held(w), held(n), z]);
@@ -959,18 +996,18 @@ try {
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     const rowW = await page.locator('#vehicles .vehicle[data-id="900021"]').textContent();
     const rowN = await page.locator('#vehicles .vehicle[data-id="900022"]').textContent();
-    check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется')
-      && await page.locator('#vehicles .vehicle[data-id="900022"]').getAttribute('data-level') === 'normal' && rowN.includes('+40 с')
+    check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'warning' && rowW.includes('+3:20') && rowW.includes('обновляется')
+      && await page.locator('#vehicles .vehicle[data-id="900022"]').getAttribute('data-level') === 'normal' && rowN.includes('+0:40')
       && !/нет прогноза|устарел/i.test(rowW + rowN), `held forecast: same level and value, «обновляется», no «нет прогноза» (${rowW.replace(/\s+/g, ' ')} | ${rowN.replace(/\s+/g, ' ')})`);
     check(await page.locator('.toast').count() === 0 && (await bannerText()) === before.attention && await nodataCount() === before.nodata,
     'held forecast: no toast, banner and «Нет прогноза» count unchanged');
     check((await order()).split(',').filter(id => id !== '900022').join(',') === before.order.split(',').filter(id => id !== '900022').join(','), 'held forecast: the list does not re-sort');
-    const headline = await page.locator('#card .headline').innerText();
-    check(await page.locator('#card').getAttribute('data-level') === 'normal' && headline.includes('+40 с') && headline.includes('новая цель считается')
+    const headline = norm(await page.locator('#card .forecast').innerText());
+    check(await page.locator('#card').getAttribute('data-level') === 'normal' && headline.includes('+40 с') && headline.includes('Прогноз для неё считается') && headline.includes('К новой цели не относится')
       && await page.locator('#prediction-updating').isVisible() && !/устарел|Нет прогноза/.test(headline)
-      && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели'),
-    `held forecast card: value, target, quiet «обновляется», stops «прогноз модели» (${headline.replace(/\s+/g, ' ')})`);
-    check((await page.locator('.vehicle-label[data-id="900021"]').textContent()) === '900021 · +3 мин', 'held forecast: map label keeps the value');
+      && (await page.locator('.stops li[data-group=target]').textContent()).includes('прошлый результат модели'),
+    `held forecast card: new target «считается», the previous result apart «к новой цели не относится» (C3) (${headline.replace(/\s+/g, ' ')})`);
+    check((await page.locator('.vehicle-label[data-id="900021"]').textContent()) === '900021 · опозд. +3:20', 'held forecast: map label keeps the value (C5)');
     await shot(page, 'regression-w14-held-forecast-1920.png');
     // 'none' (the hold expired, no forecast for the new target yet): only then «нет прогноза».
     setSnapshot(RUN('run-W14H-0001'), [{...held(w), prediction_state: 'none', prediction_s: null, status: 'degraded', reason: 'prediction_pending',
@@ -1016,7 +1053,7 @@ try {
     setSnapshot(RUN('run-W16-0001'), [heldW, g, x, lostBus, noFix]);
     await page.waitForTimeout(3 * POLL_SPAN_MS);
     const rowW = await rowOf('900041').textContent();
-    check(await rowOf('900041').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется') && !/устарел|нет прогноза|пропал/i.test(rowW)
+    check(await rowOf('900041').getAttribute('data-level') === 'warning' && rowW.includes('+3:20') && rowW.includes('обновляется') && !/устарел|нет прогноза|пропал/i.test(rowW)
       && await page.locator('#events-list .event[data-group=needs]').count() === 1 && !(await page.locator('#events-list').textContent()).includes('нет данных'),
     `W16 hold (F-5): status unavailable + «updating» keeps level and value, quiet «обновляется», the event stays open, no «устарел» (${rowW.replace(/\s+/g, ' ')})`);
     // Warming: green, «по графику», «прогноз готовится», not counted as «Без прогноза», never dimmed.
@@ -1035,7 +1072,7 @@ try {
       && await page.locator('.vehicle-label[data-id="900046"]').count() === 0, 'no GPS fix and no coordinates: listed, not drawn, card «объект на карте не показан»');
     await rowOf('900043').click();
     await page.waitForTimeout(500);
-    const headG = await page.locator('#card .headline').innerText();
+    const headG = await page.locator('#forecast').innerText();
     check(await page.locator('#card').getAttribute('data-level') === 'normal' && headG.includes('По графику · прогноз готовится')
       && (await page.locator('#card .level-chip').textContent()) === 'По графику' && !/нет прогноза|устарел|NaN|undefined/i.test(headG),
     `W16 warming card: «По графику · прогноз готовится», chip «По графику» (${headG.replace(/\s+/g, ' ')})`);
@@ -1051,6 +1088,30 @@ try {
     const second = await slaText();
     check(first.length === 1 && first[0] === 'прогон завершён' && second.join() === first.join() && await page.locator('#events-list .sla-bar').count() === 0,
       `W16 run completed (F-6): the reaction SLA stops, badge «прогон завершён», no countdown bar (${first.join()} → ${second.join()})`);
+    await page.close();
+  }
+
+  // T-19 (user report): with many events (5 «Требуют реакции» + 28 «Завершены») the queue scrolls and
+  // no row is squashed below its content height.
+  {
+    const many = Array.from({length: 33}, (_, i) => bus(String(900200 + i), center[0] + (i % 6) * 0.004, center[1] + Math.floor(i / 6) * 0.003, {prediction_s: 200}));
+    setSnapshot(RUN('run-QUEUE-33'), many);
+    state.routes = null;
+    state.route = {};
+    const page = await open({setup, allow: /\/api\/route\//, tab: 'events', context: {viewport: {width: 1366, height: 768}}});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(POLL_SPAN_MS);
+    setSnapshot(RUN('run-QUEUE-33'), many.map((v, i) => (i < 5 ? v : {...v, prediction_s: 30})));
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    const endedToggle = page.locator('[data-action=toggle-ended]');
+    if (await endedToggle.count()) await endedToggle.first().click();
+    await page.waitForTimeout(400);
+    const rows = await page.locator('#events-list .event').evaluateAll(els => els.map(e => ({h: e.getBoundingClientRect().height, s: e.scrollHeight})));
+    const list = await page.locator('#events-list').evaluate(l => ({scroll: l.scrollHeight, client: l.clientHeight}));
+    const squashed = rows.filter(r => r.h < r.s - 1);
+    check(rows.length >= 30 && !squashed.length && list.scroll > list.client,
+      `many events at 1366×768: ${rows.length} rows, none squashed (${squashed.length}), the list scrolls (${list.scroll} > ${list.client})`);
+    await shot(page, 'regression-queue-33-events-1366.png');
     await page.close();
   }
 
@@ -1074,21 +1135,33 @@ try {
     setSnapshot(RUN('run-V2-0001'), [{...a, prediction_s: 330}, {...b, prediction_s: 200}, {...c, prediction_s: 150}, d, e]);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     const needs = page.locator('#events-list .event[data-group=needs]');
-    const toast = page.locator('.toast').first();
-    check(await needs.count() === 3 && (await needs.first().textContent()).includes('на реакцию') && await page.locator('.toast').count() <= 2
-      && (await toast.textContent()).includes('Новое событие') && (await toast.textContent()).includes('на реакцию') && await toast.locator('.toast-take').count() === 1,
-    `3 new events in «Требуют реакции» with SLA; toast «Новое событие · … на реакцию» with «Взять» (${(await toast.textContent()).replace(/\s+/g, ' ')})`);
-    const bar = await page.locator('#attention').textContent();
-    check(bar.includes('Требует реакции') && bar.includes('ТС 900031') && bar.includes('на реакцию') && bar.includes('ещё 2 →')
-      && await page.locator('#attention').getAttribute('data-level') === 'severe', `attention bar: the most urgent event, SLA, «Показать», «Взять в работу», «ещё 2 →» (${bar.replace(/\s+/g, ' ')})`);
-    // Take from the bar: the event moves to «В работе», the bar moves on.
-    await page.locator('#attention [data-action=take-event]').click();
+    check(await needs.count() === 3 && (await needs.first().textContent()).includes('реакция') && (await needs.first().locator('.sla').getAttribute('title')).includes('реальное время')
+      && await page.locator('.toast').count() === 0,
+    '3 new events in «Требуют реакции» with «реакция M:SS» (real time); no toast while their rows are visible in the queue (Q2, Q7)');
+    const bar = (await page.locator('#attention').innerText()).replace(/\s+/g, ' ');
+    check(bar.startsWith('Требуют реакции: 3 ·') && !bar.includes('900031') && await page.locator('#attention [data-action=take-event]').count() === 0
+      && await page.locator('#attention [data-action=next-event]').count() === 1 && await page.locator('#attention').getAttribute('data-level') === 'severe',
+    `attention bar: a summary with «Следующее J», no «Взять в работу» (Q1) (${bar})`);
+    // «Следующее» opens the most urgent event; W takes it: the row keeps its place with the badge «в работе» (Q6).
+    const rowsBefore = await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.id));
+    await page.locator('#attention [data-action=next-event]').click();
+    await page.waitForTimeout(500);
+    check(await cardTitle(page) === '900031', '«Следующее J» opens the most urgent event');
+    await page.keyboard.press('KeyW');
     await page.waitForTimeout(300);
-    check(await page.locator('#events-list .event[data-group=work]').count() === 1 && !(await page.locator('#attention').textContent()).includes('ТС 900031'),
-      'attention «Взять в работу»: the event is «В работе», the bar shows the next one');
-    // J opens the first event of the queue order; S snoozes it 5 min (data time).
+    const pinned = page.locator('#events-list .event.is-current');
+    check(JSON.stringify(await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.id))) === JSON.stringify(rowsBefore)
+      && await pinned.getAttribute('data-group') === 'work' && (await pinned.locator('.sla').textContent()) === 'в работе' && await pinned.getAttribute('aria-current') === 'true',
+    'W on the open event: its row keeps its place, badge «в работе» (Q6)');
+    // Deselect (§L4: the first Esc closes the card, the second clears the selection): the row moves to «В работе»; the bar shows the others.
     await page.locator('body').click({position: {x: 700, y: 600}}).catch(() => {});
     await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    check(await page.locator('#events-list .event[data-group=work]').count() === 1 && !(await page.locator('#attention').textContent()).includes('900031')
+      && (await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.group))).join() === 'needs,needs,work',
+    'after deselect the taken event regroups to «В работе»; the bar shows the rest');
+    // J opens the first event of the queue order; S snoozes it 5 min (data time).
     await page.keyboard.press('KeyJ');
     await page.waitForTimeout(500);
     const jId = await cardTitle(page);
@@ -1096,13 +1169,15 @@ try {
     await page.keyboard.press('KeyS');
     await page.waitForTimeout(300);
     const snoozed = page.locator('#events-list .event[data-group=snoozed]');
-    check(await snoozed.count() === 1 && /напомнить \d\d:\d\d:\d\d/.test(await snoozed.textContent()) && (await incidentText(page)).includes('Отложено на 5 мин'),
-      'S: snoozed 5 min, «напомнить HH:MM:SS», history «Отложено на 5 мин»');
+    check(await snoozed.count() === 1 && /напомнить в \d\d:\d\d/.test(await snoozed.textContent()) && (await snoozed.locator('.sla').getAttribute('title')).includes('время данных')
+      && (await page.locator('#event-sla-clock').textContent()) === 'время данных' && (await incidentText(page)).includes('Отложено на 5 мин данных'),
+    'S: snoozed 5 data min, «напомнить в HH:MM» labelled «время данных», history «Отложено на 5 мин данных» (Q7)');
     // Reaction steps and a close with a reason on the other event.
     const other = jId === '900032' ? '900033' : '900032';
     await page.locator(`#events-list .event[data-group=needs]`).first().click();
     await page.waitForTimeout(500);
     check(await cardTitle(page) === other && (await page.locator('#steps-progress').textContent()) === '0/3', `the event card has «Шаги реакции 0/3» (${other})`);
+    await openSection(page, 'steps');
     await page.locator('#steps .step[data-step=driver] input').check();
     await page.waitForTimeout(200);
     check((await page.locator('#steps-progress').textContent()) === '1/3' && (await incidentText(page)).includes('Шаг: Связаться с водителем'), 'a step ticks and goes to the history');
@@ -1112,7 +1187,11 @@ try {
     await page.locator('#close-menu button', {hasText: 'Пробка — повлиять нельзя'}).click();
     await page.waitForTimeout(300);
     check((await incidentText(page)).includes('Закрыто: Пробка — повлиять нельзя') && await page.locator('#events-list .event[data-group=needs]').count() === 0
-      && (await page.locator('#events-list').textContent()).includes('Завершены'), 'close with a reason: history «Закрыто: …», the event leaves «Требуют реакции» for «Завершены»');
+      && await page.locator(`#events-list .event.is-current[data-group=ended]`).count() === 1, 'close with a reason: history «Закрыто: …», the open row keeps its place until deselected (Q6)');
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    check((await page.locator('#events-list').textContent()).includes('Завершены'), 'after deselect the closed event is in «Завершены»');
     await shot(page, 'regression-v2-queue-card-1920.png');
     // Bulk: select all in «В работе» + «Отложены»? — select the snoozed and the work one, close both.
     for (const item of await page.locator('#events-list .event[data-group=work] .event-check, #events-list .event[data-group=snoozed] .event-check').all()) await item.check();
@@ -1161,7 +1240,7 @@ try {
       && !(await page.locator('.vehicle-label[data-id="900035"]').evaluate(l => l.classList.contains('is-gps-marked'))),
     'GPS unmark: the vehicle is back to its forecast, no violet mark left');
     // «Приглушить ТС без наряда и без данных»: labels of vehicles without a forecast hidden; off shows them.
-    await page.locator('#card-close').click();
+    await deselect(page);
     const dimmedLabel = () => page.locator('.vehicle-label[data-id="900034"]').evaluate(l => l.classList.contains('is-dimmed'));
     const dimOn = await dimmedLabel();
     await page.locator('#dim-nodata').click();
@@ -1170,7 +1249,22 @@ try {
     const dimTool = await page.locator('#dim-nodata').evaluate(b => ({text: b.textContent.trim(), title: b.title}));
     check(dimTool.text === 'Приглушить ТС без наряда и без данных' && ['без наряда', 'вне окна наряда', 'сбоем GPS', 'Не приглушаются', 'GPS неисправен'].every(w => dimTool.title.includes(w)),
       `W16: the dimming toggle says whom it dims, the tooltip lists them and the exceptions («${dimTool.text}»)`);
-    check((await page.locator('#hotkeys').textContent()).includes('J / K — следующее / предыдущее событие'), 'hotkeys hint shown');
+    await page.keyboard.press('?');
+    check(await page.locator('#hotkeys').count() === 0 && await page.locator('#hotkeys-help').evaluate(d => d.open)
+      && (await page.locator('#hotkeys-help dl').innerText()).includes('следующее / предыдущее событие'), 'no hotkeys strip over the map; «?» opens the hotkeys popover (Q8)');
+    await page.keyboard.press('Escape');
+    // Q5: «/» focuses «Поиск ТС по номеру»; a match opens the card and the tab stays.
+    await page.locator('#tab-events').click();
+    await page.keyboard.press('/');
+    await page.keyboard.type('90003');
+    await page.waitForTimeout(200);
+    const options = await page.locator('#vehicle-search-results [role=option]').allInnerTexts();
+    await page.keyboard.type('2');
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(500);
+    check(options.length === 5 && options.every(t => t.includes('90003')) && await cardTitle(page) === '900032' && await page.locator('#events-panel').isVisible()
+      && await page.locator('#vehicle-search-results').isHidden(), `«/» search: dropdown of matches, the chosen one opens its card, the queue stays (Q5) (${options.length})`);
     // The queue of this run survives a reload of the page (sessionStorage).
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
@@ -1191,9 +1285,10 @@ try {
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForSelector('#attention button', {timeout: 8000});
     await page.locator('#attention button').first().click();
+    await openSection(page, 'card-history');
     await page.locator('#contact-open').click();
     const draft = await page.locator('#contact-text').inputValue();
-    check(draft.includes('900001') && draft.includes('+3 мин 20 с') && await page.locator('#contact-text').getAttribute('readonly') !== null
+    check(draft.includes('900001') && norm(draft).includes('+3 мин 20 с') && await page.locator('#contact-text').getAttribute('readonly') !== null
       && (await page.locator('.contact').textContent()).includes('Прототип · отправка не подключена'), `prototype (${label}): marked preview with a prepared text`);
     await page.locator('#contact-copy').click();
     await page.waitForSelector('#contact-result:not([data-result=none])', {timeout: 3000});

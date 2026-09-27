@@ -3,15 +3,17 @@ import {PMTiles, Protocol} from 'pmtiles';
 import {NOTE_MAX, assess, countByFilter, findIncident, incidentCounts, incidentForVehicle, isHeld, visibleRows} from './incidents.js';
 import * as Q from './event-queue.js';
 import {patchChildren, patchText} from './dom.js';
-import {placeLabels} from './map-labels.js';
+import {FAR_OFF_ROUTE_M, FRAME_MAX_ZOOM, edgeAnchor, framePadding} from './camera-frame.js';
+import {forecastView, heldForNewTarget} from './forecast.js';
+import {nextLabelText, placeLabels, targetLabelText, vehicleLabelText} from './map-labels.js';
 import {drawSymbol, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
 import {reasonText} from './reasons.js';
-import {BASIS, coordOk, delayText, durationText, labelledStops, offsetText, planText, shiftedText,
-  stopRows, undrawnCount} from './route-context.js';
+import {BASIS, ON_TIME_S, compactDelay, coordOk, delayText, durationText, labelledStops, offsetText, planText, shiftedText,
+  stopNumbers, stopRows, undrawnCount} from './route-context.js';
 import {createRouteLayers} from './route-layers.js';
 import {NO_ROUTE, defaultSettings, inScope, parseSettings, routeChoices, routeOf, scopeSummary, setAll, toggleRoute,
   watches} from './route-scope.js';
-import {createRunTracker, dataTimeText, runStateText, shortRunId, sourceText, speedupText} from './run.js';
+import {createRunTracker, dataClockView, runStateText, shortRunId, snoozeBlockedText, snoozeOptionText, sourceText, speedupText} from './run.js';
 import {createTransportLayer} from './transport-layer.js';
 import './style.css';
 
@@ -114,6 +116,14 @@ const loadPref = (key, fallback) => { try { return sessionStorage.getItem(key) ?
 const savePref = (key, value) => { try { sessionStorage.setItem(key, value); } catch { /* private mode */ } };
 let sideTab = loadPref('t7-side-tab', 'events') === 'vehicles' ? 'vehicles' : 'events';
 let endedOpen = false; // «Завершены» expanded
+// Queue filter chip (Q6), a per-viewer convenience like the tab.
+let queueFilter = Q.QUEUE_FILTERS.some(f => f.key === loadPref('t7-queue-filter', 'all')) ? loadPref('t7-queue-filter', 'all') : 'all';
+// The open event keeps its row while it stays open (Q6): {id, group, index} from Q.pinFor, taken
+// when the event is opened and dropped when another event opens or the selection is cleared.
+let queuePin = null;
+// «Поиск ТС по номеру (/)» in the right column's header (Q5): what is typed and the highlighted match.
+let searchText = '';
+let searchActive = 0;
 let cardMenu = null; // null | 'snooze' | 'close'
 let bulkMenu = null; // null | 'snooze' | 'close'
 let dimNoData = true; // «Приглушить ТС без наряда и без данных» (the GPS-marked ones stay violet, never dimmed)
@@ -131,6 +141,10 @@ let follow = false; // the camera keeps the selected vehicle and its target in v
 let lastFollowAt = 0;
 let techOpen = false; // «Технические подробности» in the card, as the dispatcher left it
 let cardFor; // the vehicle the card's DOM was built for; another vehicle gets a fresh card
+// The card of the selection is shown (§L4): × and the first Esc hide it and keep the selection,
+// its ring on the map and its queue row; choosing again shows it; the second Esc deselects.
+let cardOpen = false;
+let framedTarget = null; // the target the camera last framed; a new target reframes while following
 // Planned routes of all vehicles for the overview (consumer /api/routes), refreshed every ROUTES_MS.
 let routesFeed = {status: 'idle', data: null, at: 0, inFlight: false};
 const ROUTES_MS = 10000;
@@ -162,8 +176,9 @@ const slaWall = () => {
 };
 const RUN_ENDED_BADGE = {text: 'прогон завершён', tone: 'ended'};
 const runEndedView = view => (view?.sla && currentRun()?.state === 'completed' ? {...view, sla: null, badge: RUN_ENDED_BADGE} : view);
-const queueGroups = () => {
-  const all = Q.groups(queue, slaWall(), shown);
+// The queue as displayed (Q6 pin, filter chips), limited to the watched routes (T-14), with frozen SLAs after the run.
+const queueView = () => {
+  const all = Q.queueLayout(queue, slaWall(), {pin: queuePin, filter: queueFilter}, shown);
   for (const key of ['needs', 'work', 'snoozed', 'ended']) all[key] = all[key].map(runEndedView);
   return all;
 };
@@ -180,7 +195,19 @@ const shownRoute = () => (route.data && route.id === selected && selected
 // value only while the row is a current `normal` prediction (the same rule as the headline), the
 // fact only while Backend answers.
 const usability = v => ({modelUsable: Boolean(v) && assess(v, isFresh()).level !== 'nodata' && !assess(v, isFresh()).warming, factUsable: Boolean(v) && isFresh()});
-const routeRows = data => (data ? stopRows(data, {shiftAfterTarget, ...usability(findRow(selected))}) : []);
+// While a forecast is held for the previous target, nothing after it is shifted by that value: the
+// plan's new target lies there, and the old result does not apply to it (C3).
+const routeRows = data => {
+  const v = findRow(selected);
+  return data ? stopRows(data, {shiftAfterTarget: shiftAfterTarget && !(v && heldForNewTarget(v)), ...usability(v)}) : [];
+};
+// «ост. N» of the selected vehicle's stops (route-context.js stopNumbers). The target number only
+// while the route's target is the row's target (the route may lag one snapshot behind).
+function numbersFor(v, rows) {
+  const numbers = stopNumbers(rows, {plannedTargetId: heldForNewTarget(v) ? v.planned_target_stop_id : null});
+  const target = rows.find(r => r.role === 'target');
+  return {...numbers, target: target && target.stop_id === String(v.target_stop_id) ? numbers.target : null};
+}
 
 // ---- Map: MapLibre base, locked top-down view, local PMTiles ------------------------------
 maplibregl.setWorkerUrl('/static/map-worker.js');
@@ -285,6 +312,7 @@ if (map) {
     if (pendingOverview && snapshotRows().length) overview(false);
   });
   map.on('move', layoutLabels);
+  map.on('move', renderEdgeArrow);
   // A pan or zoom by the dispatcher (an event with a DOM origin) stops following the selection.
   map.on('movestart', event => { if (event.originalEvent && follow) { follow = false; followSelected(); } });
   map.on('zoomend', () => { routeLayers.rethin(); layoutLabels(); });
@@ -390,6 +418,7 @@ function renderMapObjects() {
   renderStopLabels(drawable && chosen ? chosen : null, target);
   $('legend-route').hidden = !chosen; // the route legend only describes a selected vehicle
   layoutLabels();
+  renderEdgeArrow();
 }
 
 // Time labels on the map: the target (from the snapshot row, the same value as the card headline)
@@ -412,15 +441,18 @@ function stopLabel(kind, lngLat, content) {
 // Without a target the nearest planned stop still gets its plan time (labelledStops).
 function renderStopLabels(vehicle, target) {
   if (!vehicle) { stopLabel('target', null); stopLabel('next', null); return; }
+  const rows = routeRows(shownRoute());
   if (target) {
     const assessment = assess(vehicle, isFresh());
-    const expected = shiftedText(vehicle.target_time_begin, assessment.level !== 'nodata' ? vehicle.prediction_s : null, {seconds: true});
-    stopLabel('target', target, `Цель · план ${planText(vehicle.target_time_begin) ?? '?'}${expected ? ` → ${expected} · ${BASIS.model}`
-      : assessment.warming ? ' · прогноз готовится' : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`);
+    const current = assessment.level !== 'nodata';
+    const end = currentRun()?.dataset_end;
+    stopLabel('target', target, targetLabelText({no: numbersFor(vehicle, rows).target, plan: planText(vehicle.target_time_begin),
+      expected: current ? shiftedText(vehicle.target_time_begin, vehicle.prediction_s) : null, delay: vehicle.prediction_s,
+      held: current && heldForNewTarget(vehicle), stale: assessment.hasPrediction, warming: assessment.warming,
+      late: Boolean(end && vehicle.target_time_begin && String(vehicle.target_time_begin) > String(end))}));
   } else stopLabel('target', null);
-  const next = labelledStops(routeRows(shownRoute())).next;
-  stopLabel('next', next ? [next.lon, next.lat] : null,
-    next ? `план ${next.plan}${next.expected ? ` → ${next.expected} · по факту` : ''}` : '');
+  const next = labelledStops(rows).next;
+  stopLabel('next', next ? [next.lon, next.lat] : null, next ? nextLabelText(next) : '');
 }
 
 // Editable DOM labels for the vehicles; the dot itself stays in the Three.js layer.
@@ -451,10 +483,10 @@ function renderLabels(rows) {
     // Without a current prediction the label is the ID only (M-3, H-2): a map full of «нет прогноза»
     // reads as a failure and hides the warnings. The reason stays in the tooltip, list and card.
     const nodata = assessment.level === 'nodata';
-    element.textContent = nodata ? id : `${id} · ${shortValue(vehicle, assessment, {short: true})}`;
+    element.textContent = vehicleLabelText(id, {level: assessment.level, prediction_s: vehicle.prediction_s, warming: assessment.warming});
     element.classList.toggle('is-dimmed', nodata && dimNoData && id !== selected && !gpsMarks.has(id));
     element.classList.toggle('is-gps-marked', gpsMarks.has(id));
-    element.title = nodata ? `${id} · ${runOver(currentRun()) ? 'прогон завершён' : shortValue(vehicle, assessment, {short: true})}` : '';
+    element.title = nodata ? `${id} · ${runOver(currentRun()) ? 'прогон завершён' : shortValue(vehicle, assessment)}` : '';
     marker.setLngLat([Number(vehicle.lon), Number(vehicle.lat)]);
   }
   for (const [id, marker] of labels) if (!keep.has(id)) { marker.remove(); labels.delete(id); }
@@ -469,7 +501,7 @@ function layoutLabels() {
   if (!map || !(labels.size || stopLabels.size)) return;
   const canvas = map.getCanvas();
   const origin = canvas.getBoundingClientRect();
-  const obstacles = [...document.querySelectorAll('#map-pane .legend, #map-pane .attention:not([hidden]), #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right')]
+  const obstacles = [...document.querySelectorAll(OVERLAYS)]
     .map(el => el.getBoundingClientRect())
     .filter(r => r.width && r.height)
     .map(r => ({x: r.x - origin.x, y: r.y - origin.y, width: r.width, height: r.height}));
@@ -526,8 +558,10 @@ function overview(animate = true) {
 }
 
 // Show the selected vehicle together with its target, so the forecast's stop is on screen.
-// The map area not covered by panels drawn over it (banner, legend, buttons, toasts), in pane pixels.
-const OVERLAYS = '#map-pane .attention:not([hidden]), #map-pane .legend, #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right';
+// The map area not covered by panels drawn over it (banner, legend, buttons, toasts, and the card
+// panel over the map's right edge below 1600 px), in pane pixels. A card column beside the map lies
+// outside the pane and covers nothing.
+const OVERLAYS = '#map-pane .attention:not([hidden]), #map-pane .legend, #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right, #card';
 function overlayRects() {
   const pane = $('map-pane').getBoundingClientRect();
   return [...document.querySelectorAll(OVERLAYS)].map(e => e.getBoundingClientRect()).filter(r => r.width && r.height)
@@ -539,34 +573,100 @@ function inSafeZone(point, margin = 16) {
   return !overlayRects().some(r => point.x > r.x - margin && point.x < r.x + r.width + margin && point.y > r.y - margin && point.y < r.y + r.height + margin);
 }
 
-// Show the selected vehicle together with its target; the padding clears the panels over the map.
+// Frame of the selected vehicle (§L5): the vehicle, its target and the next stop after the vehicle,
+// with the padding of camera-frame.js measured from the panels over the map. A vehicle far off its
+// route (§L6) stays out of the frame (the target and its stretch of route), shown by the edge arrow.
+const farOffRoute = v => v.off_route === true && Number(v.route_offset_m) > FAR_OFF_ROUTE_M;
+function framePoints(v) {
+  const next = labelledStops(routeRows(shownRoute())).next;
+  const route = [targetPoint(v), next ? [next.lon, next.lat] : null].filter(Boolean);
+  return farOffRoute(v) && route.length ? route : [[Number(v.lon), Number(v.lat)], ...route];
+}
+const shownRect = element => { const r = element && !element.hidden ? element.getBoundingClientRect() : null; return r?.width && r.height ? r : null; };
 function focusSelected() {
   const v = findRow(selected);
   if (!map || mapStatus !== 'ready' || !v || !locationOk(v)) return;
   lastFollowAt = performance.now();
-  const here = [Number(v.lon), Number(v.lat)];
+  framedTarget = v.target_stop_id ?? null;
+  const points = framePoints(v);
   const target = targetPoint(v);
-  const pane = $('map-pane').getBoundingClientRect();
-  const attention = $('attention').hidden ? null : $('attention').getBoundingClientRect();
-  const legend = document.querySelector('#map-pane .legend')?.getBoundingClientRect();
-  const padding = {top: Math.max(60, attention ? attention.bottom - pane.top + 40 : 60),
-    bottom: Math.max(60, legend ? pane.bottom - legend.top + 40 : 60), left: 100, right: 100};
-  if (!target) { map.easeTo({center: here, zoom: Math.max(13, map.getZoom()), padding, duration: 600}); return; }
-  const bounds = new maplibregl.LngLatBounds(here, here).extend(target);
-  map.fitBounds(bounds, {padding, maxZoom: 15, duration: 600});
+  const padding = framePadding({pane: $('map-pane').getBoundingClientRect(), attention: shownRect($('attention')),
+    legend: shownRect(document.querySelector('#map-pane .legend')), overlay: shownRect($('card')),
+    targetEast: Boolean(target) && points.every(p => p[0] <= target[0]),
+    targetLabelWidth: stopLabels.get('target')?.getElement().offsetWidth || undefined});
+  if (points.length < 2) { map.easeTo({center: points[0], zoom: Math.max(13, map.getZoom()), padding, duration: 600}); return; }
+  const bounds = points.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(points[0], points[0]));
+  map.fitBounds(bounds, {padding, maxZoom: FRAME_MAX_ZOOM, duration: 600});
 }
 
-// Follow the selected vehicle (L-3): when it or its target leaves the safe zone, the camera eases
-// back, at most every FOLLOW_EVERY_MS. A manual pan or zoom stops following; «Следить за …» resumes.
+// Follow the selected vehicle (L-3): when it or its target leaves the safe zone, or the target
+// changes, the camera eases back, at most every FOLLOW_EVERY_MS. A manual pan or zoom stops
+// following; «Следить за ТС …» resumes.
 const FOLLOW_EVERY_MS = 3000;
 function followSelected() {
   const v = findRow(selected);
   $('follow').hidden = !(v && locationOk(v) && !follow && mapStatus === 'ready');
-  $('follow').textContent = v ? `Следить за ${v.tr_id}` : '';
+  $('follow').textContent = v ? `Следить за ТС ${v.tr_id}` : '';
   if (!follow || !v || !locationOk(v) || mapStatus !== 'ready' || map.isMoving()) return;
   if (performance.now() - lastFollowAt < FOLLOW_EVERY_MS) return;
-  const points = [[Number(v.lon), Number(v.lat)], targetPoint(v)].filter(Boolean).map(p => map.project(p));
-  if (points.every(p => inSafeZone(p))) return;
+  const retarget = (v.target_stop_id ?? null) !== framedTarget;
+  const watched = farOffRoute(v) && targetPoint(v) ? [targetPoint(v)] : [[Number(v.lon), Number(v.lat)], targetPoint(v)];
+  const points = watched.filter(Boolean).map(p => map.project(p));
+  if (!retarget && points.every(p => inSafeZone(p))) return;
+  focusSelected();
+}
+
+// §L6: the far off-route selected vehicle as an arrow at the edge of the visible map with its
+// distance from the route; a click shows the vehicle itself (and stops following).
+function visibleZone() {
+  const pane = $('map-pane').getBoundingClientRect();
+  const attention = shownRect($('attention'));
+  const legend = shownRect(document.querySelector('#map-pane .legend'));
+  const card = shownRect($('card'));
+  const covered = card ? Math.max(0, pane.right - Math.max(pane.left, card.left)) : 0;
+  return {left: 8, top: (attention ? attention.bottom - pane.top : 0) + 8,
+    right: pane.width - covered - 8, bottom: (legend ? legend.top - pane.top : pane.height) - 8};
+}
+function renderEdgeArrow() {
+  const v = findRow(selected);
+  let arrow = $('edge-arrow');
+  if (!(map && mapStatus === 'ready' && v && locationOk(v) && farOffRoute(v))) { if (arrow) arrow.hidden = true; return; }
+  if (!arrow) {
+    arrow = el('button', {type: 'button', id: 'edge-arrow', className: 'edge-arrow'});
+    arrow.addEventListener('click', () => {
+      const row = findRow(selected);
+      if (!row || !locationOk(row)) return;
+      follow = false;
+      map.easeTo({center: [Number(row.lon), Number(row.lat)], duration: 600});
+      followSelected();
+    });
+    $('map-pane').append(arrow);
+  }
+  const label = `ТС ${v.tr_id} · ${offsetText(v.route_offset_m) ?? ''}`;
+  if (arrow.dataset.label !== label) {
+    arrow.dataset.label = label;
+    arrow.title = `ТС ${v.tr_id} вне маршрута ${offsetText(v.route_offset_m) ?? ''} — показать на карте`;
+    arrow.replaceChildren(label, el('i', {'aria-hidden': 'true'}, '→'));
+  }
+  arrow.hidden = false;
+  const at = edgeAnchor(visibleZone(), map.project([Number(v.lon), Number(v.lat)]), {width: arrow.offsetWidth, height: arrow.offsetHeight});
+  if (!at) { arrow.hidden = true; return; }
+  arrow.style.left = `${Math.round(at.x - arrow.offsetWidth / 2)}px`;
+  arrow.style.top = `${Math.round(at.y - arrow.offsetHeight / 2)}px`;
+  arrow.lastChild.style.transform = `rotate(${Math.round(at.angle)}deg)`;
+}
+
+// The route arrives after the selection: its next stop joins the frame once, if it is not in view.
+// While the selection's own camera move runs, the check waits for it to end instead of restarting it.
+function frameRouteArrival() {
+  const v = findRow(selected);
+  if (!follow || !v || !locationOk(v) || !map || mapStatus !== 'ready') return;
+  if (map.isMoving()) {
+    const id = selected;
+    map.once('moveend', () => { if (selected === id) frameRouteArrival(); });
+    return;
+  }
+  if (framePoints(v).map(p => map.project(p)).every(p => inSafeZone(p))) return;
   focusSelected();
 }
 
@@ -575,15 +675,29 @@ function choose(id, focus) {
   const next = id == null ? null : String(id);
   const changed = next !== selected;
   selected = next;
-  // Choosing an object is reading its event; it is not taking it into work.
+  cardOpen = Boolean(next); // choosing, also the same vehicle again, shows its card
+  // Choosing an object is reading its event (and hiding its toast); it is not taking it into work.
   const incident = selected ? incidentForVehicle(store(), selected) : null;
-  if (incident?.unread) { setQueue(Q.markRead(queue, incident.id)); }
+  if (incident) setQueue(Q.markOpened(queue, incident.id));
   if (changed) { clearRoute(); if (selected) loadRoute(); follow = Boolean(selected); cardMenu = null; }
   renderEvents(); renderAttention(); renderToasts();
   renderList();
   renderCard();
   renderMapObjects();
+  if (changed) revealCurrentRow();
   if (focus) focusSelected();
+}
+
+// × and the first Esc (§L4): the card goes, the selection stays. Below 1600 px the panel leaves the
+// map uncovered; the map itself keeps its size, pan and zoom.
+function closeCard() {
+  if (!cardOpen) return;
+  cardOpen = false;
+  cardMenu = null;
+  renderCard();
+  renderAttention(); // «Открыто: ТС …» only while the card is open
+  layoutLabels();
+  renderEdgeArrow();
 }
 
 function setHovered(id) {
@@ -623,11 +737,13 @@ async function loadRoute() {
     next = {status: 'offline', reason: String(error.message || error)};
   }
   if (token !== routeToken || id !== selected) return; // the selection changed meanwhile
+  const firstForSelection = !route.data;
   route = {...route, id, status: next.status, reason: next.reason ?? null, inFlight: false,
     data: next.status === 'ok' ? next.data : next.status === 'offline' ? route.data : null};
   renderRouteLayers();
   renderMapObjects();
   renderCard();
+  if (firstForSelection && route.data) frameRouteArrival();
 }
 
 // Called after each snapshot: the route follows the selected vehicle's new frames, and at once
@@ -640,12 +756,12 @@ function refreshRoute() {
 }
 
 // ---- Panels ------------------------------------------------------------------------------
-// The delay of a row: full in the list, whole minutes on map labels (F-1).
-function shortValue(vehicle, assessment, {short = false} = {}) {
+// The delay of a row in the compact form «+3:20» (C4), the same as the queue and the map labels.
+function shortValue(vehicle, assessment) {
   if (assessment.warming) return 'по графику'; // W16: on its route, the first forecast is being computed
-  if (assessment.level !== 'nodata') return delayText(vehicle.prediction_s, {short});
+  if (assessment.level !== 'nodata') return compactDelay(vehicle.prediction_s);
   if (runOver(currentRun())) return 'прогон завершён';
-  return assessment.hasPrediction ? `${delayText(vehicle.prediction_s, {short})} · устарел` : '—';
+  return assessment.hasPrediction ? `${compactDelay(vehicle.prediction_s)} · устарел` : '—';
 }
 
 const capital = value => value ? value[0].toUpperCase() + value.slice(1) : value;
@@ -740,36 +856,70 @@ function field(dl, label, value, hint) {
   return dd;
 }
 
-// «1 мин 35 с (факт)»; a negative value is running ahead of the timetable.
-function currentDelayText(seconds) {
-  if (seconds == null || !Number.isFinite(Number(seconds))) return 'неизвестно';
-  const value = Math.round(Number(seconds));
-  if (value === 0) return 'по графику (факт)';
-  return value > 0 ? `${durationText(value)} (факт)` : `опережение ${durationText(value)} (факт)`;
-}
-
 const runOver = run => run?.state === 'completed';
 
-// Card order (UI review L-1): a sticky top (ID, level, the forecast and its target), then the stops,
-// facts, the event, and «Технические подробности» collapsed. Only the card scrolls.
+// Card details the dispatcher opened or closed (by element id), kept across polls: the patch
+// copies attributes from the fresh node, so `open` must come from here. «Шаги реакции» per event:
+// open by default once the event is in work (C1), until the dispatcher closes it.
+const openDetails = new Set();
+const stepsPref = new Map(); // event id → open
+let passedOpen = false; // «ещё N пройденных» expanded (C6), per card
+let afterOpen = false; // «Ещё N» after the target expanded, per card
+let revealedFor = null; // the vehicle whose target row was scrolled into view
+
+// The forecast block (C2–C3): texts from forecast.js, one state per row.
+function forecastBlock(v, rows) {
+  const run = currentRun();
+  const f = forecastView(v, {fresh: isFresh(), runOver: runOver(run), datasetEnd: run?.dataset_end ?? null,
+    dataTime: sourceClock() ?? run?.dataset_time ?? null, numbers: numbersFor(v, rows), targetOnMap: Boolean(targetPoint(v)), speedup: run?.speedup});
+  const help = el('details', {className: 'help', id: 'forecast-help', open: openDetails.has('forecast-help')},
+    el('summary', {'aria-label': 'Что такое цель прогноза', title: 'Что такое цель прогноза'}, 'ⓘ'), el('p', {}, f.help));
+  const box = el('section', {className: 'forecast', id: 'forecast', 'data-key': 'forecast', 'aria-label': 'Прогноз опоздания на целевой остановке',
+    dataset: {state: f.state, tone: f.tone}}, el('div', {className: 'forecast-head'}, el('b', {}, f.head), help));
+  if (f.rows.length) {
+    box.append(el('dl', {className: 'forecast-rows'}, ...f.rows.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)])));
+  }
+  if (f.big) box.append(el('div', {className: 'forecast-big', dataset: {size: f.big.size}}, f.big.label ? el('span', {}, f.big.label) : null, el('strong', {}, f.big.value)));
+  const fact = el('p', {className: 'forecast-fact'}, f.fact);
+  const lines = f.lines.map(line => el('p', {className: `forecast-line${line.kind === 'updating' ? ' pulse' : ''}`, dataset: {kind: line.kind},
+    ...(line.kind === 'updating' ? {id: 'prediction-updating', title: f.updating} : {})}, line.text));
+  box.append(...(f.tone === 'live' ? [fact, ...lines] : [...lines, fact]));
+  return box;
+}
+
+// The card column while no card is open (§L1): the shift in numbers and how to open an event.
+function shiftSummary() {
+  if (!snapshotRows().length) return [el('p', {className: 'card-empty'}, 'Карточка появится, когда в снимке будут машины прогона.')];
+  const {needs, counts} = Q.groups(queue, slaWall(), shown);
+  const oldest = needs.reduce((max, view) => Math.max(max, queue.sla_s - (view.sla?.left_s ?? queue.sla_s)), 0);
+  const rows = [['Требуют реакции', String(counts.needs), counts.needs ? 'needs' : null],
+    counts.needs ? ['Самое старое ждёт', Q.dur(oldest), null] : null,
+    ['В работе', String(counts.work), null],
+    counts.snoozed ? ['Отложены', String(counts.snoozed), null] : null].filter(Boolean);
+  const hint = selected && findRow(selected)
+    ? `ТС ${selected} выбрано на карте. Клик по его строке вернёт карточку; Esc — снять выбор.`
+    : counts.open ? 'J — следующее событие. Или выберите ТС на карте, в очереди или в списке.'
+    : 'Выберите ТС на карте, в очереди или в списке — здесь откроется его карточка.';
+  return [el('section', {className: 'shift', 'data-key': 'shift', 'aria-label': 'Сводка смены'},
+    el('h3', {}, 'Сводка смены'),
+    el('dl', {}, ...rows.flatMap(([label, value, tone]) => [el('dt', {}, label), el('dd', {dataset: tone ? {tone} : {}}, value)])),
+    el('p', {className: 'card-empty'}, hint))];
+}
+
+// Card order (C1): a sticky top (header, the forecast block, the event status and the actions),
+// then warnings, the stops, and «Шаги реакции», «История», «Технические подробности» collapsed.
 function renderCard() {
   const card = $('card');
-  const v = findRow(selected);
+  const v = cardOpen ? findRow(selected) : null;
+  card.dataset.open = String(Boolean(v));
   if (!v) {
-    const empty = document.createElement('p');
-    empty.className = 'card-empty';
-    empty.textContent = snapshotRows().length
-      ? 'Выберите машину на карте или в списке — появятся маршрут, остановки и цель с прогнозом.'
-      : 'Карточка появится, когда в снимке будут машины прогона.';
-    empty.title = empty.textContent;
-    patchChildren(card, [empty]);
+    patchChildren(card, shiftSummary());
     card.dataset.level = 'none';
     cardFor = null;
     return;
   }
   const fresh = isFresh();
   const assessment = assess(v, fresh);
-  const run = currentRun();
   const top = el('div', {className: 'card-top', 'data-key': 'top'});
   const close = el('button', {type: 'button', id: 'card-close', className: 'card-close', 'aria-label': 'Закрыть карточку', dataset: {action: 'close-card'}}, '×');
   const head = el('header', {},
@@ -778,66 +928,9 @@ function renderCard() {
     el('span', {className: 'level-chip', dataset: {level: assessment.level}, 'data-gps-marked': gpsMarks.has(String(v.tr_id)) ? 'true' : null},
       gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен' : assessment.warming ? 'По графику' : assessment.level === 'nodata' && assessment.hasPrediction ? 'Прогноз устарел' : LEVEL[assessment.level].label),
     close);
-
-  // Headline (C-2): the value, one line about the target, one line about the source.
-  const outsideRun = v.target_time_begin && run?.dataset_end && String(v.target_time_begin) > String(run.dataset_end);
-  const prediction = assessment.level !== 'nodata' ? v.prediction_s : null;
-  const expected = shiftedText(v.target_time_begin, prediction, {seconds: true});
-  const value = el('strong');
-  const targetLine = el('small', {id: 'headline-target'});
-  const source = el('small', {className: 'headline-source'});
-  if (assessment.warming) {
-    value.textContent = 'По графику · прогноз готовится';
-    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}`;
-    const eta = Number.isFinite(Number(v.warming_eta_s)) && v.warming_eta_s !== null ? durationText(v.warming_eta_s) : null;
-    source.textContent = `ТС вышло на маршрут; первый прогноз считается${eta ? ` — примерно через ${eta} (время данных)` : ''} и появится здесь сам.`;
-  } else if (assessment.level !== 'nodata') {
-    value.textContent = delayText(v.prediction_s);
-    const held = isHeld(v);
-    // W16: Backend says why it holds; only a target change means «новая цель считается».
-    const newTarget = held && (v.prediction_hold_reason === 'target_changed' || (v.prediction_hold_reason == null && v.reason === 'prediction_held_previous_target'));
-    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}, ожидаем ≈ ${expected ?? '?'}${newTarget ? ' · новая цель считается' : ''}`;
-    source.append(`${BASIS.model} · обновлён ${ageText(v.prediction_age_s)}`);
-    if (v.prediction_updating === true || held) {
-      source.append(' ', el('span', {id: 'prediction-updating', className: 'pulse',
-        title: held && !newTarget
-          ? `Нового прогноза пока нет; показан последний (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных). Backend держит его до 5 мин, пока не придёт новый.`
-          : held
-          ? `Цель сменилась по плану; прогноз для новой цели считается первым в очереди. Пока показан прогноз прошлой цели вместе с этой целью (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`
-          : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний прогноз для этой цели (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`}, 'обновляется'));
-    }
-  } else if (assessment.hasPrediction) {
-    value.textContent = `${delayText(v.prediction_s)} · устарел`;
-    targetLine.textContent = outsideRun ? 'Цель за пределами окна данных прогона' : `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}`;
-    source.textContent = !fresh ? 'Последний известный: Backend недоступен'
-      : runOver(run) ? 'Последний прогноз прогона — прогон завершён, новых не будет.'
-      : `Последний известный: ${reasonText(v.reason) || STATUS[v.status] || text(v.status)}`;
-  } else if (runOver(run)) {
-    value.textContent = 'Прогон завершён';
-    source.textContent = 'Данных прогона больше нет — прогнозов не будет до нового прогона.';
-  } else if (!fresh) {
-    value.textContent = 'Прогноза пока нет';
-    source.textContent = 'Backend недоступен — снимок не обновляется.';
-  } else {
-    value.textContent = capital(noForecastText(v));
-    if (outsideRun) targetLine.textContent = 'Цель за пределами окна данных прогона';
-    source.textContent = v.route_not_started === true ? 'Наряд ещё не начался: плановых остановок рядом с текущим временем нет.'
-      : `Причина: ${reasonText(v.reason) || 'источник не передал прогноз'}.`;
-  }
-  const headline = el('div', {className: 'headline'}, el('span', {}, 'Прогноз задержки у цели'), value,
-    targetLine.textContent ? targetLine : null, source);
-  top.append(head, headline);
+  top.append(head, forecastBlock(v, routeRows(shownRoute())));
   const off = v.off_route === true ? el('p', {id: 'off-route', className: 'off-route', 'data-key': 'off-route'},
     `Вне маршрута ${offsetText(v.route_offset_m) ?? ''} — координаты не совпадают с маршрутом наряда${assessment.level !== 'nodata' ? '; прогноз может быть неверен' : ''}.`) : null;
-
-  const facts = document.createElement('dl');
-  facts.dataset.key = 'facts';
-  field(facts, 'Текущее опоздание', currentDelayText(v.cur_dev_s),
-    v.cur_dev_s == null ? reasonText(v.reason) ?? 'факт не определён' : 'на последней пройденной остановке; это факт, не прогноз');
-  field(facts, 'Цель прогноза', !v.target_stop_id ? 'цель не определена'
-    : outsideRun ? 'Цель за пределами окна данных прогона'
-    : `план ${planText(v.target_time_begin) ?? '?'}${expected ? ` → ${expected} (${BASIS.model})` : assessment.warming ? ' · прогноз готовится' : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`,
-  v.target_stop_id ? `первая плановая остановка через 10–15 мин${targetPoint(v) ? '' : ' · координаты нет — на карте не показана'}` : null);
 
   // Technical details (C-1): identifiers and revisions for engineers, collapsed by default.
   const tech = el('details', {id: 'card-tech', className: 'card-tech', 'data-key': `tech:${v.tr_id}`}, el('summary', {}, 'Технические подробности'));
@@ -874,41 +967,91 @@ function renderCard() {
       : locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
       : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект на карте не показан.'));
   }
-  const parts = [top, off, ...notes, stepsBlock(view, v), routeBlock(v), incident ? incidentBlock(incident, v) : null, facts, tech].filter(Boolean);
+  const parts = [top, off, ...notes, routeBlock(v), stepsBlock(view, v), incident ? incidentBlock(incident, v) : null, tech].filter(Boolean);
   // Another vehicle gets a fresh card; the same vehicle is patched in place, so focus, typing, the
   // scroll and a button being pressed all survive the poll.
-  if (cardFor !== selected) { card.replaceChildren(...parts); cardFor = selected; card.scrollTop = 0; } else patchChildren(card, parts);
+  if (cardFor !== selected) {
+    card.replaceChildren(...parts); cardFor = selected; card.scrollTop = 0;
+    passedOpen = false; afterOpen = false; revealedFor = null;
+  } else patchChildren(card, parts);
   card.dataset.level = assessment.level;
+  // The stop group headers stick right under the sticky top, whatever its height. In a card too
+  // short for that (the top would cover most of it) nothing sticks and the whole card scrolls.
+  const topHeight = card.querySelector('.card-top')?.offsetHeight ?? 0;
+  card.classList.toggle('is-short', card.clientHeight > 0 && card.clientHeight < 1.8 * topHeight);
+  card.style.setProperty('--card-top-h', `${card.classList.contains('is-short') ? 0 : topHeight}px`);
+  revealTarget(card);
 }
 
-// The selected vehicle's stops (C-3), in groups instead of a label on every row: passed (plan
-// only, the last PASSED_SHOWN), before the target (the current delay carried forward — a fact),
-// the target (the model), after it (the same shift as an explicit assumption, behind a toggle).
-const PASSED_SHOWN = 2;
-function stopGroups(rows, {cur, modelUsable, staleModel, hasPrediction}) {
+// On opening, the target row is brought into view under the sticky top (C6), once per vehicle.
+function revealTarget(card) {
+  if (revealedFor === selected) return;
+  const row = card.querySelector('.stops li[data-role=target]');
+  if (!row) return;
+  if (card.classList.contains('is-short')) return; // the forecast block stays the first thing in view
+  revealedFor = selected;
+  const top = card.querySelector('.card-top')?.offsetHeight ?? 0;
+  const box = card.getBoundingClientRect(), r = row.getBoundingClientRect();
+  const from = box.top + top + 28; // the sticky group header above the row
+  if (r.top >= from && r.bottom <= box.bottom) return;
+  card.scrollTop += r.top - from - Math.max(0, (box.bottom - from - r.height) / 3);
+}
+
+// The selected vehicle's stops (C6), in groups with sticky headers instead of a label on every
+// row: passed (plan only; folded to the last one), before the target (the current delay carried
+// forward — a fact), the target (the model), after it (the same shift — an explicit assumption,
+// AFTER_SHOWN rows, behind a toggle). The role is also an icon, named for screen readers.
+const AFTER_SHOWN = 2;
+const ROLE_MARK = {passed: ['✓', 'пройдена'], before_target: ['◉', 'до цели'], target: ['◆', 'цель прогноза'],
+  after_target: ['◌', 'после цели, допущение'], planned: ['○', 'по расписанию']};
+const AFTER_CAVEAT = 'Не прогноз модели. Показан тот же сдвиг, что у цели.';
+
+function stopGroups(rows, {cur, modelUsable, staleModel, hasPrediction, held}) {
+  const assumed = rows.some(r => r.role === 'after_target' && r.basis === 'assumption');
+  const onTime = Math.abs(Number(cur)) < ON_TIME_S;
   const title = {
-    passed: 'Пройдено — только план',
-    before_target: rows.some(r => r.role === 'before_target' && r.basis === 'fact')
-      ? `До цели — текущее опоздание ${delayText(cur)} переносится вперёд (${BASIS.fact})` : 'До цели — план',
-    target: `Цель — ${modelUsable && hasPrediction ? BASIS.model : staleModel ? 'прогноз устарел' : 'прогноза нет'}`,
-    after_target: rows.some(r => r.role === 'after_target' && r.basis === 'assumption') ? `После цели — ${BASIS.assumption}`
-      : staleModel ? 'После цели — план · прогноз устарел' : modelUsable && hasPrediction && !shiftAfterTarget ? 'После цели — план · сдвиг скрыт' : 'После цели — план',
-    planned: 'По плану',
+    passed: 'Пройдено · только расписание',
+    before_target: !rows.some(r => r.role === 'before_target' && r.basis === 'fact') ? 'До цели · только расписание'
+      : onTime ? 'До цели · ТС идёт по графику (факт, не прогноз)'
+      : `До цели · перенесено текущее опоздание ${delayText(cur)} (факт, не прогноз)`,
+    target: held ? 'Прошлая цель · прошлый результат модели, новая цель считается'
+      : `Цель · ${modelUsable && hasPrediction ? BASIS.model : staleModel ? 'прогноз устарел' : 'прогноза нет'}`,
+    after_target: assumed ? 'После цели · допущение'
+      : staleModel ? 'После цели · только расписание · прогноз устарел' : 'После цели · только расписание',
+    planned: 'По расписанию · цели нет',
   };
+  const caveat = {after_target: assumed ? AFTER_CAVEAT : held ? 'Сдвиг не показан: прошлый результат к новой цели не относится.'
+    : modelUsable && hasPrediction && !shiftAfterTarget ? 'Сдвиг скрыт — показано только расписание.' : null};
   const groups = [];
   for (const row of rows) {
-    if (groups.at(-1)?.role !== row.role) groups.push({role: row.role, title: title[row.role] ?? row.role, rows: []});
+    if (groups.at(-1)?.role !== row.role) groups.push({role: row.role, title: title[row.role] ?? row.role, caveat: caveat[row.role] ?? null, rows: []});
     groups.at(-1).rows.push(row);
   }
   return groups;
 }
 
+function stopRow(row, {newTarget}) {
+  const [icon, name] = ROLE_MARK[row.role] ?? ['·', row.role];
+  const isNew = newTarget && row.stop_id === newTarget.stop_id && row.no === newTarget.no;
+  const time = row.expected ? `${row.plan} → ${row.basis === 'assumption' ? '≈' : ''}${row.expected}` : row.plan ?? '—';
+  return el('li', {className: 'stop-row', dataset: {role: row.role, stop: row.stop_id ?? '', ...(row.basis ? {basis: row.basis} : {}), ...(isNew ? {newTarget: 'true'} : {})},
+    title: row.onMap ? null : 'Координаты нет — на карте не показана'},
+  el('span', {className: 'stop-icon', role: 'img', 'aria-label': name, title: name}, icon),
+  el('span', {className: 'stop-no'}, `ост. ${row.no}`),
+  el('span', {className: 'stop-time'}, time, isNew ? el('em', {className: 'stop-tag'}, 'новая цель') : null),
+  el('span', {className: 'stop-delta'}, row.delay != null ? compactDelay(row.delay) : ''));
+}
+
 function routeBlock(vehicle) {
   const box = el('section', {className: 'route', id: 'route', 'data-key': 'route', dataset: {status: route.status}});
   const check = el('input', {type: 'checkbox', id: 'shift-after-target', checked: shiftAfterTarget, dataset: {action: 'shift-after-target'}});
-  box.append(el('div', {className: 'route-head'}, el('b', {}, 'Остановки'), el('label', {className: 'route-toggle'}, check, ' Сдвиг после цели')));
-  const note = (content, kind = 'info') => box.append(el('p', {className: 'route-note', dataset: {kind}}, content));
   const data = shownRoute();
+  const windowText = data?.window_start && data?.window_end ? `${planText(data.window_start)}–${planText(data.window_end)}` : '«сейчас − 5 мин … цель + 15 мин»';
+  const help = el('details', {className: 'help', id: 'route-help', open: openDetails.has('route-help')},
+    el('summary', {'aria-label': 'Про остановки и линию на карте', title: 'Про остановки и линию на карте'}, '?'),
+    el('p', {className: 'route-caption'}, `Окно остановок ${windowText}. «ост. N» — номер остановки в этом окне; названий в данных нет. Линия на карте — плановый маршрут наряда, не GPS-трек; она сдвинута вправо по ходу движения, поэтому встречные направления идут рядом. Впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`));
+  box.append(el('div', {className: 'route-head'}, el('b', {}, 'Остановки'), help, el('label', {className: 'route-toggle'}, check, ' Сдвиг после цели')));
+  const note = (content, kind = 'info') => box.append(el('p', {className: 'route-note', dataset: {kind}}, content));
   if (!data) {
     if (route.status === 'loading') note('Загрузка маршрутного контекста…');
     else if (route.status === 'missing') note(`Маршрутного контекста нет: ${route.reason}.`, 'warn');
@@ -924,20 +1067,26 @@ function routeBlock(vehicle) {
   const {modelUsable, factUsable} = usability(vehicle);
   const staleModel = !modelUsable && data.prediction_s != null;
   const rows = routeRows(data);
-  const windowText = data.window_start && data.window_end ? `${planText(data.window_start)}–${planText(data.window_end)}` : '«сейчас − 5 мин … цель + 15 мин»';
+  const held = modelUsable && heldForNewTarget(vehicle);
+  const {newTarget} = numbersFor(vehicle, rows);
   if (!rows.length) note(`В окне ${windowText} плановых остановок нет.`);
   const list = el('ol', {className: 'stops'});
-  const groups = stopGroups(rows, {cur: factUsable ? data.cur_dev_s : null, modelUsable, staleModel, hasPrediction: data.prediction_s != null});
+  const groups = stopGroups(rows, {cur: factUsable ? data.cur_dev_s : null, modelUsable, staleModel, hasPrediction: data.prediction_s != null, held});
   for (const group of groups) {
-    const shown = group.role === 'passed' ? group.rows.slice(-PASSED_SHOWN) : group.rows;
-    list.append(el('li', {className: 'stop-group', dataset: {group: group.role}}, group.role === 'passed' && group.rows.length > shown.length
-      ? `${group.title} · ещё ${group.rows.length - shown.length} выше не показаны` : group.title));
-    for (const row of shown) {
-      list.append(el('li', {dataset: {role: row.role, stop: row.stop_id ?? '', ...(row.basis ? {basis: row.basis} : {})},
-        title: row.onMap ? null : 'Координаты нет — на карте не показана'},
-      el('span', {className: 'stop-no'}, `ост. ${row.no}`),
-      el('span', {className: 'stop-time'}, row.expected ? `${row.plan} → ${row.expected}` : row.plan ?? '—'),
-      el('span', {className: 'stop-delta'}, row.delay != null ? delayText(row.delay) : '')));
+    list.append(el('li', {className: 'stop-group', dataset: {group: group.role}}, el('span', {}, group.title),
+      group.caveat ? el('small', {className: 'stop-caveat'}, group.caveat) : null));
+    let shown = group.rows;
+    if (group.role === 'passed' && group.rows.length > 1) {
+      if (!passedOpen) shown = group.rows.slice(-1);
+      list.append(el('li', {className: 'stop-more'}, el('button', {type: 'button', 'aria-expanded': String(passedOpen), dataset: {action: 'stops-passed'}},
+        passedOpen ? '▾ скрыть пройденные' : `▸ ещё ${group.rows.length - 1} пройденных`)));
+    }
+    const folded = group.role === 'after_target' && group.rows.length > AFTER_SHOWN;
+    if (folded && !afterOpen) shown = group.rows.slice(0, AFTER_SHOWN);
+    list.append(...shown.map(row => stopRow(row, {newTarget: held ? newTarget : null})));
+    if (folded) {
+      list.append(el('li', {className: 'stop-more'}, el('button', {type: 'button', 'aria-expanded': String(afterOpen), dataset: {action: 'stops-after'}},
+        afterOpen ? '▴ свернуть' : `Ещё ${group.rows.length - AFTER_SHOWN} ▾`)));
     }
   }
   box.append(list);
@@ -948,7 +1097,6 @@ function routeBlock(vehicle) {
     truncated ? `${truncated} самых ранних остановок окна не показаны (не больше 40)` : null,
     bad.stops ? `${bad.stops} остановок без координат на карте не показаны` : null].filter(Boolean);
   if (missing.length) note(`${missing.join(' · ')}.`);
-  box.append(el('small', {className: 'route-caption'}, `Окно остановок ${windowText}. Линия на карте — плановый маршрут наряда, не GPS-трек; она сдвинута вправо по ходу движения, поэтому встречные направления идут рядом. Впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`));
   return box;
 }
 
@@ -962,25 +1110,40 @@ const vehicleStateText = incident => (incident.vehicle_state === 'nodata' ? 'н�
 const WF_TEXT = {new: 'Новое', work: 'В работе', snoozed: 'Отложено', closed: 'Закрыто', ended: 'Завершено'};
 function eventControls(view, v) {
   const out = [];
+  const wf = !view ? null : view.group === 'ended' && view.wf !== 'closed' ? 'ended' : view.wf;
   if (view) {
-    const wf = view.group === 'ended' && view.wf !== 'closed' ? 'ended' : view.wf;
     out.push(el('div', {className: 'event-row', 'data-key': `ev:${view.id}`},
       el('span', {className: 'incident-flow', dataset: {workflow: wf}}, WF_TEXT[wf] ?? wf),
-      el('span', {}, eventMeta(view)), view.group === 'ended' ? null : slaBadge(view.badge, {id: 'event-sla'})));
+      el('span', {}, eventMeta(view)), view.group === 'ended' ? null : el('span', {className: 'sla-stack'}, slaBadge(view.badge, {id: 'event-sla'}),
+        view.badge.clock_text ? el('small', {className: 'sla-clock', id: 'event-sla-clock'}, view.badge.clock_text) : null)));
   }
+  // C7: the dark button is the next logical action — Новое → «Взять в работу», В работе →
+  // «Закрыть ▾», Завершено → «Закрыть» (one click, with the «delay ended» reason); «Показать на
+  // карте» is always secondary.
   const can = view?.can ?? {};
+  const primary = name => (name === (wf === 'new' ? 'take' : wf === 'work' ? 'close' : null) ? 'primary' : null);
   const buttons = el('div', {className: 'card-buttons', 'data-key': `buttons:${view?.id ?? 'none'}`});
-  if (can.take) buttons.append(el('button', {type: 'button', id: 'incident-action', className: 'primary', dataset: {action: 'take-event', id: view.id}}, 'Взять в работу', el('kbd', {}, 'W')));
+  if (can.take) buttons.append(el('button', {type: 'button', id: 'incident-action', className: primary('take'), dataset: {action: 'take-event', id: view.id}}, 'Взять в работу', el('kbd', {}, 'W')));
   if (can.untake) buttons.append(el('button', {type: 'button', id: 'incident-action', dataset: {action: 'untake-event', id: view.id}}, 'Вернуть в новые'));
-  if (can.snooze) buttons.append(el('button', {type: 'button', id: 'snooze-open', 'aria-expanded': String(cardMenu === 'snooze'), dataset: {action: 'card-menu', menu: 'snooze'}}, 'Отложить ▾', el('kbd', {}, 'S')));
+  // Q7: a snooze counts data time; once data time stops (run over) it is offered disabled, with why.
+  const snoozeBlocked = snoozeBlockedText(currentRun());
+  if (can.snooze) buttons.append(el('button', {type: 'button', id: 'snooze-open', disabled: Boolean(snoozeBlocked), title: snoozeBlocked,
+    'aria-expanded': String(cardMenu === 'snooze'), dataset: {action: 'card-menu', menu: 'snooze'}}, 'Отложить ▾', el('kbd', {}, 'S')));
   if (can.unsnooze) buttons.append(el('button', {type: 'button', id: 'unsnooze', dataset: {action: 'unsnooze-event', id: view.id}}, 'Снять напоминание'));
-  if (can.close) buttons.append(el('button', {type: 'button', id: 'close-open', 'aria-expanded': String(cardMenu === 'close'), dataset: {action: 'card-menu', menu: 'close'}}, 'Закрыть ▾', el('kbd', {}, 'C')));
-  buttons.append(el('button', {type: 'button', id: 'card-show', className: can.take ? null : 'primary',
+  const endedReason = wf === 'ended' ? view.close_reasons?.[0] : null;
+  if (can.close && endedReason) {
+    buttons.append(el('button', {type: 'button', id: 'close-ended', className: 'primary', title: `Закрыть с причиной «${endedReason}»`,
+      dataset: {action: 'close-event', id: view.id, reason: endedReason}}, 'Закрыть', el('kbd', {}, 'C')));
+  } else if (can.close) {
+    buttons.append(el('button', {type: 'button', id: 'close-open', className: primary('close'), 'aria-expanded': String(cardMenu === 'close'), dataset: {action: 'card-menu', menu: 'close'}}, 'Закрыть ▾', el('kbd', {}, 'C')));
+  }
+  buttons.append(el('button', {type: 'button', id: 'card-show',
     disabled: !(locationOk(v) && mapStatus === 'ready'), dataset: {action: 'focus'}}, 'Показать на карте'));
   out.push(buttons);
-  if (view && cardMenu === 'snooze' && can.snooze) {
-    out.push(el('div', {className: 'card-menu', id: 'snooze-menu', 'data-key': 'menu:snooze'}, 'Напомнить через (время данных)',
-      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', dataset: {action: 'snooze-event', id: view.id, minutes: String(m)}}, `${m} мин`))));
+  if (view && can.snooze && snoozeBlocked) out.push(el('p', {className: 'snooze-blocked', id: 'snooze-blocked', 'data-key': 'snooze-blocked'}, snoozeBlocked));
+  if (view && cardMenu === 'snooze' && can.snooze && !snoozeBlocked) {
+    out.push(el('div', {className: 'card-menu snooze-menu', id: 'snooze-menu', 'data-key': 'menu:snooze'}, el('span', {}, 'Напомнить через'),
+      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', dataset: {action: 'snooze-event', id: view.id, minutes: String(m)}}, snoozeOptionText(m, currentRun()?.speedup)))));
   }
   if (view && cardMenu === 'close' && can.close) {
     out.push(el('div', {className: 'card-menu reasons', id: 'close-menu', 'data-key': 'menu:close'}, el('span', {}, 'Причина закрытия — попадёт в историю события'),
@@ -1005,8 +1168,10 @@ function stepsBlock(view, v) {
     return el('div', {className: 'steps quiet', 'data-key': `steps:none:${v.tr_id}`},
       marked ? el('p', {className: 'gps-marked'}, 'GPS неисправен — отмечено диспетчером') : null, gpsMarkControls(v));
   }
-  const box = el('div', {className: 'steps', id: 'steps', 'data-key': `steps:${view.id}`},
-    el('div', {className: 'steps-head'}, el('b', {}, 'Шаги реакции'), el('span', {id: 'steps-progress'}, view.steps_progress)));
+  // Collapsed «▸ Шаги реакции 0/3»; opens by itself once the event is in work (C1).
+  const box = el('details', {className: 'steps', id: 'steps', 'data-key': `steps:${view.id}`, dataset: {id: view.id},
+    open: stepsPref.get(view.id) ?? view.wf === 'work'},
+  el('summary', {className: 'steps-head'}, el('b', {}, 'Шаги реакции'), el('span', {id: 'steps-progress'}, view.steps_progress)));
   for (const step of view.steps) {
     const input = el('input', {type: 'checkbox', dataset: {action: 'toggle-step', id: view.id, step: step.key}});
     input.checked = step.done;
@@ -1020,14 +1185,17 @@ function stepsBlock(view, v) {
   return box;
 }
 
-// «История события»: lifecycle and actions, a plain-text note, the driver-contact prototype.
+// «История события» (collapsed, C1): lifecycle and actions, a plain-text note, the driver-contact prototype.
 function incidentBlock(incident, vehicle) {
-  const box = document.createElement('section');
+  const box = document.createElement('details');
   box.className = 'incident';
+  box.id = 'card-history';
+  box.open = openDetails.has('card-history');
   box.dataset.state = incident.state;
   box.dataset.id = incident.id;
   box.dataset.key = incident.id;
-  const head = el('div', {className: 'incident-head'}, el('b', {}, `История события №${incident.number}`));
+  const head = el('summary', {className: 'incident-head'}, el('b', {}, `История события №${incident.number}`),
+    el('span', {className: 'incident-count'}, `${incident.history.length}`));
   const form = document.createElement('form');
   form.className = 'note-form';
   const input = document.createElement('input');
@@ -1107,12 +1275,13 @@ function contactBlock(incident, vehicle) {
   return box;
 }
 
-// One line over the map (L-5, H-2): the end of the run, else the first delay the dispatcher has not
-// opened and not taken into work; never a repeat of the card that is already open.
+// One line over the map (L-5, H-2, Q1): Backend or run state when it matters, else a summary of
+// the reaction queue; the queue stays the only owner of the events and their actions.
 function renderAttention() {
   const box = $('attention');
   if (!feed?.snapshot || !snapshotRows().length) { box.hidden = true; return; }
   box.hidden = false;
+  box.dataset.kind = 'status';
   if (!isFresh()) {
     box.dataset.level = 'nodata';
     patchText(box, 'Backend недоступен: показан последний снимок, предупреждения не оцениваются.');
@@ -1131,61 +1300,64 @@ function renderAttention() {
     patchText(box, `Прогон ${runStateText(run)}. Прогнозы не обновляются — перезапустите прогон (README).`);
     return;
   }
-  // v2 attention bar: the event that most needs a reaction (overdue first), except the one whose
-  // card is open (L-5); otherwise a calm line. Vehicles without a forecast are never counted here.
-  const {needs, work, snoozed} = queueGroups();
-  const open = needs.filter(view => view.tr_id !== selected && findIncident(store(), view.id)?.vehicle_state === 'warning')
-    .sort((a, b) => (b.sla?.over ?? false) - (a.sla?.over ?? false) || (a.sla?.left_s ?? 0) - (b.sla?.left_s ?? 0) || a.number - b.number);
-  if (!open.length && needs.some(view => view.tr_id === selected)) {
-    // The only events waiting are open in the card: said without repeating the ID (L-5).
-    box.dataset.level = 'warning';
-    patchText(box, 'Требует реакции: событие открыто в карточке справа');
-    return;
-  }
-  if (!open.length) {
-    box.dataset.level = 'normal';
-    const next = snoozed.map(v => v.snooze_until_text).filter(Boolean).sort()[0];
-    const calm = [work.length ? `в работе ${work.length}` : null, snoozed.length ? `отложено ${snoozed.length}` : null,
-      next ? `напоминание в ${next}` : null].filter(Boolean);
-    patchText(box, calm.length ? `Предупреждений нет · ${calm.join(' · ')}` : 'Предупреждений нет');
-    return;
-  }
-  const [top] = open;
-  box.dataset.level = eventLevel(top);
+  // Q1: a summary of the queue, never a copy of its actions — how many need a reaction and the
+  // nearest deadline, or which event is open and how many more wait; «Следующее J» walks them.
+  const summary = Q.attentionSummary(queue, slaWall(), cardOpen ? currentEventId() : null, shown);
+  box.dataset.level = summary.level;
+  box.dataset.kind = summary.kind;
+  if (summary.kind === 'calm') { patchText(box, summary.detail ? `${summary.title} · ${summary.detail}` : summary.title); return; }
   const text = el('div', {className: 'attention-text', 'data-key': 'text'},
-    el('span', {className: 'attention-title'}, 'Требует реакции'),
-    el('span', {}, `ТС ${top.tr_id} · ${delayText(top.last_s)} · с ${(planText(top.opened_at) ?? clockText(top.opened_at) ?? '').slice(0, 5)}`));
-  const actions = el('div', {className: 'attention-actions', 'data-key': 'actions'},
-    el('button', {type: 'button', 'data-key': 'attention-open', dataset: {action: 'choose', id: String(top.tr_id)}}, 'Показать'),
-    el('button', {type: 'button', className: 'primary', 'data-key': 'attention-take', dataset: {action: 'take-event', id: top.id}}, 'Взять в работу', el('kbd', {}, 'W')));
-  const parts = [text, slaBadge(top.badge, {'data-key': 'sla'}), actions];
-  if (open.length > 1) parts.push(el('button', {type: 'button', className: 'more', 'data-key': 'more', dataset: {action: 'tab', tab: 'events'}}, `ещё ${open.length - 1} →`));
-  patchChildren(box, parts);
+    el('span', {className: 'attention-title'}, summary.title), ' · ',
+    el('span', {className: 'attention-detail', title: summary.kind === 'needs' ? `Срок реакции — ${Q.CLOCK_TEXT.wall}` : null}, summary.detail));
+  patchChildren(box, [text, summary.next ? el('button', {type: 'button', className: 'primary', 'data-key': 'next', id: 'attention-next',
+    title: 'Открыть следующее событие, требующее реакции', dataset: {action: 'next-event'}}, 'Следующее', el('kbd', {}, 'J')) : null].filter(Boolean));
 }
 
 // ---- Reaction queue (v2), toasts --------------------------------------------------------------
 const eventLevel = view => (view.severe || view.last_s >= 300 ? 'severe' : 'warning');
-const slaBadge = (badge, extra = {}) => el('span', {className: 'sla', dataset: {tone: badge.tone}, ...extra}, badge.text);
-const eventMeta = view => [`№${view.number}`, `с ${planText(view.opened_at) ?? clockText(view.opened_at)}`, `пик ${delayText(view.peak_s)}`,
+// A timed badge names its clock in the tooltip (Q7): the reaction SLA real time, the snooze data time.
+const slaBadge = (badge, extra = {}) => el('span', {className: 'sla', dataset: {tone: badge.tone, clock: badge.clock ?? ''},
+  title: badge.clock_text ? `${badge.text} · ${badge.clock_text}` : null, ...extra}, badge.text);
+// Event texts (C5): «открыто 06:58 · пик +3:20 · №3» — never «с 06:58», which reads as «the delay
+// since 06:58». Values in the compact form, the same as the map labels and the stop rows.
+const eventMeta = view => [`открыто ${planText(view.opened_at) ?? clockText(view.opened_at)}`, `пик ${compactDelay(view.peak_s)}`, `№${view.number}`,
   view.lost ? 'нет данных' : null, view.close_reason ? `закрыто: ${view.close_reason}` : null].filter(Boolean).join(' · ');
-const eventValue = view => (view.group === 'ended' ? `пик ${delayText(view.peak_s)}` : delayText(view.last_s));
+const eventValue = view => (view.group === 'ended' ? `пик ${compactDelay(view.peak_s)}` : compactDelay(view.last_s));
+// Where the value applies: «у ост. 12 · 08:42 → 08:45» (the stop number only for the selected
+// vehicle, whose route is loaded; otherwise «у цели»). A held forecast is the previous target's.
+function eventTarget(view) {
+  const v = view.group === 'ended' ? null : findRow(view.tr_id);
+  const a = v ? assess(v, isFresh()) : null;
+  if (!v?.target_stop_id || a.level === 'nodata' || a.warming) return null;
+  const no = String(v.tr_id) === selected ? numbersFor(v, routeRows(shownRoute())).target : null;
+  const where = heldForNewTarget(v) ? 'у прошлой цели' : no ? `у ост. ${no}` : 'у цели';
+  return `${where} · ${planText(v.target_time_begin) ?? '?'} → ${shiftedText(v.target_time_begin, v.prediction_s) ?? '?'}`;
+}
 
 function queueItem(view) {
   const current = findIncident(store(), view.id)?.tr_id === selected;
-  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+  const meta = eventMeta(view);
+  // A pinned row (Q6) stays where it was opened; its badge already shows the new state.
+  const item = el('div', {className: `event${current ? ' is-current' : ''}${view.pinned ? ' is-pinned' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+    'aria-current': current ? 'true' : null,
+    title: view.pinned ? `Строка остаётся на месте, пока событие открыто; в «${Q.GROUP_TITLES[view.group]}» перейдёт после снятия выбора или J/K` : meta,
     dataset: {id: view.id, action: 'open-event', group: view.group, state: view.lifecycle, unread: String(view.unread), level: eventLevel(view)}});
   const check = el('input', {type: 'checkbox', className: 'event-check', 'aria-label': `Выбрать событие ТС ${view.tr_id}`,
     dataset: {action: 'check-event', id: view.id}});
   check.checked = view.selected;
   check.disabled = view.group === 'ended';
   item.append(check, el('span', {className: 'event-title'}, `ТС ${view.tr_id}`), el('span', {className: 'event-value'}, eventValue(view)),
-    el('span', {className: 'event-meta'}, eventMeta(view)), slaBadge(view.badge));
+    el('span', {className: 'event-meta'}, eventTarget(view) ?? meta), slaBadge(view.badge));
   if (view.sla) item.append(el('span', {className: 'sla-bar', dataset: {tone: view.badge.tone}, style: `width:${Math.round(view.sla.pct)}%`}));
   return item;
 }
 
 function renderEvents() {
-  const all = queueGroups();
+  // Q6: the open event keeps the place it was opened at; another event or no selection drops the pin.
+  const current = currentEventId();
+  if (!current) queuePin = null;
+  else if (queuePin?.id !== current) queuePin = Q.pinFor(queue, current, slaWall(), shown);
+  const all = queueView();
   const {counts} = all;
   const side = document.querySelector('.side');
   side.dataset.tab = sideTab;
@@ -1193,27 +1365,33 @@ function renderEvents() {
   $('events-count').textContent = String(counts.open);
   $('events-count').dataset.open = String(counts.needs);
   $('vehicles-count').textContent = String(snapshotRows().length);
+  // Q4: the header button counts unread events (the tab counts open ones) and opens the queue tab.
   const toggle = $('events-toggle');
   toggle.dataset.tabOpen = String(sideTab === 'events');
-  toggle.dataset.active = String(counts.open);
+  toggle.dataset.active = String(counts.unread);
   $('events-unread').textContent = String(counts.unread);
-  $('events-unread').hidden = counts.unread === 0;
-  toggle.title = `Требуют реакции ${counts.needs} · в работе ${counts.work} · отложены ${counts.snoozed} · завершены ${counts.ended}`;
+  $('events-unread').dataset.count = String(counts.unread);
+  toggle.title = `Непрочитано ${counts.unread} — открыть очередь. Требуют реакции ${counts.needs} · в работе ${counts.work} · отложены ${counts.snoozed} · завершены ${counts.ended}`;
+  renderQueueFilters(counts);
   const parts = [];
   const group = (key, title, extra) => el('div', {className: 'queue-group', 'data-key': `g:${key}`, dataset: {group: key, count: String(counts[key])}},
     el('span', {}, `${title} · ${counts[key]}`), extra);
   const all2 = key => el('button', {type: 'button', dataset: {action: 'select-group', group: key}},
-    all[key].length && all[key].every(v => v.selected) ? 'снять выбор' : 'выбрать все');
-  parts.push(group('needs', Q.GROUP_TITLES.needs, all.needs.length > 1 ? all2('needs') : null));
-  if (!all.needs.length) {
-    parts.push(el('p', {className: 'events-empty', 'data-key': 'needs-empty'}, isFresh()
-      ? 'Новых событий нет. Событие открывается, когда прогноз задержки у цели больше 2 мин.'
-      : 'Backend недоступен — предупреждения сейчас не оцениваются.'));
+    all[key].length && all[key].every(v => v.selected || v.group !== key) ? 'снять выбор' : 'выбрать все');
+  const filterShows = key => queueFilter === 'all' || queueFilter === key;
+  if (filterShows('needs')) {
+    parts.push(group('needs', Q.GROUP_TITLES.needs, counts.needs > 1 ? all2('needs') : null));
+    if (!all.needs.length) {
+      parts.push(el('p', {className: 'events-empty', 'data-key': 'needs-empty'}, isFresh()
+        ? 'Новых событий нет. Событие открывается, когда прогноз задержки у цели больше 2 мин.'
+        : 'Backend недоступен — предупреждения сейчас не оцениваются.'));
+    }
+    parts.push(...all.needs.map(queueItem));
   }
-  parts.push(...all.needs.map(queueItem));
   for (const key of ['work', 'snoozed']) {
-    if (!all[key].length) continue;
-    parts.push(group(key, Q.GROUP_TITLES[key], all[key].length > 1 ? all2(key) : null), ...all[key].map(queueItem));
+    if (!all[key].length && queueFilter !== key) continue;
+    parts.push(group(key, Q.GROUP_TITLES[key], counts[key] > 1 ? all2(key) : null), ...all[key].map(queueItem));
+    if (!all[key].length) parts.push(el('p', {className: 'events-empty', 'data-key': `${key}-empty`}, `В группе «${Q.GROUP_TITLES[key]}» событий нет.`));
   }
   if (all.ended.length) {
     const head = group('ended', `${endedOpen ? '▾' : '▸'} ${Q.GROUP_TITLES.ended}${counts.ended_unread ? ` (непрочитано ${counts.ended_unread})` : ''}`,
@@ -1226,19 +1404,56 @@ function renderEvents() {
   renderBulk(counts.selected);
 }
 
+// «Все · Новые · В работе · Отложены» over the queue (Q6); «Все» counts the open events.
+function renderQueueFilters(counts) {
+  const count = {all: counts.open, needs: counts.needs, work: counts.work, snoozed: counts.snoozed};
+  patchChildren($('queue-filters'), Q.QUEUE_FILTERS.map(f => el('button', {type: 'button', 'data-key': f.key, 'aria-pressed': String(f.key === queueFilter),
+    dataset: {action: 'queue-filter', queueFilter: f.key}}, `${f.title} `, el('b', {}, String(count[f.key])))));
+}
+
+function setQueueFilter(key) {
+  queueFilter = Q.QUEUE_FILTERS.some(f => f.key === key) ? key : 'all';
+  savePref('t7-queue-filter', queueFilter);
+  renderEvents();
+  revealCurrentRow();
+}
+
+// Q6: the queue keeps its scroll when an event opens; only a selected row out of view is brought
+// into view, by the smallest scroll.
+function revealCurrentRow() {
+  const list = $('events-list');
+  const row = list.querySelector('.event.is-current');
+  if (!row || !list.getClientRects().length) return;
+  const area = list.getBoundingClientRect();
+  const box = row.getBoundingClientRect();
+  if (box.top < area.top || box.bottom > area.bottom) row.scrollIntoView({block: 'nearest'});
+}
+
+// Event rows the dispatcher can see now: the queue tab is shown, the page is visible, the row is
+// inside the list's scroll area. A toast is never shown for them (Q2).
+function visibleQueueIds() {
+  const list = $('events-list');
+  if (document.hidden || !list.getClientRects().length) return [];
+  const area = list.getBoundingClientRect();
+  return [...list.querySelectorAll('.event')].filter(row => {
+    const box = row.getBoundingClientRect();
+    return box.bottom > area.top + 4 && box.top < area.bottom - 4;
+  }).map(row => row.dataset.id);
+}
+
 function renderBulk(count) {
   const box = $('events-bulk');
   box.hidden = !count;
   if (!count) { bulkMenu = null; patchChildren(box, []); return; }
   const row = el('div', {className: 'bulk-row', 'data-key': 'row'}, el('b', {}, `Выбрано ${count}`),
     el('button', {type: 'button', className: 'primary', dataset: {action: 'bulk-take'}}, 'Взять в работу'),
-    el('button', {type: 'button', dataset: {action: 'bulk-menu', menu: 'snooze'}}, 'Отложить ▾'),
+    el('button', {type: 'button', disabled: Boolean(snoozeBlockedText(currentRun())), title: snoozeBlockedText(currentRun()), dataset: {action: 'bulk-menu', menu: 'snooze'}}, 'Отложить ▾'),
     el('button', {type: 'button', dataset: {action: 'bulk-menu', menu: 'close'}}, 'Закрыть ▾'),
     el('button', {type: 'button', 'aria-label': 'Снять выбор', dataset: {action: 'bulk-clear'}}, '×'));
   const parts = [row];
-  if (bulkMenu === 'snooze') {
+  if (bulkMenu === 'snooze' && !snoozeBlockedText(currentRun())) {
     parts.push(el('div', {className: 'bulk-row', 'data-key': 'snooze'}, 'Напомнить через',
-      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-snooze', minutes: String(m)}}, `${m} мин`))));
+      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-snooze', minutes: String(m)}}, snoozeOptionText(m, currentRun()?.speedup)))));
   } else if (bulkMenu === 'close') {
     parts.push(el('div', {className: 'bulk-row', 'data-key': 'close'},
       ...Q.CLOSE_REASONS.map(r => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-close', reason: r}}, r))));
@@ -1272,7 +1487,7 @@ function setGpsMark(id, on) {
 function openEvent(id) {
   const incident = findIncident(store(), id);
   if (!incident) return;
-  setQueue(Q.markRead(queue, id));
+  setQueue(Q.markOpened(queue, id));
   filter = 'all'; query = ''; $('search').value = '';
   choose(findRow(incident.tr_id) ? incident.tr_id : null, true);
   render();
@@ -1291,26 +1506,28 @@ function queueAction(fn) {
   renderCard(); renderEvents(); renderAttention(); renderToasts(); renderList();
   return true;
 }
-const takeEvent = id => queueAction(q => Q.take(q, id, dataNow()));
+// Taking an event opens its «Шаги реакции» (C1), even if they were closed before.
+const takeEvent = id => { stepsPref.delete(id); return queueAction(q => Q.take(q, id, dataNow())); };
 const untakeEvent = id => queueAction(q => Q.untake(q, id, dataNow(), wallNow()));
-const snoozeEvent = (id, minutes) => queueAction(q => Q.snooze(q, id, minutes, dataNow()));
+const snoozeEvent = (id, minutes) => !snoozeBlockedText(currentRun()) && queueAction(q => Q.snooze(q, id, minutes, dataNow()));
 const unsnoozeEvent = id => queueAction(q => Q.unsnooze(q, id, dataNow()));
 const closeEvent = (id, reason) => queueAction(q => Q.close(q, id, reason, dataNow()));
 
 function dismissToast(key) { queueAction(q => Q.dismissToast(q, key)); }
 
+// Q2: toasts report state transitions only (new event, back from snooze, monitoring lost), with one
+// action «Открыть». Never after the run or while Backend is offline, never for the open card or a
+// row visible in the queue (those are dropped for good); the queue keeps every event.
+const TOAST_TITLE = {new: 'Новое событие', remind: 'Вернулось из отсрочки', lost: 'Нет данных от ТС'};
 function renderToasts() {
-  // Only for a current delay the dispatcher is not looking at, and none after the run (E-1, H-2);
-  // the queue keeps every event.
   const live = !runOver(currentRun()) && isFresh();
-  const views = live ? Q.toastViews(queue, wallNow(), shown) : [];
-  patchChildren($('toasts'), views.filter(({event}) => event && event.tr_id !== selected && event.group !== 'ended'
-    && ['warning', 'severe'].includes(findIncident(store(), event.id)?.vehicle_state)).slice(0, TOAST_MAX).map(({key, kind, event}) => {
+  const plan = Q.toastPlan(queue, wallNow(), {live, openTrId: selected, visibleIds: visibleQueueIds(), max: TOAST_MAX}, shown);
+  if (plan.drop.length) setQueue(Q.dismissToasts(queue, plan.drop));
+  patchChildren($('toasts'), plan.show.map(({key, kind, event}) => {
     const box = el('div', {className: 'toast', role: 'status', 'data-key': key, dataset: {id: event.id, key, kind, level: eventLevel(event)}});
-    box.append(el('b', {}, kind === 'remind' ? 'Напоминание' : 'Новое событие'),
-      el('span', {}, `ТС ${event.tr_id} · ${delayText(event.last_s)} · ${event.badge.text}`),
+    box.append(el('b', {}, TOAST_TITLE[kind] ?? kind),
+      el('span', {}, `ТС ${event.tr_id} · ${kind === 'lost' ? 'мониторинг потерян' : delayText(event.last_s)} · ${event.badge.text}`),
       el('button', {type: 'button', className: 'toast-open', dataset: {action: 'open-event', id: event.id}}, 'Открыть'),
-      el('button', {type: 'button', className: 'toast-take', dataset: {action: 'take-event', id: event.id}}, 'Взять'),
       el('button', {type: 'button', className: 'toast-close', 'aria-label': 'Скрыть уведомление', dataset: {action: 'dismiss-toast', key}}, '×'));
     if (event.sla) box.append(el('span', {className: 'sla-bar', dataset: {tone: event.badge.tone}, style: `width:${Math.round(event.sla.pct)}%`}));
     return box;
@@ -1345,9 +1562,17 @@ function renderStatus() {
   speed.textContent = speedupText(run?.speedup);
   speed.dataset.speedup = run?.speedup ?? '';
   speed.dataset.short = Number(run?.speedup) > 0 ? `×${run.speedup}` : '×?';
-  speed.title = `${speed.textContent}. Время данных идёт в N раз быстрее времени показа (значение прогона Backend).`;
-  const clock = dataTimeText(run?.dataset_time);
-  $('run-clock').textContent = clock ? `время данных ${clock}` : 'время данных неизвестно';
+  speed.title = `${speed.textContent}. Время данных идёт в N раз быстрее реального времени (значение прогона Backend). Таймер реакции идёт в реальном времени, отсрочка — во времени данных.`;
+  // Q7: the data clock, large, labelled with its clock; the speed-up says what a screen minute is.
+  const clock = dataClockView(run);
+  const clockBox = $('data-clock');
+  clockBox.title = clock.title;
+  clockBox.dataset.over = String(clock.over);
+  clockBox.dataset.time = run?.dataset_time ?? '';
+  $('data-clock-prefix').hidden = !clock.prefix;
+  $('data-clock-prefix').textContent = clock.prefix ?? '';
+  $('data-clock-time').textContent = clock.time;
+  $('data-clock-label').textContent = clock.label;
   $('run-state').textContent = feed?.snapshot ? runStateText(run) : '—';
   box.title = run?.driver?.reason ? `Драйвер: ${run.driver.state ?? ''} · ${run.driver.reason}` : '';
   const progress = Number(run?.progress);
@@ -1463,6 +1688,7 @@ function render() {
   renderAttention();
   renderEvents();
   renderToasts();
+  renderSearch();
   renderDiagnostics();
   renderRouteSettings();
   renderRouteLayers(); // the leader and the overview follow the vehicles
@@ -1543,7 +1769,7 @@ function onPanelClick(event) {
   const {action, id} = control.dataset;
   if (control.type === 'checkbox') return; // handled on change
   if (action === 'choose') choose(id, true);
-  else if (action === 'close-card') choose(null, false);
+  else if (action === 'close-card') closeCard();
   else if (action === 'focus') focusSelected();
   else if (action === 'open-event') openEvent(id);
   else if (action === 'dismiss-toast') dismissToast(control.dataset.key);
@@ -1553,8 +1779,13 @@ function onPanelClick(event) {
   else if (action === 'snooze-event') snoozeEvent(id, Number(control.dataset.minutes));
   else if (action === 'close-event') closeEvent(id, control.dataset.reason);
   else if (action === 'card-menu') { cardMenu = cardMenu === control.dataset.menu ? null : control.dataset.menu; renderCard(); }
+  else if (action === 'stops-passed') { passedOpen = !passedOpen; renderCard(); }
+  else if (action === 'stops-after') { afterOpen = !afterOpen; renderCard(); }
   else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
   else if (action === 'tab') setTab(control.dataset.tab);
+  else if (action === 'next-event') goNext(+1);
+  else if (action === 'queue-filter') setQueueFilter(control.dataset.queueFilter);
+  else if (action === 'search-pick') pickSearch(id);
   else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, slaWall(), shown));
   else if (action === 'toggle-ended') { endedOpen = !endedOpen; renderEvents(); }
   else if (action === 'read-ended') queueAction(q => Q.markEndedRead(q, shown));
@@ -1570,7 +1801,7 @@ function onPanelClick(event) {
     contact = {id: null, result: null}; renderCard(); $('contact-open')?.focus();
   } else if (action === 'contact-copy') copyContactText(id);
 }
-for (const panel of ['vehicles', 'card', 'attention', 'events-list', 'events-bulk', 'toasts']) $(panel).addEventListener('click', onPanelClick);
+for (const panel of ['vehicles', 'card', 'attention', 'events-list', 'events-bulk', 'toasts', 'queue-filters', 'vehicle-search-results']) $(panel).addEventListener('click', onPanelClick);
 for (const tab of document.querySelectorAll('.side-tabs [data-tab]')) tab.addEventListener('click', () => setTab(tab.dataset.tab));
 $('events-list').addEventListener('change', event => {
   if (event.target.dataset.action === 'check-event') queueAction(q => Q.toggleSelected(q, event.target.dataset.id));
@@ -1597,7 +1828,12 @@ $('card').addEventListener('change', event => {
   shiftAfterTarget = event.target.checked;
   renderRouteLayers(); renderMapObjects(); renderCard();
 });
-$('card').addEventListener('toggle', event => { if (event.target.id === 'card-tech') techOpen = event.target.open; }, true);
+$('card').addEventListener('toggle', event => {
+  const {id, open, dataset} = event.target;
+  if (id === 'card-tech') techOpen = open;
+  else if (id === 'steps' && dataset.id) stepsPref.set(dataset.id, open);
+  else if (id) { if (open) openDetails.add(id); else openDetails.delete(id); }
+}, true);
 $('card').addEventListener('input', event => {
   if (event.target.id === 'note-input') noteDraft = {id: event.target.dataset.id, text: event.target.value};
 });
@@ -1624,21 +1860,97 @@ $('route-settings').addEventListener('toggle', () => { if ($('route-settings').o
 $('diagnostics').addEventListener('toggle', () => { if ($('diagnostics').open) $('route-settings').open = false; });
 // The header «События» opens the queue tab (v2: the queue replaces the dropdown).
 $('events-toggle').addEventListener('click', () => { $('diagnostics').open = false; $('route-settings').open = false; setTab('events'); });
-// Hotkeys (v2): J/K next/previous event, W take, S snooze 5 min, C close (reason menu), Esc.
+// J / K and «Следующее J» (Q6): over the displayed queue; after an action, the next event that needs a reaction.
+function goNext(step) {
+  const next = Q.nextQueueEvent(queue, currentEventId(), step, slaWall(), {pin: queuePin, filter: queueFilter}, shown);
+  if (!next || !findIncident(store(), next)) return false;
+  openEvent(next);
+  return true;
+}
+
+// ---- «Поиск ТС по номеру (/)» (Q5): a dropdown of matches; choosing opens the card, the queue stays.
+const SEARCH_MAX = 8;
+function searchMatches() {
+  const needle = searchText.trim().toLowerCase();
+  if (!needle) return [];
+  const starts = row => String(row.vehicle.tr_id).toLowerCase().startsWith(needle);
+  // IDs that start with the typed digits first; otherwise the list order (warnings by size).
+  return visibleRows(snapshotRows(), {filter: 'all', query: needle, fresh: isFresh()}).sort((a, b) => starts(b) - starts(a)).slice(0, SEARCH_MAX);
+}
+
+function renderSearch() {
+  const input = $('vehicle-search');
+  const box = $('vehicle-search-results');
+  const open = document.activeElement === input && searchText.trim() !== '';
+  input.setAttribute('aria-expanded', String(open));
+  box.hidden = !open;
+  if (!open) { input.removeAttribute('aria-activedescendant'); patchChildren(box, []); return; }
+  const matches = searchMatches();
+  searchActive = Math.min(searchActive, Math.max(0, matches.length - 1));
+  if (!matches.length) {
+    input.removeAttribute('aria-activedescendant');
+    patchChildren(box, [el('p', {className: 'search-empty', 'data-key': 'empty'}, `Нет ТС с номером «${searchText.trim()}»`)]);
+    return;
+  }
+  patchChildren(box, matches.map(({vehicle, assessment}, index) => {
+    const id = String(vehicle.tr_id);
+    return el('button', {type: 'button', role: 'option', id: `search-option-${index}`, tabindex: '-1', 'data-key': id,
+      'aria-selected': String(index === searchActive), dataset: {action: 'search-pick', id, level: assessment.level}},
+    el('span', {className: 'search-id'}, id), el('span', {className: 'search-value'}, shortValue(vehicle, assessment)));
+  }));
+  input.setAttribute('aria-activedescendant', `search-option-${searchActive}`);
+}
+
+function pickSearch(id) {
+  searchText = '';
+  searchActive = 0;
+  $('vehicle-search').value = '';
+  $('vehicle-search').blur();
+  renderSearch();
+  if (id && findRow(id)) choose(id, true);
+}
+
+$('vehicle-search').addEventListener('input', event => { searchText = event.target.value; searchActive = 0; renderSearch(); });
+$('vehicle-search').addEventListener('focus', renderSearch);
+$('vehicle-search').addEventListener('blur', renderSearch);
+$('vehicle-search').addEventListener('keydown', event => {
+  const count = searchMatches().length;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    if (count) searchActive = (searchActive + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+    renderSearch();
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    const match = searchMatches()[searchActive];
+    if (match) pickSearch(String(match.vehicle.tr_id));
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    if (searchText) { searchText = ''; event.target.value = ''; renderSearch(); } else event.target.blur();
+  }
+});
+// A click on a match must not blur the field first (the dropdown would close under the pointer).
+$('vehicle-search-results').addEventListener('mousedown', event => event.preventDefault());
+
+// Q8: the hotkeys live in the «?» popover of the right column; `?` toggles it, Esc or a click outside closes it.
+const help = $('hotkeys-help');
+document.addEventListener('click', event => { if (help.open && !help.contains(event.target)) help.open = false; });
+
+// Hotkeys (v2): J/K next/previous event, W take, S snooze 5 data min, C close (reason menu), / search, ? help, Esc.
 document.addEventListener('keydown', event => {
   const typing = event.target.closest?.('textarea, select, input:not([type=checkbox]):not([type=radio])');
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   const current = currentEventId();
   const view = current ? Q.eventView(queue, current, wallNow()) : null;
-  if (event.code === 'KeyJ' || event.code === 'KeyK') {
-    const next = Q.nextEvent(queue, current, event.code === 'KeyJ' ? 1 : -1, wallNow(), shown);
-    const incident = next ? findIncident(store(), next) : null;
-    if (incident) { event.preventDefault(); openEvent(next); }
-  } else if (event.code === 'KeyW' && view?.can.take) { event.preventDefault(); takeEvent(current); }
+  if (event.key === '/') { event.preventDefault(); $('vehicle-search').focus(); }
+  else if (event.key === '?') { event.preventDefault(); help.open = !help.open; }
+  else if (event.code === 'KeyJ' || event.code === 'KeyK') { if (goNext(event.code === 'KeyJ' ? 1 : -1)) event.preventDefault(); }
+  else if (event.code === 'KeyW' && view?.can.take) { event.preventDefault(); takeEvent(current); }
   else if (event.code === 'KeyS' && view?.can.snooze) { event.preventDefault(); snoozeEvent(current, Q.SNOOZE_DEFAULT_MIN); }
   else if (event.code === 'KeyC' && view?.can.close) { event.preventDefault(); cardMenu = 'close'; renderCard(); }
+  else if (event.key === 'Escape' && help.open) help.open = false;
   else if (event.key === 'Escape') {
-    if (cardMenu || bulkMenu) { cardMenu = null; bulkMenu = null; renderCard(); renderEvents(); } else if (selected) choose(null, false);
+    // §L4: a menu first, then the card (the selection stays), then the selection.
+    if (cardMenu || bulkMenu) { cardMenu = null; bulkMenu = null; renderCard(); renderEvents(); } else if (selected && cardOpen) closeCard(); else if (selected) choose(null, false);
   }
 });
 // SLA badges count down every second between polls.
