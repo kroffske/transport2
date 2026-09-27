@@ -1,0 +1,7 @@
+{"ts":"2026-09-27T17:21:29.128Z","event":"created","actor":"claude","data":{"status":"doing"},"session_id":"986ac05a-b922-4d8d-8dc8-4fd2ce137dff"}
+{"ts":"2026-09-27T17:37:39.466Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:37:40.012Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:37:40.431Z","event":"work_item_done","actor":"manager","data":{"item":3},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:37:40.888Z","event":"work_item_done","actor":"manager","data":{"item":4},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:37:41.329Z","event":"work_item_done","actor":"manager","data":{"item":5},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:37:41.746Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Ревью готово: artifacts/ux-review.md, screens/ (живые 0x/1x, подмена снимка 2x–4x), mockup/layout.html + PNG 1920/1366. Код приложения не менялся, коммитов нет. Ждёт human review; сравнить с T-12 (GPT)."},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}

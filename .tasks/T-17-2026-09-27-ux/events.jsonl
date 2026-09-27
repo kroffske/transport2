@@ -1,0 +1,5 @@
+{"ts":"2026-09-27T17:42:57.582Z","event":"created","actor":"claude","data":{"status":"doing"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:57:14.217Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:57:14.406Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:57:14.594Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Готово в ветке worktree-agent-ad7e68a81680f2a75 @8944d1a: 4 роли остановок формой/штрихом, линия после цели пунктиром (splitAtTarget), легенда «Остановки». npm 68/68. Координатор проверил grayscale-скриншот. Приёмка — в T-19 после слияния; browser-check там же."},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:57:14.763Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"review"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}

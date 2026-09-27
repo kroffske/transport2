@@ -1,0 +1,5 @@
+{"ts":"2026-09-27T17:42:56.135Z","event":"created","actor":"claude","data":{"status":"doing"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:22:54.947Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:22:55.201Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:22:55.416Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Готово в ветке worktree-agent-ace16e6ecc34c2b85 @57443b6: L1–L7 (L6 базово), camera-frame.js с тестами; npm 68/68; browser-check regression/live 0 fail через прокси. Координатор проверил after-1920/1366-event-open: карточка отдельной колонкой/панелью, очередь видна целиком."},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:22:55.718Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"review"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}

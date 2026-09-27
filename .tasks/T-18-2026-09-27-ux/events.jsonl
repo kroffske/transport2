@@ -1,0 +1,5 @@
+{"ts":"2026-09-27T17:42:58.265Z","event":"created","actor":"claude","data":{"status":"doing"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:16:35.986Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:16:36.301Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:16:36.555Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Готово в ветке worktree-agent-aa0e096f52742f19a @a48472b: Q1–Q8; npm 64/64, browser-check через прокси regression 127/127, live 59/59. Координатор проверил 1920-05 (строка закреплена после W). Скриншоты сняты при недоступной карте (стек перезапускался) — карта проверяется в T-19."},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:16:36.805Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"review"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}

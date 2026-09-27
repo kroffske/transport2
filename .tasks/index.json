@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T17:44:32.689Z",
+  "generated_at": "2026-09-27T18:31:09.671Z",
   "tasks": [
     {
       "id": "T-10",
@@ -128,13 +128,8 @@
       "stream": "T",
       "path": "T-14-2026-09-27-",
       "work_items_total": 4,
-      "work_items_done": 0,
-      "work_items_remaining": [
-        "Backend: `route_key`/`route_label` в строке `/v1/vehicles`, в `/v1/routes` + `catalog` всех маршрутов плана; тест и контракт.",
-        "UI: модуль `route-scope.js` (формат, разбор, фильтр) + unit-тесты.",
-        "UI: панель «Мои маршруты» в шапке, фильтр карты/списка/обзорных линий/очереди/внимания/toast.",
-        "Сборка bundle, живая проверка в браузере, README и контракт."
-      ],
+      "work_items_done": 4,
+      "work_items_remaining": [],
       "subtask_count": 0,
       "last_event": "2026-09-27T17:44:32.653Z",
       "latest_status_note": {
@@ -152,23 +147,28 @@
     {
       "id": "T-15",
       "title": "UX: три колонки, панель карточки и кадр карты",
-      "status": "doing",
+      "status": "review",
       "type": "feature",
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T17:42:55.861Z",
-      "updated_at": "2026-09-27T17:42:55.861Z",
+      "updated_at": "2026-09-27T18:22:55.702Z",
       "stream": "T",
       "path": "T-15-2026-09-27-ux",
       "work_items_total": 2,
-      "work_items_done": 0,
-      "work_items_remaining": [
-        "Реализация §L.",
-        "Доказательства."
-      ],
+      "work_items_done": 2,
+      "work_items_remaining": [],
       "subtask_count": 0,
-      "last_event": "2026-09-27T17:42:56.135Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T18:22:55.718Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T18:22:55.416Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Готово в ветке worktree-agent-ace16e6ecc34c2b85 @57443b6: L1–L7 (L6 базово), camera-frame.js с тестами; npm 68/68; browser-check regression/live 0 fail через прокси. Координатор проверил after-1920/1366-event-open: карточка отдельной колонкой/панелью, очередь видна целиком.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
@@ -198,46 +198,56 @@
     {
       "id": "T-17",
       "title": "UX: обозначения ролей остановок на карте и легенда",
-      "status": "doing",
+      "status": "review",
       "type": "feature",
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T17:42:57.531Z",
-      "updated_at": "2026-09-27T17:42:57.531Z",
+      "updated_at": "2026-09-27T17:57:14.754Z",
       "stream": "T",
       "path": "T-17-2026-09-27-ux",
       "work_items_total": 2,
-      "work_items_done": 0,
-      "work_items_remaining": [
-        "Реализация §S.",
-        "Доказательства."
-      ],
+      "work_items_done": 2,
+      "work_items_remaining": [],
       "subtask_count": 0,
-      "last_event": "2026-09-27T17:42:57.582Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T17:57:14.763Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T17:57:14.594Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Готово в ветке worktree-agent-ad7e68a81680f2a75 @8944d1a: 4 роли остановок формой/штрихом, линия после цели пунктиром (splitAtTarget), легенда «Остановки». npm 68/68. Координатор проверил grayscale-скриншот. Приёмка — в T-19 после слияния; browser-check там же.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
     {
       "id": "T-18",
       "title": "UX: очередь, полоса внимания, поиск ТС и подписи времени",
-      "status": "doing",
+      "status": "review",
       "type": "feature",
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T17:42:58.205Z",
-      "updated_at": "2026-09-27T17:42:58.205Z",
+      "updated_at": "2026-09-27T18:16:36.781Z",
       "stream": "T",
       "path": "T-18-2026-09-27-ux",
       "work_items_total": 2,
-      "work_items_done": 0,
-      "work_items_remaining": [
-        "Реализация §Q.",
-        "Доказательства."
-      ],
+      "work_items_done": 2,
+      "work_items_remaining": [],
       "subtask_count": 0,
-      "last_event": "2026-09-27T17:42:58.265Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T18:16:36.805Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T18:16:36.555Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Готово в ветке worktree-agent-aa0e096f52742f19a @a48472b: Q1–Q8; npm 64/64, browser-check через прокси regression 127/127, live 59/59. Координатор проверил 1920-05 (строка закреплена после W). Скриншоты сняты при недоступной карте (стек перезапускался) — карта проверяется в T-19.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
@@ -249,7 +259,7 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T17:43:15.943Z",
-      "updated_at": "2026-09-27T17:43:15.943Z",
+      "updated_at": "2026-09-27T18:22:56.009Z",
       "stream": "T",
       "path": "T-19-2026-09-27-ux",
       "work_items_total": 3,
@@ -260,8 +270,16 @@
         "QA и ship."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T17:43:15.966Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T18:22:56.021Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T18:22:56.021Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Из T-15 для интеграции: конфликтные места с T-18 — ветка Escape в keydown, aria-current строки очереди, max-width полосы внимания (сохранить '- var(--card-overlay)'); с T-16 — первые строки renderCard (ветка пустого состояния); layoutLabels использует общий список оверлеев. Оба трогают browser-check.mjs и package.json (строка test). Остаток: фокус не возвращается в строку очереди после ×; README-описание раскладки.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
@@ -340,7 +358,7 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T11:24:42.661Z",
-      "updated_at": "2026-09-27T16:21:25.500Z",
+      "updated_at": "2026-09-27T18:31:09.463Z",
       "stream": "T",
       "path": "T-7-2026-09-27-ml",
       "work_items_total": 13,
@@ -354,12 +372,12 @@
         "Независимая финальная QA (agent D)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T16:21:25.533Z",
+      "last_event": "2026-09-27T18:31:09.475Z",
       "latest_status_note": {
-        "ts": "2026-09-27T16:21:25.533Z",
+        "ts": "2026-09-27T18:31:09.475Z",
         "event": "note",
         "actor": "manager",
-        "text": "User 2026-09-27 ~19:55 MSK: bring the UI to the team's prototype «Диспетчерская карта v2» (~/Downloads/Transport dashboard for dispatchers/): event queue with groups and SLA instead of the events dropdown, snooze/close with reason, group actions, reaction checklist, attention bar, tabs События/Транспорт, toggle «Приглушить без прогноза», hotkeys J/K/W/S/X/Esc. Base semantics unchanged. B = layout/integration, C = pure event-queue module. Checkpoint 21:00, hard stop 21:45, then final QA + form.",
+        "text": "21:30 MSK: W14–W16 + UI v2 done and in main (last product commit 5e07f00). Final QA (clean clone at 6019529): FINDINGS, no blockers; F-1..F-4 docs fixed (5f2fd8d), F-5/F-6 fixed in c1e9ca1. Live browser-check on W16 stack: 60/60 live after race fixes, regression 131/131. Form text final in docs/submission-form.md (b0fff99). Open: PyDoc lacks route_catalog/route_shapes modules; T-9 (lead time) and T-10 (benchmark) deferred; T-11 pitch after form.",
         "from": null,
         "to": null,
         "source": "status_note"
@@ -375,7 +393,7 @@
       "priority": "p0",
       "owner": "claude",
       "created_at": "2026-09-27T14:29:03.176Z",
-      "updated_at": "2026-09-27T14:55:32.698Z",
+      "updated_at": "2026-09-27T18:31:09.633Z",
       "stream": "T",
       "path": "T-8-2026-09-27-c1-c3",
       "work_items_total": 5,
@@ -388,12 +406,12 @@
         "Проверка чистого clone (первое окно эксклюзивного стека после push финального product commit; не ждёт T-10)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:55:32.715Z",
+      "last_event": "2026-09-27T18:31:09.646Z",
       "latest_status_note": {
-        "ts": "2026-09-27T14:55:32.715Z",
+        "ts": "2026-09-27T18:31:09.646Z",
         "event": "note",
         "actor": "manager",
-        "text": "Coordinator 18:55: W1–W3 accepted, W4 draft committed (see HEAD). PyDoc command gets a 3rd sed step stripping pydantic memory addresses (deterministic regen) — accepted. Open placeholders: <final_commit>, <CLEAN_CLONE_STATUS>, <T10_PERF…>, «Статус: ЧЕРНОВИК». W5 after final UI commit.",
+        "text": "21:30 MSK: form text final (docs/submission-form.md, links to main), clean clone passed in final QA (T-7 qa.md), README now has SOURCE_COMMIT variant and emulator SHA. User submits.",
         "from": null,
         "to": null,
         "source": "status_note"
