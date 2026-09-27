@@ -69,6 +69,8 @@ const labelOverlaps = page => page.locator('.vehicle-label, .stop-label:not([hid
 });
 const rows = page => page.locator('#vehicles .vehicle');
 const cardTitle = page => page.locator('#card h2').textContent();
+// × hides the card and keeps the selection (merged UX spec §L4); Esc then deselects.
+const deselect = async page => { await page.locator('#card-close').click(); await page.keyboard.press('Escape'); };
 const cardText = page => page.locator('#card').textContent();
 const incidentText = page => page.locator('#card .incident').textContent();
 const api = (page, url) => page.evaluate(async u => { const r = await fetch(u, {cache: 'no-store'}); return {status: r.status, body: await r.json().catch(() => null)}; }, url);
@@ -260,7 +262,7 @@ try {
       await pressAcrossPoll(page, `#vehicles .vehicle[data-id="${pick}"]`);
       check(await cardTitle(page) === pick && await page.locator(`#vehicles .vehicle[data-id="${pick}"]`).getAttribute('aria-current') === 'true',
         `live: mouse down → poll → up on row ${pick} selects it`);
-      await page.locator('#card-close').click();
+      await deselect(page);
     } else skipped.push('live: fewer than 2 vehicles — DOM stability checks run in regression only');
     await page.locator('#overview').click();
     await page.waitForTimeout(1200);
@@ -396,6 +398,7 @@ try {
     // Diagnostics: full build identity exactly as /api/build reports it, and the run's thinning.
     const {body: build} = await api(page, '/api/build');
     await page.locator('#card-close').click().catch(() => {});
+    await page.keyboard.press('Escape');
     await page.locator('#diagnostics summary').click();
     await page.waitForTimeout(1200);
     const diag = await page.locator('#diag-list').textContent();
@@ -501,14 +504,23 @@ try {
     await survivesPolls(page, '#attention button', '«Открыть карточку»');
     await pressAcrossPoll(page, '#vehicles .vehicle[data-id="900002"]');
     check(await cardTitle(page) === '900002', 'mouse down → poll → up on a list row selects the vehicle');
+    // §L4: × hides the card, the selection and its ring stay; a click on the row shows it again; Esc deselects.
     await page.locator('#card-close').click();
+    const closed = {open: await page.locator('#card').getAttribute('data-open'), row: await page.locator('#vehicles .vehicle[data-id="900002"]').getAttribute('aria-current'),
+      ring: await page.locator('.vehicle-label.is-selected').count(), summary: await page.locator('#card .shift').count()};
+    await page.locator('#vehicles .vehicle[data-id="900002"]').click();
+    const reopened = await cardTitle(page).catch(() => null);
+    await deselect(page);
+    check(closed.open === 'false' && closed.row === 'true' && closed.ring === 1 && closed.summary === 1 && reopened === '900002'
+      && await page.locator('#vehicles .vehicle[aria-current=true]').count() === 0 && await page.locator('.vehicle-label.is-selected').count() === 0,
+    `× hides the card (column shows the shift summary) and keeps the selection; the row shows it again; Esc deselects (${JSON.stringify(closed)}, reopened ${reopened}, §L4)`);
     await pressAcrossPoll(page, '#attention button');
     check(await cardTitle(page) === '900001', 'mouse down → poll → up on «Открыть карточку» opens the card');
     await survivesPolls(page, '#card-close', 'card close button');
     await page.locator('#shift-after-target').focus();
     await page.waitForTimeout(POLL_SPAN_MS);
     check(await page.evaluate(() => document.activeElement?.id) === 'shift-after-target', 'the toggle keeps keyboard focus across a poll');
-    await page.locator('#card-close').click();
+    await deselect(page);
     setSnapshot(RUN('run-A-0001'), [a, b]);
     await page.waitForTimeout(POLL_SPAN_MS);
 
@@ -525,7 +537,7 @@ try {
 
     // Short nodata (a new target's prediction pending) shorter than LOST_AFTER_S: nothing changes.
     const historyBefore = await page.locator('.incident-history li').count();
-    await page.locator('#card-close').click();
+    await deselect(page);
     setSnapshot(RUN('run-A-0001'), [{...a, status: 'degraded', reason: 'prediction_pending', prediction_s: null}, b]);
     await page.waitForTimeout(Math.max(3000, (LOST_AFTER_S - 8) * 1000));
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
@@ -647,8 +659,8 @@ try {
     await page.waitForTimeout(400);
     const followBox = await page.locator('#follow').boundingBox();
     const overviewBox = await page.locator('#overview').boundingBox();
-    check(await page.locator('#follow').isVisible() && (await page.locator('#follow').textContent()) === `Следить за ${first}` && !overlap(followBox, overviewBox),
-      `manual pan: «Следить за ${first}» appears beside «Все ТС» (L-3)`);
+    check(await page.locator('#follow').isVisible() && (await page.locator('#follow').textContent()) === `Следить за ТС ${first}` && !overlap(followBox, overviewBox),
+      `manual pan: «Следить за ТС ${first}» appears beside «Все ТС» (L-3, §L5)`);
     await page.locator('#follow').click();
     await page.waitForTimeout(900);
     check(await page.locator('#follow').isHidden() && inside(await page.locator('.vehicle-label.is-selected').boundingBox(), pane), '«Следить» brings the vehicle back and hides the button (L-3)');
@@ -656,7 +668,7 @@ try {
     await page.locator('#incident-action').click();
     check(await page.locator('#incident-action').textContent() === 'Вернуть в новые' && await page.locator('#card .incident-flow').textContent() === 'В работе'
       && await page.locator('#event-sla').textContent() === 'в работе', '«Взять в работу» → chip and badge «В работе», «Вернуть в новые» offered');
-    await page.locator('#card-close').click();
+    await deselect(page);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     check(!(await page.locator('#attention').textContent()).includes(first), `${first} in work: not back in the banner for two polls (L-5)`);
     // Two new events while 900001's card is open: at most two toasts, none for the open card, none «в норме».
@@ -696,7 +708,7 @@ try {
     check((await page.locator('.vehicle-label').allInnerTexts()).every(t => /^\S+$/.test(t.trim())), 'run completed: map labels are the ID only, no «нет прогноза» (H-2)');
     await shot(page, 'regression-w13-run-completed-1920.png');
     // L-2: without a selection 16 rows fit the list without scrolling.
-    await page.locator('#card-close').click();
+    await deselect(page);
     setSnapshot(RUN('run-W13-0001', {state: 'completed', progress: 1, dataset_time: '2026-01-06T08:30:00'}),
       Array.from({length: 16}, (_, i) => ({...ended[i % ended.length], tr_id: String(910000 + i), lon: center[0] + (i % 4) * 0.01, lat: center[1] + Math.floor(i / 4) * 0.006})));
     await page.waitForFunction(() => document.querySelectorAll('#vehicles .vehicle').length === 16, null, {timeout: 6000});
@@ -735,9 +747,11 @@ try {
     const overlaps = await labelOverlaps(page);
     check(overlaps.length === 0, `symbols: no two map labels intersect (${overlaps.join(', ') || 'none'})`);
     await shot(page, 'regression-8-symbols-selected-1920.png');
-    // M-2: at z11 and z12 no two drawn stops closer than 12 px; at z14 every stop is drawn.
+    // M-2: at z11 and z12 no two drawn stops closer than 12 px; at z14 every stop is drawn. The view is
+    // centred on the dense stretch (~2.8 km, ~520 px at z14) so it fits the 1120 px map column (§L1).
+    const denseMiddle = [(dense[0].lon + dense.at(-1).lon) / 2, (dense[0].lat + dense.at(-1).lat) / 2];
     for (const zoom of [11, 12, 14]) {
-      await page.evaluate(z => window.__map.jumpTo({zoom: z}), zoom);
+      await page.evaluate(([z, c]) => window.__map.jumpTo({zoom: z, center: c}), [zoom, denseMiddle]);
       await page.waitForTimeout(700);
       const {count, minGap} = await page.evaluate(() => {
         const map = window.__map;
@@ -1055,7 +1069,7 @@ try {
     await page.waitForTimeout(POLL_SPAN_MS);
     check(await page.locator('#vehicles .vehicle[data-id="900035"]').getAttribute('data-level') === 'normal', 'GPS unmark: the vehicle is back to its forecast');
     // «Приглушить без прогноза»: labels of vehicles without a forecast hidden; off shows them.
-    await page.locator('#card-close').click();
+    await deselect(page);
     const dimmedLabel = () => page.locator('.vehicle-label[data-id="900034"]').evaluate(l => l.classList.contains('is-dimmed'));
     const dimOn = await dimmedLabel();
     await page.locator('#dim-nodata').click();

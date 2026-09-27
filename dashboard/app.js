@@ -3,6 +3,7 @@ import {PMTiles, Protocol} from 'pmtiles';
 import {NOTE_MAX, assess, countByFilter, findIncident, incidentCounts, incidentForVehicle, isHeld, visibleRows} from './incidents.js';
 import * as Q from './event-queue.js';
 import {patchChildren, patchText} from './dom.js';
+import {FAR_OFF_ROUTE_M, FRAME_MAX_ZOOM, edgeAnchor, framePadding} from './camera-frame.js';
 import {placeLabels} from './map-labels.js';
 import {drawSymbol, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
 import {reasonText} from './reasons.js';
@@ -128,6 +129,10 @@ let follow = false; // the camera keeps the selected vehicle and its target in v
 let lastFollowAt = 0;
 let techOpen = false; // «Технические подробности» in the card, as the dispatcher left it
 let cardFor; // the vehicle the card's DOM was built for; another vehicle gets a fresh card
+// The card of the selection is shown (§L4): × and the first Esc hide it and keep the selection,
+// its ring on the map and its queue row; choosing again shows it; the second Esc deselects.
+let cardOpen = false;
+let framedTarget = null; // the target the camera last framed; a new target reframes while following
 // Planned routes of all vehicles for the overview (consumer /api/routes), refreshed every ROUTES_MS.
 let routesFeed = {status: 'idle', data: null, at: 0, inFlight: false};
 const ROUTES_MS = 10000;
@@ -258,6 +263,7 @@ if (map) {
     if (pendingOverview && snapshotRows().length) overview(false);
   });
   map.on('move', layoutLabels);
+  map.on('move', renderEdgeArrow);
   // A pan or zoom by the dispatcher (an event with a DOM origin) stops following the selection.
   map.on('movestart', event => { if (event.originalEvent && follow) { follow = false; followSelected(); } });
   map.on('zoomend', () => { routeLayers.rethin(); layoutLabels(); });
@@ -362,6 +368,7 @@ function renderMapObjects() {
   renderStopLabels(drawable && chosen ? chosen : null, target);
   $('legend-route').hidden = !chosen; // the route legend only describes a selected vehicle
   layoutLabels();
+  renderEdgeArrow();
 }
 
 // Time labels on the map: the target (from the snapshot row, the same value as the card headline)
@@ -440,7 +447,7 @@ function layoutLabels() {
   if (!map || !(labels.size || stopLabels.size)) return;
   const canvas = map.getCanvas();
   const origin = canvas.getBoundingClientRect();
-  const obstacles = [...document.querySelectorAll('#map-pane .legend, #map-pane .attention:not([hidden]), #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right')]
+  const obstacles = [...document.querySelectorAll(OVERLAYS)]
     .map(el => el.getBoundingClientRect())
     .filter(r => r.width && r.height)
     .map(r => ({x: r.x - origin.x, y: r.y - origin.y, width: r.width, height: r.height}));
@@ -497,8 +504,10 @@ function overview(animate = true) {
 }
 
 // Show the selected vehicle together with its target, so the forecast's stop is on screen.
-// The map area not covered by panels drawn over it (banner, legend, buttons, toasts), in pane pixels.
-const OVERLAYS = '#map-pane .attention:not([hidden]), #map-pane .legend, #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right';
+// The map area not covered by panels drawn over it (banner, legend, buttons, toasts, and the card
+// panel over the map's right edge below 1600 px), in pane pixels. A card column beside the map lies
+// outside the pane and covers nothing.
+const OVERLAYS = '#map-pane .attention:not([hidden]), #map-pane .legend, #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right, #card';
 function overlayRects() {
   const pane = $('map-pane').getBoundingClientRect();
   return [...document.querySelectorAll(OVERLAYS)].map(e => e.getBoundingClientRect()).filter(r => r.width && r.height)
@@ -510,34 +519,100 @@ function inSafeZone(point, margin = 16) {
   return !overlayRects().some(r => point.x > r.x - margin && point.x < r.x + r.width + margin && point.y > r.y - margin && point.y < r.y + r.height + margin);
 }
 
-// Show the selected vehicle together with its target; the padding clears the panels over the map.
+// Frame of the selected vehicle (§L5): the vehicle, its target and the next stop after the vehicle,
+// with the padding of camera-frame.js measured from the panels over the map. A vehicle far off its
+// route (§L6) stays out of the frame (the target and its stretch of route), shown by the edge arrow.
+const farOffRoute = v => v.off_route === true && Number(v.route_offset_m) > FAR_OFF_ROUTE_M;
+function framePoints(v) {
+  const next = labelledStops(routeRows(shownRoute())).next;
+  const route = [targetPoint(v), next ? [next.lon, next.lat] : null].filter(Boolean);
+  return farOffRoute(v) && route.length ? route : [[Number(v.lon), Number(v.lat)], ...route];
+}
+const shownRect = element => { const r = element && !element.hidden ? element.getBoundingClientRect() : null; return r?.width && r.height ? r : null; };
 function focusSelected() {
   const v = findRow(selected);
   if (!map || mapStatus !== 'ready' || !v || !locationOk(v)) return;
   lastFollowAt = performance.now();
-  const here = [Number(v.lon), Number(v.lat)];
+  framedTarget = v.target_stop_id ?? null;
+  const points = framePoints(v);
   const target = targetPoint(v);
-  const pane = $('map-pane').getBoundingClientRect();
-  const attention = $('attention').hidden ? null : $('attention').getBoundingClientRect();
-  const legend = document.querySelector('#map-pane .legend')?.getBoundingClientRect();
-  const padding = {top: Math.max(60, attention ? attention.bottom - pane.top + 40 : 60),
-    bottom: Math.max(60, legend ? pane.bottom - legend.top + 40 : 60), left: 100, right: 100};
-  if (!target) { map.easeTo({center: here, zoom: Math.max(13, map.getZoom()), padding, duration: 600}); return; }
-  const bounds = new maplibregl.LngLatBounds(here, here).extend(target);
-  map.fitBounds(bounds, {padding, maxZoom: 15, duration: 600});
+  const padding = framePadding({pane: $('map-pane').getBoundingClientRect(), attention: shownRect($('attention')),
+    legend: shownRect(document.querySelector('#map-pane .legend')), overlay: shownRect($('card')),
+    targetEast: Boolean(target) && points.every(p => p[0] <= target[0]),
+    targetLabelWidth: stopLabels.get('target')?.getElement().offsetWidth || undefined});
+  if (points.length < 2) { map.easeTo({center: points[0], zoom: Math.max(13, map.getZoom()), padding, duration: 600}); return; }
+  const bounds = points.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(points[0], points[0]));
+  map.fitBounds(bounds, {padding, maxZoom: FRAME_MAX_ZOOM, duration: 600});
 }
 
-// Follow the selected vehicle (L-3): when it or its target leaves the safe zone, the camera eases
-// back, at most every FOLLOW_EVERY_MS. A manual pan or zoom stops following; «Следить за …» resumes.
+// Follow the selected vehicle (L-3): when it or its target leaves the safe zone, or the target
+// changes, the camera eases back, at most every FOLLOW_EVERY_MS. A manual pan or zoom stops
+// following; «Следить за ТС …» resumes.
 const FOLLOW_EVERY_MS = 3000;
 function followSelected() {
   const v = findRow(selected);
   $('follow').hidden = !(v && locationOk(v) && !follow && mapStatus === 'ready');
-  $('follow').textContent = v ? `Следить за ${v.tr_id}` : '';
+  $('follow').textContent = v ? `Следить за ТС ${v.tr_id}` : '';
   if (!follow || !v || !locationOk(v) || mapStatus !== 'ready' || map.isMoving()) return;
   if (performance.now() - lastFollowAt < FOLLOW_EVERY_MS) return;
-  const points = [[Number(v.lon), Number(v.lat)], targetPoint(v)].filter(Boolean).map(p => map.project(p));
-  if (points.every(p => inSafeZone(p))) return;
+  const retarget = (v.target_stop_id ?? null) !== framedTarget;
+  const watched = farOffRoute(v) && targetPoint(v) ? [targetPoint(v)] : [[Number(v.lon), Number(v.lat)], targetPoint(v)];
+  const points = watched.filter(Boolean).map(p => map.project(p));
+  if (!retarget && points.every(p => inSafeZone(p))) return;
+  focusSelected();
+}
+
+// §L6: the far off-route selected vehicle as an arrow at the edge of the visible map with its
+// distance from the route; a click shows the vehicle itself (and stops following).
+function visibleZone() {
+  const pane = $('map-pane').getBoundingClientRect();
+  const attention = shownRect($('attention'));
+  const legend = shownRect(document.querySelector('#map-pane .legend'));
+  const card = shownRect($('card'));
+  const covered = card ? Math.max(0, pane.right - Math.max(pane.left, card.left)) : 0;
+  return {left: 8, top: (attention ? attention.bottom - pane.top : 0) + 8,
+    right: pane.width - covered - 8, bottom: (legend ? legend.top - pane.top : pane.height) - 8};
+}
+function renderEdgeArrow() {
+  const v = findRow(selected);
+  let arrow = $('edge-arrow');
+  if (!(map && mapStatus === 'ready' && v && locationOk(v) && farOffRoute(v))) { if (arrow) arrow.hidden = true; return; }
+  if (!arrow) {
+    arrow = el('button', {type: 'button', id: 'edge-arrow', className: 'edge-arrow'});
+    arrow.addEventListener('click', () => {
+      const row = findRow(selected);
+      if (!row || !locationOk(row)) return;
+      follow = false;
+      map.easeTo({center: [Number(row.lon), Number(row.lat)], duration: 600});
+      followSelected();
+    });
+    $('map-pane').append(arrow);
+  }
+  const label = `ТС ${v.tr_id} · ${offsetText(v.route_offset_m) ?? ''}`;
+  if (arrow.dataset.label !== label) {
+    arrow.dataset.label = label;
+    arrow.title = `ТС ${v.tr_id} вне маршрута ${offsetText(v.route_offset_m) ?? ''} — показать на карте`;
+    arrow.replaceChildren(label, el('i', {'aria-hidden': 'true'}, '→'));
+  }
+  arrow.hidden = false;
+  const at = edgeAnchor(visibleZone(), map.project([Number(v.lon), Number(v.lat)]), {width: arrow.offsetWidth, height: arrow.offsetHeight});
+  if (!at) { arrow.hidden = true; return; }
+  arrow.style.left = `${Math.round(at.x - arrow.offsetWidth / 2)}px`;
+  arrow.style.top = `${Math.round(at.y - arrow.offsetHeight / 2)}px`;
+  arrow.lastChild.style.transform = `rotate(${Math.round(at.angle)}deg)`;
+}
+
+// The route arrives after the selection: its next stop joins the frame once, if it is not in view.
+// While the selection's own camera move runs, the check waits for it to end instead of restarting it.
+function frameRouteArrival() {
+  const v = findRow(selected);
+  if (!follow || !v || !locationOk(v) || !map || mapStatus !== 'ready') return;
+  if (map.isMoving()) {
+    const id = selected;
+    map.once('moveend', () => { if (selected === id) frameRouteArrival(); });
+    return;
+  }
+  if (framePoints(v).map(p => map.project(p)).every(p => inSafeZone(p))) return;
   focusSelected();
 }
 
@@ -546,6 +621,7 @@ function choose(id, focus) {
   const next = id == null ? null : String(id);
   const changed = next !== selected;
   selected = next;
+  cardOpen = Boolean(next); // choosing, also the same vehicle again, shows its card
   // Choosing an object is reading its event; it is not taking it into work.
   const incident = selected ? incidentForVehicle(store(), selected) : null;
   if (incident?.unread) { setQueue(Q.markRead(queue, incident.id)); }
@@ -555,6 +631,17 @@ function choose(id, focus) {
   renderCard();
   renderMapObjects();
   if (focus) focusSelected();
+}
+
+// × and the first Esc (§L4): the card goes, the selection stays. Below 1600 px the panel leaves the
+// map uncovered; the map itself keeps its size, pan and zoom.
+function closeCard() {
+  if (!cardOpen) return;
+  cardOpen = false;
+  cardMenu = null;
+  renderCard();
+  layoutLabels();
+  renderEdgeArrow();
 }
 
 function setHovered(id) {
@@ -594,11 +681,13 @@ async function loadRoute() {
     next = {status: 'offline', reason: String(error.message || error)};
   }
   if (token !== routeToken || id !== selected) return; // the selection changed meanwhile
+  const firstForSelection = !route.data;
   route = {...route, id, status: next.status, reason: next.reason ?? null, inFlight: false,
     data: next.status === 'ok' ? next.data : next.status === 'offline' ? route.data : null};
   renderRouteLayers();
   renderMapObjects();
   renderCard();
+  if (firstForSelection && route.data) frameRouteArrival();
 }
 
 // Called after each snapshot: the route follows the selected vehicle's new frames, and at once
@@ -714,19 +803,33 @@ function currentDelayText(seconds) {
 
 const runOver = run => run?.state === 'completed';
 
+// The card column while no card is open (§L1): the shift in numbers and how to open an event.
+function shiftSummary() {
+  if (!snapshotRows().length) return [el('p', {className: 'card-empty'}, 'Карточка появится, когда в снимке будут машины прогона.')];
+  const {needs, counts} = Q.groups(queue, wallNow());
+  const oldest = needs.reduce((max, view) => Math.max(max, queue.sla_s - (view.sla?.left_s ?? queue.sla_s)), 0);
+  const rows = [['Требуют реакции', String(counts.needs), counts.needs ? 'needs' : null],
+    counts.needs ? ['Самое старое ждёт', Q.dur(oldest), null] : null,
+    ['В работе', String(counts.work), null],
+    counts.snoozed ? ['Отложены', String(counts.snoozed), null] : null].filter(Boolean);
+  const hint = selected && findRow(selected)
+    ? `ТС ${selected} выбрано на карте. Клик по его строке вернёт карточку; Esc — снять выбор.`
+    : counts.open ? 'J — следующее событие. Или выберите ТС на карте, в очереди или в списке.'
+    : 'Выберите ТС на карте, в очереди или в списке — здесь откроется его карточка.';
+  return [el('section', {className: 'shift', 'data-key': 'shift', 'aria-label': 'Сводка смены'},
+    el('h3', {}, 'Сводка смены'),
+    el('dl', {}, ...rows.flatMap(([label, value, tone]) => [el('dt', {}, label), el('dd', {dataset: tone ? {tone} : {}}, value)])),
+    el('p', {className: 'card-empty'}, hint))];
+}
+
 // Card order (UI review L-1): a sticky top (ID, level, the forecast and its target), then the stops,
 // facts, the event, and «Технические подробности» collapsed. Only the card scrolls.
 function renderCard() {
   const card = $('card');
-  const v = findRow(selected);
+  const v = cardOpen ? findRow(selected) : null;
+  card.dataset.open = String(Boolean(v));
   if (!v) {
-    const empty = document.createElement('p');
-    empty.className = 'card-empty';
-    empty.textContent = snapshotRows().length
-      ? 'Выберите машину на карте или в списке — появятся маршрут, остановки и цель с прогнозом.'
-      : 'Карточка появится, когда в снимке будут машины прогона.';
-    empty.title = empty.textContent;
-    patchChildren(card, [empty]);
+    patchChildren(card, shiftSummary());
     card.dataset.level = 'none';
     cardFor = null;
     return;
@@ -1127,7 +1230,7 @@ const eventValue = view => (view.group === 'ended' ? `пик ${delayText(view.pe
 
 function queueItem(view) {
   const current = findIncident(store(), view.id)?.tr_id === selected;
-  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id, 'aria-current': current ? 'true' : null,
     dataset: {id: view.id, action: 'open-event', group: view.group, state: view.lifecycle, unread: String(view.unread), level: eventLevel(view)}});
   const check = el('input', {type: 'checkbox', className: 'event-check', 'aria-label': `Выбрать событие ТС ${view.tr_id}`,
     dataset: {action: 'check-event', id: view.id}});
@@ -1458,7 +1561,7 @@ function onPanelClick(event) {
   const {action, id} = control.dataset;
   if (control.type === 'checkbox') return; // handled on change
   if (action === 'choose') choose(id, true);
-  else if (action === 'close-card') choose(null, false);
+  else if (action === 'close-card') closeCard();
   else if (action === 'focus') focusSelected();
   else if (action === 'open-event') openEvent(id);
   else if (action === 'dismiss-toast') dismissToast(control.dataset.key);
@@ -1543,7 +1646,8 @@ document.addEventListener('keydown', event => {
   else if (event.code === 'KeyS' && view?.can.snooze) { event.preventDefault(); snoozeEvent(current, Q.SNOOZE_DEFAULT_MIN); }
   else if (event.code === 'KeyC' && view?.can.close) { event.preventDefault(); cardMenu = 'close'; renderCard(); }
   else if (event.key === 'Escape') {
-    if (cardMenu || bulkMenu) { cardMenu = null; bulkMenu = null; renderCard(); renderEvents(); } else if (selected) choose(null, false);
+    // §L4: a menu first, then the card (the selection stays), then the selection.
+    if (cardMenu || bulkMenu) { cardMenu = null; bulkMenu = null; renderCard(); renderEvents(); } else if (selected && cardOpen) closeCard(); else if (selected) choose(null, false);
   }
 });
 // SLA badges count down every second between polls.

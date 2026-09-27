@@ -33,6 +33,7 @@
     </div>
     <div id="hotkeys" class="hotkeys" aria-label="Горячие клавиши"><span>J / K — следующее / предыдущее событие</span><span>W — взять</span><span>S — отложить 5 мин</span><span>C — закрыть</span><span>Esc — снять выбор</span></div>
   </section>
+  <section id="card" class="card" aria-label="Карточка ТС" aria-live="polite" data-open="false"></section>
   <aside class="side">
     <div class="side-tabs" role="tablist" aria-label="Панель">
       <button type="button" role="tab" id="tab-events" data-tab="events" aria-controls="events-panel">События <b id="events-count">0</b></button>
@@ -51,7 +52,6 @@
       <div class="search-row"><input id="search" type="search" placeholder="Поиск по ID" aria-label="Поиск по ID" autocomplete="off"><button type="button" id="clear-selection">Сбросить выбор</button></div>
       <div id="vehicles" class="vehicle-list">Загрузка…</div>
     </section>
-    <section id="card" class="card" aria-live="polite"></section>
   </aside>
 </main>
 <script src="/static/app.js" defer></script>

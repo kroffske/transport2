@@ -75,10 +75,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .side-tabs b { min-width: 20px; padding: 0 6px; border-radius: 999px; background: #e7ebee; color: var(--ink); font-size: 12px; line-height: 18px; }
 #tab-events b[data-open]:not([data-open="0"]) { background: var(--severe); color: #fff; }
 .side[data-tab=events] .list-panel, .side[data-tab=vehicles] .events-panel { display: none; }
-.events-panel { flex: 0 1 auto; display: flex; flex-direction: column; min-height: 150px; max-height: 42%; border-bottom: 1px solid var(--line); }
-.side[data-tab=events]:has(.card header) .events-panel { max-height: 36%; }
-.side[data-tab=events]:not(:has(.card header)) .events-panel { flex: 1 1 auto; max-height: none; }
-.events-list { overflow: auto; display: grid; gap: 6px; align-content: start; padding: 10px 14px; }
+.events-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.events-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; gap: 6px; align-content: start; padding: 10px 14px; }
 .events-empty { margin: 0 0 2px; color: var(--muted); font-size: 12px; }
 .queue-group { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .queue-group::after { content: ''; order: 1; flex: 1; height: 1px; background: #e3e8eb; }
@@ -133,8 +131,34 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .toast-take { grid-column: 3; grid-row: 1 / span 2; border: 1px solid var(--navy); background: var(--navy); color: #fff; border-radius: 6px; padding: 6px 10px; font-weight: 600; }
 .toast-close { grid-column: 4; grid-row: 1 / span 2; border: 0; background: transparent; font-size: 18px; color: var(--muted); padding: 0 2px; }
 
-/* Map-first layout: the map takes everything except a 360 px panel. */
-.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 0; }
+/* Layout (merged UX spec §L): map | card | queue. From 1600 px the card is its own 440 px column,
+   always present (a shift summary while nothing is open). Below 1600 px the grid is map | queue and
+   the card is a 420 px panel over the map's right edge, next to the queue, shown only while open:
+   the map never changes size on open or close. Card and queue scroll independently. */
+.layout { --card-w: 440px; --queue-w: 360px; --card-overlay: 0px; position: relative; flex: 1; display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--card-w) var(--queue-w); grid-template-rows: minmax(0, 1fr); min-height: 0; }
+@media (max-width: 1599px) {
+  .layout { --card-w: 420px; --queue-w: 330px; grid-template-columns: minmax(0, 1fr) var(--queue-w); }
+  .layout:has(> .card[data-open=true]) { --card-overlay: var(--card-w); }
+  .layout > .card { position: absolute; z-index: 4; top: 0; bottom: 0; right: var(--queue-w); width: var(--card-w);
+    border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(10, 30, 45, .18); }
+  .layout > .card[data-open=false] { display: none; }
+}
+@media (max-width: 1399px) { .layout { --queue-w: 320px; } }
+/* Panels drawn over the map keep clear of the card panel (0 px when the card is a column). */
+.map-pane .map-tools { right: calc(14px + var(--card-overlay)); }
+.map-pane .toasts { right: calc(56px + var(--card-overlay)); }
+.map-pane .maplibregl-ctrl-bottom-right { right: var(--card-overlay); }
+.map-pane .legend { max-width: min(720px, calc(100% - 80px - var(--card-overlay))); }
+.map-pane .attention { max-width: calc(100% - 540px - var(--card-overlay)); }
+@media (max-width: 1699px) { .map-pane .attention { max-width: calc(100% - 280px - var(--card-overlay)); } }
+/* «Следить за ТС …» (§L5) stands out from the other map tools: it is the way back to the frame. */
+.map-tools .follow { background: var(--navy); border-color: var(--navy); color: #fff; }
+/* §L6: a selected vehicle far off its route, as an arrow at the edge of the visible map. */
+.edge-arrow { position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1.5px dashed #6b3fa0; border-radius: 6px;
+  background: #fff; color: #4b2a75; font-size: 12px; font-weight: 700; white-space: nowrap; box-shadow: 0 2px 8px rgba(10, 30, 45, .2); }
+.edge-arrow[hidden] { display: none; }
+.edge-arrow i { display: inline-block; font-style: normal; font-size: 14px; }
 .map-pane { position: relative; min-width: 0; min-height: 0; background: #e6eae7; }
 #map { position: absolute; inset: 0; }
 .map-pane[data-state=unavailable] #map { opacity: .35; filter: grayscale(1); }
@@ -231,7 +255,7 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 
 /* Right panel: filters, search, list, card. */
 .side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); }
-.list-panel { flex: 0 1 auto; display: flex; flex-direction: column; min-height: 150px; max-height: 42%; padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+.list-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; padding: 12px 14px 8px; }
 .filters { display: flex; gap: 4px; margin-bottom: 8px; }
 .filters button { flex: 1 1 auto; padding: 5px 6px; border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; font-size: 12px; white-space: nowrap; }
 .filters button b { margin-left: 3px; }
@@ -239,7 +263,7 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .search-row { display: flex; gap: 6px; margin-bottom: 8px; }
 .search-row input { flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
 .search-row button { font-size: 12px; white-space: nowrap; }
-.vehicle-list { overflow: auto; display: grid; gap: 3px; align-content: start; color: var(--muted); }
+.vehicle-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; gap: 3px; align-content: start; color: var(--muted); }
 .vehicle { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; text-align: left; background: #f6f8f8; border: 1px solid #dde3e6; border-left: 6px solid var(--nodata); border-radius: 5px; padding: 4px 9px; color: var(--ink); }
 .vehicle[data-level=severe] { border-left-color: var(--severe); }
 .vehicle[data-level=warning] { border-left-color: var(--warning); }
@@ -252,7 +276,8 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .vehicle[data-level=nodata] .vehicle-value { color: var(--muted); font-weight: 500; }
 .vehicle-note { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
 
-.card { flex: 1 1 0; min-height: 0; overflow: auto; padding: 0 16px 18px; border-top: 5px solid transparent; }
+.card { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 16px 18px; background: var(--panel);
+  border-left: 1px solid var(--line); border-top: 5px solid transparent; }
 /* Sticky top of the card (L-1): ID, level, the forecast and its target stay visible while scrolling. */
 .card-top { position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px 6px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .card-top .headline { margin: 6px 0 0; padding: 6px 10px; }
@@ -341,20 +366,19 @@ textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .stops li[data-role=after_target] { border-left-color: #d3dade; border-left-style: dashed; }
 .stop-basis[data-basis=assumption] { font-style: italic; }
 .route-caption { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
-/* With a card open the list yields height to it. */
-.side:has(.card header) .list-panel { max-height: 36%; }
-/* Without a selection the list takes the panel; the card hint shrinks to one line under it (L-2). */
-.side:not(:has(.card header)) .list-panel { flex: 1 1 auto; max-height: none; }
-.side:not(:has(.card header)) .card { flex: none; padding-bottom: 8px; }
-.side:not(:has(.card header)) .card-empty { margin-top: 6px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The card column without an open card: a summary of the shift (§L1). */
+.shift { display: grid; gap: 10px; padding: 16px 0; }
+.shift h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.shift dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin: 0; }
+.shift dt { margin: 0; font-size: 14px; color: var(--ink); }
+.shift dd { margin: 0; font-size: 14px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.shift dd[data-tone=needs] { color: #9d2a1a; }
+.shift .card-empty { margin: 0; font-size: 13px; }
 
-/* Full HD and wider: a roomier panel so list rows and card actions fit on one line. */
-@media (min-width: 1700px) { .layout { grid-template-columns: minmax(0, 1fr) 420px; } }
 @media (max-width: 1920px) { .brand span { display: none; } }
 @media (max-width: 1400px) {
   .topbar { gap: 10px; padding: 0 12px; }
   .brand h1 { font-size: 16px; }
-  .layout { grid-template-columns: minmax(0, 1fr) 330px; }
 }
 
 /* v2 details */
