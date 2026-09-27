@@ -47,6 +47,23 @@ export function forecastState(v, {fresh, runOver = false, datasetEnd = null}) {
   return hasPrediction ? 'stale' : 'no_forecast';
 }
 
+// How far ahead the shown forecast looks, in whole minutes (T-20 W1): the target's plan time minus
+// the data time the forecast was made at (`last_success_at` = the moment Backend chose that target,
+// orchestration.py job.at). Backend keeps a result only for a target chosen in (10, 15] min of that
+// moment, so this is 10–15; it does not shrink as the data clock runs. Past midnight wraps a day.
+const SECONDS_OF = /(?:^|T|\s)(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/;
+export function horizonMinutes(targetTime, madeAt) {
+  const [t, a] = [targetTime, madeAt].map(time => {
+    const m = typeof time === 'string' ? SECONDS_OF.exec(time) : null;
+    return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : null;
+  });
+  if (t === null || a === null) return null;
+  return Math.floor((((t - a) % 86400) + 86400) % 86400 / 60);
+}
+
+const horizonText = minutes => (minutes === null ? `Горизонт прогноза 10–15${NBSP}мин`
+  : `Прогноз на ${minutes}${NBSP}мин вперёд · горизонт 10–15${NBSP}мин`);
+
 const help = no => 'Цель — первая остановка, до которой по расписанию 10–15 мин от времени данных. '
   + 'Опоздание — ожидаемое опоздание прибытия на неё, а не время до начала задержки. '
   + `„ост. ${no ?? 'N'}“ — ${no ?? 'N'}-я остановка в окне ±30 мин; названий в данных нет.`;
@@ -88,25 +105,29 @@ function parts(v, ctx) {
     ageTitle: `${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных${wallEquivalentText(v.prediction_age_s, ctx.speedup) ? `; ${wallEquivalentText(v.prediction_age_s, ctx.speedup)}` : ''}`,
     heldNoTarget: isHeld(v) && !heldForNewTarget(v),
     eta: finite(v.warming_eta_s) ? durationText(v.warming_eta_s) : null,
+    // The horizon line under the head: minutes of the shown forecast, else the rule alone.
+    horizon: horizonText(finite(v.prediction_s) ? horizonMinutes(v.target_time_begin, v.last_success_at) : null),
+    horizonRule: horizonText(null),
   };
 }
 
 const line = (text, kind = 'plain') => (text ? {text, kind} : null);
 const current = p => [['По расписанию', p.plan ?? '—'], ['Ожидается', `${p.expected ?? '—'} · прогноз модели`]];
 
-// state → texts. `big.size`: 'large' for the one number to read at a glance, 'medium' for a
-// state sentence (never the large size for «no target»). `tone`: 'live' colours the value by
+// state → texts. `horizon`: the forecast horizon line under the head (T-20 W1), only in states with
+// a target that is being forecast; none for no target, a changed target, a run over or offline.
+// `big.size`: 'large' for the one number to read at a glance, 'medium' for a state sentence (never the large size for «no target»). `tone`: 'live' colours the value by
 // level; 'quiet' keeps every number grey. `updating`: the «обновляется» mark and its tooltip.
 export const FORECAST_STATES = {
-  current: p => ({tone: 'live', head: p.head, rows: current(p),
+  current: p => ({tone: 'live', head: p.head, horizon: p.horizon, rows: current(p),
     big: {label: 'Опоздание по прогнозу', value: p.value, size: 'large'}, lines: [line(p.age, 'age')]}),
-  updating: p => ({tone: 'live', head: p.head, rows: current(p),
+  updating: p => ({tone: 'live', head: p.head, horizon: p.horizon, rows: current(p),
     big: {label: 'Опоздание по прогнозу', value: p.value, size: 'large'},
     lines: [line(`Прогноз обновляется · последний результат для этой цели: ${p.value} · ${p.ago ?? 'возраст неизвестен'}`, 'updating')],
     updating: p.heldNoTarget
       ? `Нового прогноза пока нет; показан последний для этой цели (возраст ${p.ageTitle}). Backend держит его до 5 мин, пока не придёт новый.`
       : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний результат для этой цели (возраст ${p.ageTitle}).`}),
-  warming: p => ({tone: 'live', head: p.head, rows: p.plan ? [['По расписанию', p.plan]] : [],
+  warming: p => ({tone: 'live', head: p.head, horizon: p.horizonRule, rows: p.plan ? [['По расписанию', p.plan]] : [],
     big: {value: 'По графику · прогноз готовится', size: 'medium'},
     lines: [line(`ТС вышло на маршрут; первый прогноз считается${p.eta ? ` — примерно через ${p.eta} (время данных)` : ''} и появится здесь сам.`)]}),
   held: p => ({tone: 'quiet', head: 'Цель прогноза сменилась', rows: [], big: null,
@@ -114,10 +135,10 @@ export const FORECAST_STATES = {
       : 'Новая цель выбрана по расписанию. Прогноз для неё считается.', 'updating'),
     line(`Прошлый результат: ${[p.stop, p.plan, p.value].filter(Boolean).join(' · ')}. К новой цели не относится.`, 'muted')],
     updating: `Цель сменилась по расписанию; прогноз для новой цели считается. Прошлый результат относится к прошлой цели (возраст ${p.ageTitle}).`}),
-  stale: p => ({tone: 'quiet', head: p.head, rows: [], big: {value: 'Прогноз устарел', size: 'large'},
+  stale: p => ({tone: 'quiet', head: p.head, horizon: p.horizonRule, rows: [], big: {value: 'Прогноз устарел', size: 'large'},
     lines: [line(`${p.last ?? ''} ${p.got} Не использовать как текущий.`.trim(), 'muted'),
       line(`Причина: ${p.reason || 'данные устарели'}.`, 'reason')]}),
-  no_forecast: p => ({tone: 'quiet', head: p.head, rows: [], big: {value: 'Прогноза для цели пока нет', size: 'medium'},
+  no_forecast: p => ({tone: 'quiet', head: p.head, horizon: p.horizonRule, rows: [], big: {value: 'Прогноза для цели пока нет', size: 'medium'},
     lines: [line(`${p.no ? `Ост.${NBSP}${p.no}` : 'Цель'} · по расписанию ${p.plan ?? '—'}`),
       line(`Причина: ${p.reason || 'источник не передал прогноз'}.`, 'reason')]}),
   no_target: p => ({tone: 'quiet', head: 'Цель прогноза', rows: [], big: {value: 'Цель прогноза не выбрана', size: 'medium'},
@@ -140,5 +161,5 @@ export function forecastView(v, ctx) {
   const state = forecastState(v, ctx);
   const p = parts(v, ctx);
   const view = FORECAST_STATES[state](p);
-  return {state, help: p.help, fact: p.fact, updating: null, ...view, lines: view.lines.filter(Boolean)};
+  return {state, help: p.help, fact: p.fact, updating: null, horizon: null, ...view, lines: view.lines.filter(Boolean)};
 }

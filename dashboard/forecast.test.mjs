@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {FORECAST_STATES, forecastState, forecastView as view0} from './forecast.js';
+import {FORECAST_STATES, forecastState, forecastView as view0, horizonMinutes} from './forecast.js';
 
 // Texts compared with plain spaces; values and «ост. N» keep non-breaking ones (checked once below).
 const plain = value => (typeof value === 'string' ? value.replaceAll('\u00a0', ' ')
@@ -145,4 +145,26 @@ test('the forecast age tooltip adds its screen equivalent at the run speed-up (Q
   const view = forecastView(row({prediction_updating: true, prediction_age_s: 60}), {...ctx(), speedup: 5});
   assert.equal(view.state, 'updating');
   assert.match(view.updating, /время данных; ≈12 с на экране при ×5/);
+});
+
+// T-20 W1: the horizon is the target plan time minus the data time the forecast was made at.
+test('horizonMinutes: whole minutes from the forecast time to the target plan time', () => {
+  assert.equal(horizonMinutes('2026-01-06T08:42:00', '2026-01-06T08:29:10'), 12);
+  assert.equal(horizonMinutes('2026-01-06T08:14:00', '2026-01-06T08:02:35.363688'), 11, 'fractional seconds count');
+  assert.equal(horizonMinutes('2026-01-06T08:15:00', '2026-01-06T08:00:00'), 15, 'the upper bound 900 s is 15');
+  assert.equal(horizonMinutes('2026-01-06T08:10:00.5', '2026-01-06T08:00:00'), 10, 'just over 600 s is 10');
+  assert.equal(horizonMinutes('2026-01-06T08:10:59.9', '2026-01-06T08:00:00'), 10, 'whole minutes, not rounded');
+  assert.equal(horizonMinutes('2026-01-07T00:05:00', '2026-01-06T23:52:30'), 12, 'across midnight');
+  assert.equal(horizonMinutes(null, '2026-01-06T08:00:00'), null);
+  assert.equal(horizonMinutes('2026-01-06T08:12:00', null), null);
+});
+
+test('horizon line (T-20 W1): minutes of the shown forecast; the rule alone without one; none without a target', () => {
+  assert.equal(forecastView(row(), ctx()).horizon, 'Прогноз на 12 мин вперёд · горизонт 10–15 мин');
+  assert.equal(forecastView(row({prediction_updating: true}), ctx()).horizon, 'Прогноз на 12 мин вперёд · горизонт 10–15 мин');
+  assert.equal(view0(row(), ctx()).horizon, 'Прогноз на 12 мин вперёд · горизонт 10–15 мин', 'values keep NBSP');
+  assert.equal(forecastView(row({status: 'unavailable', prediction_s: null, last_success_at: null, reason: 'prediction_waiting_new_telemetry'}), ctx()).horizon,
+    'Горизонт прогноза 10–15 мин');
+  assert.equal(forecastView(row({target_stop_id: null, target_time_begin: null, prediction_s: null, status: 'unavailable', reason: 'no_target_in_horizon'}), ctx()).horizon, null);
+  assert.equal(forecastView(row(), ctx({fresh: false})).horizon, null, 'offline: no horizon line');
 });

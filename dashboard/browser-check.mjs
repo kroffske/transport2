@@ -270,6 +270,25 @@ try {
     check((await page.locator('link[rel=icon]').getAttribute('href')).startsWith('data:image/svg+xml,'), 'inline page icon, no /favicon.ico request');
     const vehicles = envelope?.snapshot?.vehicles ?? [];
     check(await rows(page).count() === vehicles.length, `list shows the ${vehicles.length} vehicles of the run`);
+    // T-20 W2: the 10–15 min horizon, proved on every shown forecast of the live snapshot.
+    // Rule (transport_backend/schedule.py Schedule.target): the target is the first stop with a
+    // SCHEDULED time in (t + 600 s, t + 900 s]. The t of a shown pair is `last_success_at`: the data
+    // time of the job (orchestration.py PredictionJob.at, the same `now` passed to schedule.target),
+    // and the result is kept only if that target is unchanged at completion; a held pair carries its
+    // own target and time. clock_time is NOT the reference: it runs on between the choice and this
+    // read (a held pair can be minutes old), so target − clock_time legitimately drops below 600 s.
+    // No tolerance on the window beyond 1 ms: both are ISO strings of one data clock; cutting the
+    // sub-millisecond digits of last_success_at can only add < 1 ms to the difference.
+    // And the expected arrival is the plan plus the model's delay: predicted_arrival = target + prediction_s.
+    const isoMs = time => Date.parse(String(time).replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
+    const forecasted = vehicles.filter(v => v.target_stop_id && v.target_time_begin && v.prediction_s != null && Number.isFinite(Number(v.prediction_s)));
+    if (!forecasted.length) skipped.push('live: no vehicle with a target and a prediction — the 10–15 min horizon not asserted');
+    else {
+      const horizonBad = forecasted.map(v => ({id: v.tr_id, ahead: (isoMs(v.target_time_begin) - isoMs(v.last_success_at)) / 1000,
+        arrival: (isoMs(v.predicted_arrival) - isoMs(v.target_time_begin)) / 1000 - Number(v.prediction_s)}))
+        .filter(h => !(h.ahead > 600 && h.ahead <= 900.001) || !(Math.abs(h.arrival) <= 1));
+      check(horizonBad.length === 0, `horizon 10–15 min: for all ${forecasted.length} forecasts 600 < target_time_begin − last_success_at ≤ 900 s and predicted_arrival = target + prediction_s ±1 s (bad: ${JSON.stringify(horizonBad)})`);
+    }
     // Stable DOM on live polls: rows and the banner button stay the same nodes; a slow real click works.
     if (vehicles.length >= 2) {
       await survivesPolls(page, '#vehicles .vehicle', 'live list row');
@@ -319,6 +338,11 @@ try {
       // turned invalid), the model-specific card checks are skipped, not failed.
       const modelNow = await page.locator('#card').getAttribute('data-level') !== 'nodata';
       if (!modelNow) skipped.push(`live: ${id} lost its current forecast during the check — model-specific card checks not asserted`);
+      const forecastState = await page.locator('#forecast').getAttribute('data-state');
+      if (['current', 'updating'].includes(forecastState)) {
+        const horizonLine = norm(await page.locator('#forecast-horizon').textContent().catch(() => ''));
+        check(/^Прогноз на 1[0-5] мин вперёд · горизонт 10–15 мин$/.test(horizonLine), `card: the horizon line under the target «${horizonLine}» (T-20 W1)`);
+      } else skipped.push(`live: ${id} card forecast state ${forecastState} — horizon minutes not asserted`);
       if (target && modelNow) {
         const targetRow = page.locator('.stops li[data-role=target]');
         const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s) : null;
@@ -565,6 +589,12 @@ try {
     check(await page.locator('#card').getAttribute('data-level') === 'normal' && (await page.locator('#prediction-updating').textContent()).includes('обновляется')
       && (await page.locator('#prediction-updating').getAttribute('title')).includes('35 с') && await page.locator('#card .updating').count() === 0,
     'prediction_updating: normal level, pulse «обновляется», age in the title (C-2)');
+    // T-20 W1: target 06:58:00, forecast made at 06:46:50 → 11 min ahead, right under «Цель прогноза».
+    const horizonBox = await page.locator('#forecast-horizon').boundingBox();
+    const headBox = await page.locator('#forecast .forecast-head').boundingBox();
+    check(norm(await page.locator('#forecast-horizon').textContent()) === 'Прогноз на 11 мин вперёд · горизонт 10–15 мин'
+      && horizonBox && headBox && horizonBox.y >= headBox.y + headBox.height - 1 && horizonBox.height <= 20,
+    `card: horizon line «Прогноз на 11 мин вперёд · горизонт 10–15 мин» under the head, one line (${horizonBox && Math.round(horizonBox.height)} px, T-20 W1)`);
 
     // M1 on fixed data: event → card → take into work → note → reopen → history.
     await dispatcherPath(page, 'M1 regression');
@@ -889,6 +919,7 @@ try {
     await page.waitForTimeout(800);
     check((await forecastText(page)).includes('Цель прогноза не выбрана') && (await forecastText(page)).includes('наряд ещё не начался. Прогноз появится, когда ТС выйдет на маршрут')
       && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут'), 'route_not_started: «прогноз появится, когда ТС выйдет на маршрут» in card and list');
+    check(await page.locator('#forecast-horizon').count() === 0, 'no target: no horizon line in the card (T-20 W1)');
     await page.close();
   }
 
