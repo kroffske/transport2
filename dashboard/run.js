@@ -18,12 +18,41 @@ const number = value => Number(value).toLocaleString('ru-RU', {maximumFractionDi
 
 export const sourceText = source => (source ? SOURCE[source] ?? String(source) : 'источник не указан');
 
-// «Ускорение ×5: 1 мин показа = 5 мин данных» — N comes only from the run.
+const knownSpeedup = speedup => finite(speedup) && Number(speedup) > 0;
+
+// «×5 · 1 мин на экране = 5 мин данных» — N comes only from the run.
 export function speedupText(speedup) {
-  if (!finite(speedup) || Number(speedup) <= 0) return 'Ускорение неизвестно';
+  if (!knownSpeedup(speedup)) return 'Ускорение неизвестно';
   const n = number(speedup);
-  return `Ускорение ×${n}: 1 мин показа = ${n} мин данных`;
+  return `×${n} · 1 мин на экране = ${n} мин данных`;
 }
+
+// «12 с», «1 мин», «1 мин 40 с»: a short duration in whole seconds.
+function spanText(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} с`;
+  const rest = s % 60;
+  return rest ? `${Math.floor(s / 60)} мин ${rest} с` : `${s / 60} мин`;
+}
+
+// How long `dataSeconds` of data time last on the screen at the run's speed-up: «≈1 мин на экране
+// при ×5» (5 data min), «≈12 с на экране при ×5» (a forecast age of 1 data min). null when the
+// speed-up or the duration is unknown. Shared by the snooze menu and the card (forecast age).
+export function wallEquivalentText(dataSeconds, speedup) {
+  if (!knownSpeedup(speedup) || !finite(dataSeconds) || Number(dataSeconds) < 0) return null;
+  return `≈${spanText(Number(dataSeconds) / Number(speedup))} на экране при ×${number(speedup)}`;
+}
+
+// A snooze option: «5 мин данных · ≈1 мин на экране при ×5».
+export function snoozeOptionText(minutes, speedup) {
+  const wall = wallEquivalentText(minutes * 60, speedup);
+  return wall ? `${minutes} мин данных · ${wall}` : `${minutes} мин данных`;
+}
+
+// A snooze counts data time: once the run is over or its driver failed, data time no longer moves
+// and a reminder would never come. Returns the reason to show, or null while snoozing works.
+const DATA_STOPPED = new Set(['completed', 'failed']);
+export const snoozeBlockedText = run => (DATA_STOPPED.has(run?.state) ? 'Отсрочка недоступна: время данных больше не идёт' : null);
 
 export const progressText = progress => (finite(progress) ? `${Math.round(Math.min(1, Math.max(0, Number(progress))) * 100)} %` : null);
 
@@ -38,6 +67,18 @@ export function runStateText(run) {
 export function dataTimeText(iso) {
   const match = typeof iso === 'string' ? /T?(\d{2}:\d{2}:\d{2})/.exec(iso) : null;
   return match ? match[1] : null;
+}
+
+// The header's data clock (Q7): large «08:30» with a small «время данных»; once the run is over,
+// «Данные на 08:30:00 · прогон завершён». `title` has the full time and says whose clock it is.
+export function dataClockView(run) {
+  const time = dataTimeText(run?.dataset_time);
+  if (!time) return {prefix: null, time: '—', label: 'время данных неизвестно', over: false, title: 'Время данных неизвестно: прогон его не сообщил.'};
+  if (run.state === 'completed') {
+    return {prefix: 'Данные на', time, label: 'прогон завершён', over: true, title: `Данные на ${time} · прогон завершён: время данных больше не идёт.`};
+  }
+  const speed = knownSpeedup(run.speedup) ? ` Идут в ${number(run.speedup)} раз быстрее реального времени.` : '';
+  return {prefix: null, time: time.slice(0, 5), label: 'время данных', over: false, title: `Время данных ${time} — часы прогона эмулятора.${speed}`};
 }
 
 // Short form for the header; the full ID goes to the tooltip and diagnostics.
