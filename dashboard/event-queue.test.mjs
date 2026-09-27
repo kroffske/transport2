@@ -300,3 +300,21 @@ test('monitoring lost keeps the event in its group, flagged; a numeric data time
   assert.equal(view.group, 'work');
   assert.equal(q.store.incidents[0].history.find(h => h.text === 'Взято в работу').at, '1970-01-01T00:16:45');
 });
+
+test('selectors show only the watched vehicles; the queue keeps observing all', () => {
+  let q = createQueue('scope');
+  q = poll(q, [bus('A', 60), bus('B', 60)], 0);
+  q = poll(q, [bus('A', 200), bus('B', 400)], 10);
+  const onlyA = trId => trId === 'A';
+  const g = groups(q, 10, onlyA);
+  assert.deepEqual(g.needs.map(v => v.tr_id), ['A']);
+  assert.equal(g.counts.needs, 1);
+  assert.equal(g.counts.unread, 1);
+  assert.equal(groups(q, 10).counts.unread, 2);
+  assert.deepEqual(navOrder(q, 10, onlyA), [only(q, 'A')]);
+  assert.deepEqual(toastViews(q, 10, onlyA).map(t => t.event.tr_id), ['A']);
+  assert.equal(toastViews(q, 10).length, 2);
+  q = selectGroup(q, 'needs', 10, onlyA);
+  assert.deepEqual(q.selection, [only(q, 'A')]);
+  assert.equal(groups(q, 10, trId => trId === 'B').counts.selected, 0);
+});

@@ -121,6 +121,19 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .toasts { position: absolute; z-index: 4; right: 56px; bottom: 30px; display: grid; gap: 8px; width: 380px; pointer-events: none; }
 /* An open «События» or «Диагностика» panel hides the toasts under it (L-4); the event centre keeps them. */
 body:has(.diagnostics[open]) .toasts { visibility: hidden; }
+/* «Маршруты»: the operator's routes (route-scope.js), a dropdown like «Диагностика». */
+.route-settings[data-scoped="true"] summary { border-color: #e39a2d; color: #fff; }
+.route-panel { position: absolute; right: 0; top: 38px; width: 440px; max-height: calc(100vh - 80px); overflow: auto; padding: 12px 14px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(10, 30, 45, .22); font-size: 13px; z-index: 5; }
+.route-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.route-head b { flex: 1; }
+.route-head button { font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; }
+.route-list { display: grid; gap: 2px; }
+.route-choice { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; padding: 5px 4px; border-radius: 6px; cursor: pointer; }
+.route-choice:hover { background: rgba(60, 100, 130, .08); }
+.route-choice input { grid-row: span 2; margin-top: 2px; }
+.route-meta { color: var(--muted); font-size: 12px; }
+.route-note { color: var(--muted); font-size: 12px; margin: 10px 0 6px; }
+.route-json { display: block; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 .toast { position: relative; overflow: hidden; pointer-events: auto; display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 2px 8px; padding: 10px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--warning); border-radius: 8px; box-shadow: 0 8px 22px rgba(10, 30, 45, .2); animation: toast-in .25s ease-out; }
 .toast[data-level=severe] { border-left-color: var(--severe); }
 .toast[data-kind=remind] { border-left-color: var(--focus); }
@@ -363,3 +376,11 @@ textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .vehicle-label.is-dimmed { display: none; }
 .card-top .card-buttons, .card-top .event-row { position: relative; }
 .incident-head b { font-size: 13px; }
+
+/* W16: a GPS the dispatcher marked faulty is violet everywhere (map icon, label, list row, card chip, legend),
+   so it never reads as the grey «без прогноза». */
+:root { --gps-marked: #7b4cc2; }
+.vehicle-label.is-gps-marked { border-color: var(--gps-marked); background: #efe7fb; color: #3f2270; }
+.vehicle[data-gps-marked=true] { border-left-color: var(--gps-marked); border-left-style: solid; background: #f6f1fd; }
+.vehicle[data-gps-marked=true] .vehicle-value, .vehicle[data-gps-marked=true] .vehicle-note { color: #3f2270; }
+.level-chip[data-gps-marked=true] { background: #e9ddfa; color: #3f2270; }

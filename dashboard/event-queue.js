@@ -83,6 +83,10 @@ const groupOf = (incident, ev) => (!isOpen(incident, ev) ? 'ended' : ev.wf === '
 const log = (incident, at, text) => { incident.history.push({at, kind: 'action', text}); };
 const nowOf = (state, dataNow) => dataSeconds(dataNow) ?? state.now_s;
 const wallOf = (state, wallS) => (Number.isFinite(wallS) ? wallS : state.wall_s);
+// `shown(tr_id)` limits the selectors (groups, J/K order, attention, toasts, group actions) to the
+// vehicles the dispatcher watches, i.e. the operator's routes; the queue itself keeps observing every
+// vehicle, so a hidden one is never «lost».
+const ALL = () => true;
 
 function pushToast(state, toast) {
   state.toasts = [toast, ...state.toasts.filter(t => t.key !== toast.key)].slice(0, TOASTS_MAX);
@@ -255,7 +259,7 @@ export function markRead(state, ids) {
 }
 
 // «Прочитать все» in «Завершены».
-export const markEndedRead = state => markRead(state, groupIds(state, 'ended'));
+export const markEndedRead = (state, shown = ALL) => markRead(state, groupIds(state, 'ended', undefined, shown));
 
 export function dismissToast(state, key) {
   if (!state.toasts.some(t => t.key === key)) return state;
@@ -274,9 +278,9 @@ export function toggleSelected(state, id) {
 }
 
 // Select every event of an open group; if all of them are already selected, unselect them.
-export function selectGroup(state, group, wallS) {
+export function selectGroup(state, group, wallS, shown = ALL) {
   if (group === 'ended') return state;
-  const ids = groupIds(state, group, wallS);
+  const ids = groupIds(state, group, wallS, shown);
   const all = ids.length > 0 && ids.every(id => state.selection.includes(id));
   const selection = all ? state.selection.filter(id => !ids.includes(id)) : [...new Set([...state.selection, ...ids])];
   return {...clone(state), selection};
@@ -356,9 +360,10 @@ const SORT = {
 };
 
 // Four groups of event views plus counts for the tab badges and «Завершены (непрочитано N)».
-export function groups(state, wallS) {
+export function groups(state, wallS, shown = ALL) {
   const out = {needs: [], work: [], snoozed: [], ended: []};
   for (const incident of state.store.incidents) {
+    if (!shown(incident.tr_id)) continue;
     const view = eventView(state, incident.id, wallS);
     if (view) out[view.group].push(view);
   }
@@ -367,24 +372,24 @@ export function groups(state, wallS) {
     needs: out.needs.length, work: out.work.length, snoozed: out.snoozed.length, ended: out.ended.length,
     open: out.needs.length + out.work.length + out.snoozed.length,
     overdue: out.needs.filter(v => v.sla.over).length,
-    unread: state.store.incidents.filter(i => i.unread).length,
+    unread: state.store.incidents.filter(i => i.unread && shown(i.tr_id)).length,
     ended_unread: out.ended.filter(v => v.unread).length,
-    selected: state.selection.length,
+    selected: GROUPS.reduce((n, g) => n + out[g].filter(v => v.selected).length, 0),
   };
   return {...out, counts};
 }
 
-export const groupIds = (state, group, wallS) => (groups(state, wallS)[group] ?? []).map(v => v.id);
+export const groupIds = (state, group, wallS, shown = ALL) => (groups(state, wallS, shown)[group] ?? []).map(v => v.id);
 
 // J/K order: «Требует реакции» (overdue first, then by SLA left), then «В работе», then «Отложены».
-export function navOrder(state, wallS) {
-  const g = groups(state, wallS);
+export function navOrder(state, wallS, shown = ALL) {
+  const g = groups(state, wallS, shown);
   return [...g.needs, ...g.work, ...g.snoozed].map(v => v.id);
 }
 
 // J = +1, K = −1, wrapping; from nothing (or an ended event) J goes to the first, K to the last.
-export function nextEvent(state, currentId, step, wallS) {
-  const order = navOrder(state, wallS);
+export function nextEvent(state, currentId, step, wallS, shown = ALL) {
+  const order = navOrder(state, wallS, shown);
   if (!order.length) return null;
   const idx = order.indexOf(currentId);
   if (idx < 0) return step < 0 ? order.at(-1) : order[0];
@@ -399,8 +404,8 @@ export function eventForVehicle(state, trId) {
 }
 
 // Attention bar: the most urgent «Требует реакции» event and how many more; else a calm summary.
-export function attention(state, wallS) {
-  const g = groups(state, wallS);
+export function attention(state, wallS, shown = ALL) {
+  const g = groups(state, wallS, shown);
   const [top] = g.needs;
   const more = Math.max(0, g.needs.length - 1);
   const next = g.snoozed[0] ?? null;
@@ -413,8 +418,8 @@ export function attention(state, wallS) {
 }
 
 // Pending toasts, newest first, with their event views; the caller dismisses them by key.
-export function toastViews(state, wallS) {
-  return state.toasts.map(t => ({...t, event: eventView(state, t.id, wallS)})).filter(t => t.event);
+export function toastViews(state, wallS, shown = ALL) {
+  return state.toasts.map(t => ({...t, event: eventView(state, t.id, wallS)})).filter(t => t.event && shown(t.event.tr_id));
 }
 
 // ---- Persistence (the caller wraps sessionStorage in try/catch) -----------------------------

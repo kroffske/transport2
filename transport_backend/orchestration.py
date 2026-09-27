@@ -22,6 +22,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from transport_ml.data import TRAFFIC_COLUMNS
 
 from .ingest import NDTPServer
+from .route_catalog import catalog_view
 from .schedule import M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, Arrival, Schedule, nearest_on_polyline
 from .state import TelemetryState
 
@@ -297,7 +298,7 @@ class Orchestrator:
             now = self.run.clock()
             if now is None:
                 return {"run_id": None, "clock_time": None, "window_start": None,
-                        "window_end": None, "routes": []}
+                        "window_end": None, "routes": [], "catalog": catalog_view(self.schedule.routes)}
             low, high = now - LINE_BEFORE_NOW, now + LINE_AFTER_NOW
             routes = []
             for unit_id, tr_id in self.run.vehicles():
@@ -307,7 +308,7 @@ class Orchestrator:
                 for index, stop in zip(anchors, stops):
                     times[index] = stop.time.strftime("%H:%M:%S")
                 row = self._rows.get(tr_id, {})
-                routes.append({"tr_id": tr_id, "unit_id": unit_id,
+                routes.append({"tr_id": tr_id, "unit_id": unit_id, **self._route_identity(tr_id),
                                "line": [[lon, lat] for lon, lat in points],
                                "line_times": times,
                                "line_shape": "road" if self.schedule.has_shapes(tr_id) else "straight",
@@ -316,7 +317,7 @@ class Orchestrator:
                                "route_not_started": row.get("route_not_started")})
             return {"run_id": self.run.run_id, "clock_time": now.isoformat(),
                     "window_start": low.isoformat(), "window_end": high.isoformat(),
-                    "routes": routes}
+                    "routes": routes, "catalog": catalog_view(self.schedule.routes)}
 
     def route(self, tr_id: str) -> dict:
         """Route context of the last computed row: display path, passed GPS and plan stops.
@@ -550,7 +551,7 @@ class Orchestrator:
             age_s = (now - datetime.fromisoformat(held["last_success_at"])).total_seconds()
             updating = True
         route_check = self._route_check(tr_id, state["lon"], state["lat"], now)
-        return {"tr_id": tr_id, "unit_id": unit_id,
+        return {"tr_id": tr_id, "unit_id": unit_id, **self._route_identity(tr_id),
                 "input_frame_id": frame_id,
                 "input_context_revision": context_revision,
                 "input_request_id": latest_frame["request_id"] if latest_frame else None,
@@ -614,6 +615,11 @@ class Orchestrator:
         if stop is None:
             return None
         return {**success, "target": stop}
+
+    def _route_identity(self, tr_id: str) -> dict:
+        """Derived route of the assignment (``route_catalog``); ``None`` without a plan."""
+        info = self.schedule.routes.get(tr_id)
+        return {"route_key": info.key if info else None, "route_label": info.label if info else None}
 
     def _route_check(self, tr_id: str, lon: float | None, lat: float | None, now: datetime) -> dict:
         """Spatial check of the last valid position against the day's planned-stop line."""

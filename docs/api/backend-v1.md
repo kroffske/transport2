@@ -105,6 +105,8 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "route_offset_m": 20,
       "off_route": false,
       "route_not_started": false,
+      "route_key": "R-69ee05",
+      "route_label": "ул. Ивана Франко — Ярцевская ул.",
       "last_success_at": "2026-01-06T03:35:00",
       "revision": 12
     }
@@ -112,6 +114,8 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
   "ingest": { "accepted": 12, "dropped": 0, "errors": 0, "rejected_no_run": 0, "queue_depth": 0 }
 }
 ```
+
+**Маршрут (T-14).** Номера маршрута в данных нет; Backend выводит его из плана (`transport_backend/route_catalog.py`). `route_key` — `"R-"` + первые 6 hex SHA-1 от отсортированного множества `geom` плановых остановок наряда: наряды с одинаковым набором остановок (в любом направлении) — один маршрут; ключ стабилен для одного плана. `route_label` — улицы двух самых удалённых друг от друга остановок (конечные) из `building_address` без номера дома; остановка без адреса берёт ближайший адрес в 300 м, иначе конец не называется; без адресов — `"—"`. У ТС без наряда в плане оба поля `null`. В демо-плане validate 13 нарядов дают 13 разных маршрутов (в train 39 нарядов → 13 маршрутов).
 
 **Сверка с маршрутом наряда и направление (W11).** Маршрут ТС — плановая последовательность остановок его наряда `tr_id` (`schedule_plan`, по времени); `route_id` в данных нет.
 
@@ -222,10 +226,12 @@ Same-event correction, отзывающая GPS evidence первого набл
              "line_shape": "road",
              "off_route": false, "route_offset_m": 0, "route_not_started": false},
             {"tr_id": "130072", "unit_id": 896671, "line": [], "line_times": [], "line_shape": "road",
-             "off_route": true, "route_offset_m": 3440, "route_not_started": true}]}
+             "off_route": true, "route_offset_m": 3440, "route_not_started": true}],
+ "catalog": [{"route_key": "R-69ee05", "route_label": "ул. Ивана Франко — Ярцевская ул.", "tr_ids": ["133300"]}, "..."]}
 ```
 
-- `routes` — все ТС текущего прогона (вне `simulation` — весь реестр, `run_id=null`); до регистрации прогона `routes=[]` и все поля `null`.
+- `routes` — все ТС текущего прогона (вне `simulation` — весь реестр, `run_id=null`); до регистрации прогона `routes=[]` и все поля `null`, кроме `catalog`. У каждого элемента есть `route_key`/`route_label`, как в `/v1/vehicles`.
+- `catalog` — все маршруты плана (не только прогона) с их нарядами, по `route_label`: список выбора «Мои маршруты» в UI.
 - `line` — линия через плановые остановки наряда в окне по времени (только остановки внутри bbox данных карты `37.25,55.50,38.00,56.00`, как для `stops_dropped`), между соседними остановками — точки формы дороги. `line_times` той же длины, что `line`: у точки-остановки — её плановое время `HH:MM:SS`, у промежуточной точки формы — `null`.
 - `line_shape` — `"road"`, если для наряда загружены формы; `"straight"` — форм нет (файла нет или наряда в нём нет), линия идёт прямыми между остановками.
 

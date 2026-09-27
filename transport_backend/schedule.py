@@ -12,10 +12,15 @@ from collections import Counter
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 import math
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 
 from .route_shapes import RouteShapes, line_through
+
+if TYPE_CHECKING:
+    from .route_catalog import RouteInfo
 
 # Local equirectangular metres per degree; accurate to well under 1 % across Moscow.
 M_PER_DEG_LAT = 110_540.0
@@ -113,7 +118,7 @@ class Schedule:
 
     def __init__(self, plan: pd.DataFrame, *, stop_radius_m: float = 35.0,
                  stop_speed_kmh: float = 3.0, observation_lag_s: float = 900.0,
-                 shapes: RouteShapes | None = None):
+                 shapes: RouteShapes | None = None, routes: dict[str, RouteInfo] | None = None):
         if (not all(math.isfinite(value) for value in
                     (stop_radius_m, stop_speed_kmh, observation_lag_s))
                 or stop_radius_m <= 0 or stop_speed_kmh < 0 or observation_lag_s <= 0):
@@ -132,6 +137,8 @@ class Schedule:
                 for row in group.itertuples(index=False)]
             self._times[str(tr_id)] = [stop.time for stop in self.by_vehicle[str(tr_id)]]
             self._progress[str(tr_id)] = StopProgress()
+        # Route identity per assignment (route_catalog.py); the plan itself has no route ID.
+        self.routes: dict[str, RouteInfo] = routes or {}
         # Road shapes between consecutive planned stops; none means straight segments.
         self._shapes: RouteShapes = shapes or {}
         # Computed once: the day's plan never changes within a process.

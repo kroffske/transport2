@@ -164,9 +164,13 @@ def test_routes_http_waits_for_run_then_serves_only_run_vehicles(tmp_path):
     api = create_app(data_dir=tmp_path, model_url="http://127.0.0.1:1",
                      source_clock="simulation", ndtp_port=0)
     with TestClient(api) as client:
+        # One route per assignment of the plan (distinct stop sets), unlabelled without addresses.
+        catalog = client.get("/v1/routes").json()["catalog"]
+        assert sorted(r["tr_ids"] for r in catalog) == [["late"], ["one"], ["v"]]
+        assert {r["route_label"] for r in catalog} == {"—"}
         assert client.get("/v1/routes").json() == {"run_id": None, "clock_time": None,
                                                    "window_start": None, "window_end": None,
-                                                   "routes": []}
+                                                   "routes": [], "catalog": catalog}
         run_id = client.post("/v1/run", json={
             "dataset_start": "2026-01-06T06:30:00", "dataset_end": "2026-01-06T07:30:00",
             "speedup": 1, "post_period_s": 2, "units": [1]}).json()["run_id"]
@@ -175,8 +179,10 @@ def test_routes_http_waits_for_run_then_serves_only_run_vehicles(tmp_path):
         assert view["run_id"] == run_id
         assert [route["tr_id"] for route in view["routes"]] == ["v"]
         route = view["routes"][0]
-        assert set(route) == {"tr_id", "unit_id", "line", "line_times", "line_shape", "off_route",
-                              "route_offset_m", "route_not_started"}
+        assert set(route) == {"tr_id", "unit_id", "route_key", "route_label", "line", "line_times",
+                              "line_shape", "off_route", "route_offset_m", "route_not_started"}
+        assert view["catalog"] == catalog
+        assert route["route_key"] == next(r["route_key"] for r in catalog if r["tr_ids"] == ["v"])
         assert route["line_times"][0] == "06:20:00"
         assert route["line_shape"] == "straight"  # no data/routes/route_shapes.json
         assert (route["off_route"], route["route_offset_m"]) == (None, None)  # no position yet

@@ -1,0 +1,2 @@
+{"ts":"2026-09-27T17:26:08.651Z","event":"created","actor":"claude","data":{"status":"doing"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T17:44:32.653Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Готово в рабочем дереве (не закоммичено): pytest 106 passed; npm test 63 pass; check:browser 0 failures (первый прогон — 1 live-флейк invalid GPS, повтор чистый); Playwright: 3 события → 1 при одном маршруте, выбор переживает reload. Стек проверки: compose -p t14 на :18102."},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}

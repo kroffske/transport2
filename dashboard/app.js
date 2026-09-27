@@ -9,6 +9,8 @@ import {reasonText} from './reasons.js';
 import {BASIS, coordOk, delayText, durationText, labelledStops, offsetText, planText, shiftedText,
   stopRows, undrawnCount} from './route-context.js';
 import {createRouteLayers} from './route-layers.js';
+import {NO_ROUTE, defaultSettings, inScope, parseSettings, routeChoices, routeOf, scopeSummary, setAll, toggleRoute,
+  watches} from './route-scope.js';
 import {createRunTracker, dataTimeText, runStateText, shortRunId, sourceText, speedupText} from './run.js';
 import {createTransportLayer} from './transport-layer.js';
 import './style.css';
@@ -113,7 +115,7 @@ let sideTab = loadPref('t7-side-tab', 'events') === 'vehicles' ? 'vehicles' : 'e
 let endedOpen = false; // «Завершены» expanded
 let cardMenu = null; // null | 'snooze' | 'close'
 let bulkMenu = null; // null | 'snooze' | 'close'
-let dimNoData = true; // «Приглушить без прогноза»
+let dimNoData = true; // «Приглушить ТС без наряда и без данных» (the GPS-marked ones stay violet, never dimmed)
 // «Отметить: неисправен GPS» — the dispatcher's mark per vehicle, for this run in this browser.
 let gpsMarks = new Set();
 const GPS_MARK_REASON = 'gps_marked_faulty';
@@ -131,12 +133,21 @@ let cardFor; // the vehicle the card's DOM was built for; another vehicle gets a
 // Planned routes of all vehicles for the overview (consumer /api/routes), refreshed every ROUTES_MS.
 let routesFeed = {status: 'idle', data: null, at: 0, inFlight: false};
 const ROUTES_MS = 10000;
+// «Мои маршруты» (route-scope.js): the operator's routes. Kept in localStorage, so it survives reloads and
+// new runs; the map, lists, queue views, attention bar and toasts show only vehicles of these routes.
+const SETTINGS_KEY = 'dispatcher-settings';
+let settings = (() => { try { return parseSettings(localStorage.getItem(SETTINGS_KEY)) ?? defaultSettings(); } catch { return defaultSettings(); } })();
+const routeByVehicle = new Map(); // tr_id → route key, from every snapshot row seen (events outlive rows)
 
 // A vehicle the dispatcher marked «неисправен GPS» is shown as invalid GPS without a current
 // forecast: grey with «?», never a warning, with the mark as its reason.
 const rawRows = () => Array.isArray(feed?.snapshot?.vehicles) ? feed.snapshot.vehicles : [];
-const snapshotRows = () => (gpsMarks.size ? rawRows().map(v => (gpsMarks.has(String(v.tr_id))
+const allRows = () => (gpsMarks.size ? rawRows().map(v => (gpsMarks.has(String(v.tr_id))
   ? {...v, location_valid: false, status: 'degraded', reason: GPS_MARK_REASON} : v)) : rawRows());
+// The rows the dispatcher works with: vehicles of their routes. The queue alone observes allRows().
+const snapshotRows = () => (settings.routes === 'all' ? allRows() : allRows().filter(v => inScope(settings, v)));
+// Whether an event's vehicle is on a watched route; a vehicle never seen in a row stays shown.
+const shown = trId => { const key = routeByVehicle.get(String(trId)); return key === undefined || watches(settings, key); };
 // The queue's two clocks (event-queue.js): the reaction SLA runs on wall seconds (epoch, so it
 // survives a reload), history and snooze on the run's data clock.
 const wallNow = () => Date.now() / 1000;
@@ -280,7 +291,7 @@ fetch('/map/manifest.json').then(r => { if (!r.ok) throw Error(`HTTP ${r.status}
 // ---- Route context and transport symbols: route-layers.js, transport-layer.js ----------------
 // Overview lines of the run on screen only; the selected vehicle's own line is its route context.
 const overviewRoutes = () => (routesFeed.data && (routesFeed.data.run_id ?? null) === (currentRun()?.run_id ?? null)
-  && Array.isArray(routesFeed.data.routes) ? routesFeed.data.routes : []);
+  && Array.isArray(routesFeed.data.routes) ? routesFeed.data.routes.filter(r => inScope(settings, r)) : []);
 
 function renderRouteLayers() {
   const ready = mapStatus === 'ready';
@@ -324,7 +335,8 @@ const refreshRoutes = () => { if (!routesFeed.at || performance.now() - routesFe
 const vehicleSymbol = (vehicle, assessment) => {
   const id = String(vehicle.tr_id);
   return {lon: Number(vehicle.lon), lat: Number(vehicle.lat),
-    look: vehicleLook(assessment.level, {gpsValid: gpsValid(vehicle), selected: id === selected, hovered: id === hovered, offRoute: vehicle.off_route})};
+    look: vehicleLook(assessment.level, {gpsValid: gpsValid(vehicle), selected: id === selected, hovered: id === hovered, offRoute: vehicle.off_route,
+      gpsMarked: gpsMarks.has(id)})};
 };
 // Direction of movement: Backend `heading` (degrees clockwise from north); none when null.
 const headingOk = v => v.heading !== null && v.heading !== undefined && v.heading !== '' && Number.isFinite(Number(v.heading));
@@ -354,7 +366,7 @@ function renderMapObjects() {
   }
   for (const {vehicle, assessment} of ordered) {
     if (headingOk(vehicle)) symbols.push(headingSymbol(vehicle));
-    const quiet = dimNoData && assessment.level === 'nodata' && String(vehicle.tr_id) !== selected;
+    const quiet = dimNoData && assessment.level === 'nodata' && String(vehicle.tr_id) !== selected && !gpsMarks.has(String(vehicle.tr_id));
     symbols.push({...vehicleSymbol(vehicle, assessment), opacity: quiet ? 0.45 : 1});
   }
   transportLayer.setSymbols(symbols);
@@ -424,7 +436,8 @@ function renderLabels(rows) {
     // reads as a failure and hides the warnings. The reason stays in the tooltip, list and card.
     const nodata = assessment.level === 'nodata';
     element.textContent = nodata ? id : `${id} · ${shortValue(vehicle, assessment, {short: true})}`;
-    element.classList.toggle('is-dimmed', nodata && dimNoData && id !== selected);
+    element.classList.toggle('is-dimmed', nodata && dimNoData && id !== selected && !gpsMarks.has(id));
+    element.classList.toggle('is-gps-marked', gpsMarks.has(id));
     element.title = nodata ? `${id} · ${runOver(currentRun()) ? 'прогон завершён' : shortValue(vehicle, assessment, {short: true})}` : '';
     marker.setLngLat([Number(vehicle.lon), Number(vehicle.lat)]);
   }
@@ -668,6 +681,11 @@ function renderList() {
   const list = $('vehicles');
   if (feed?.status === 'loading') { patchText(list, 'Загрузка снимка Backend…'); return; }
   if (!feed?.snapshot) { patchText(list, 'Backend недоступен, снимков ещё не было. Данные не подставляются.'); return; }
+  if (allRows().length && !snapshotRows().length) {
+    patchText(list, Array.isArray(settings.routes) && !settings.routes.length ? 'Не выбрано ни одного маршрута — отметьте свои в «Маршруты» вверху.'
+      : 'На ваших маршрутах сейчас нет машин прогона. Набор маршрутов — «Маршруты» вверху.');
+    return;
+  }
   if (!snapshotRows().length) {
     patchText(list, currentRun()?.state === 'waiting_driver'
       ? 'Прогон ещё не начат: Backend ждёт регистрации драйвера эмулятора. Машины появятся после неё.'
@@ -689,7 +707,8 @@ function renderList() {
   patchChildren(list, rows.map(({vehicle, assessment}) => {
     const id = String(vehicle.tr_id);
     return el('button', {type: 'button', className: `vehicle${id === hovered ? ' is-hovered' : ''}`,
-      'data-key': id, 'aria-current': id === selected ? 'true' : null, dataset: {id, level: assessment.level, action: 'choose'}},
+      'data-key': id, 'aria-current': id === selected ? 'true' : null, 'data-gps-marked': gpsMarks.has(id) ? 'true' : null,
+      dataset: {id, level: assessment.level, action: 'choose'}},
     el('span', {className: 'vehicle-id'}, id),
     el('span', {className: 'vehicle-value'}, shortValue(vehicle, assessment)),
     el('span', {className: 'vehicle-note'}, rowNote(vehicle, assessment)));
@@ -739,8 +758,8 @@ function renderCard() {
   const head = el('header', {},
     el('span', {className: 'card-kind'}, 'Автобус'),
     el('h2', {}, text(v.tr_id)),
-    el('span', {className: 'level-chip', dataset: {level: assessment.level}},
-      assessment.level === 'nodata' && assessment.hasPrediction ? 'Прогноз устарел' : LEVEL[assessment.level].label),
+    el('span', {className: 'level-chip', dataset: {level: assessment.level}, 'data-gps-marked': gpsMarks.has(String(v.tr_id)) ? 'true' : null},
+      gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен' : assessment.level === 'nodata' && assessment.hasPrediction ? 'Прогноз устарел' : LEVEL[assessment.level].label),
     close);
 
   // Headline (C-2): the value, one line about the target, one line about the source.
@@ -825,7 +844,7 @@ function renderCard() {
   top.append(...eventControls(view, v));
   const notes = [];
   if (!locationOk(v) || !gpsValid(v)) {
-    notes.push(el('p', {className: 'card-note', 'data-key': 'gps-note'}, gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен — отмечено диспетчером; на карте последняя позиция, серая иконка с «?».'
+    notes.push(el('p', {className: 'card-note', 'data-key': 'gps-note'}, gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен — отмечено диспетчером; на карте последняя позиция, фиолетовая иконка с «×».'
       : locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
       : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект не показан на карте.'));
   }
@@ -1088,7 +1107,7 @@ function renderAttention() {
   }
   // v2 attention bar: the event that most needs a reaction (overdue first), except the one whose
   // card is open (L-5); otherwise a calm line. Vehicles without a forecast are never counted here.
-  const {needs, work, snoozed} = Q.groups(queue, wallNow());
+  const {needs, work, snoozed} = Q.groups(queue, wallNow(), shown);
   const open = needs.filter(view => view.tr_id !== selected && findIncident(store(), view.id)?.vehicle_state === 'warning')
     .sort((a, b) => (b.sla?.over ?? false) - (a.sla?.over ?? false) || (a.sla?.left_s ?? 0) - (b.sla?.left_s ?? 0) || a.number - b.number);
   if (!open.length && needs.some(view => view.tr_id === selected)) {
@@ -1140,7 +1159,7 @@ function queueItem(view) {
 }
 
 function renderEvents() {
-  const all = Q.groups(queue, wallNow());
+  const all = Q.groups(queue, wallNow(), shown);
   const {counts} = all;
   const side = document.querySelector('.side');
   side.dataset.tab = sideTab;
@@ -1258,7 +1277,7 @@ function renderToasts() {
   // Only for a current delay the dispatcher is not looking at, and none after the run (E-1, H-2);
   // the queue keeps every event.
   const live = !runOver(currentRun()) && isFresh();
-  const views = live ? Q.toastViews(queue, wallNow()) : [];
+  const views = live ? Q.toastViews(queue, wallNow(), shown) : [];
   patchChildren($('toasts'), views.filter(({event}) => event && event.tr_id !== selected && event.group !== 'ended'
     && ['warning', 'severe'].includes(findIncident(store(), event.id)?.vehicle_state)).slice(0, TOAST_MAX).map(({key, kind, event}) => {
     const box = el('div', {className: 'toast', role: 'status', 'data-key': key, dataset: {id: event.id, key, kind, level: eventLevel(event)}});
@@ -1277,7 +1296,8 @@ function renderToasts() {
 function ingest() {
   if (!feed?.snapshot) return;
   restoreQueue();
-  let next = Q.observe(queue, snapshotRows(), {dataNow: dataNow(), fresh: isFresh(), wallS: wallNow()});
+  for (const v of rawRows()) routeByVehicle.set(String(v.tr_id), routeOf(v));
+  let next = Q.observe(queue, allRows(), {dataNow: dataNow(), fresh: isFresh(), wallS: wallNow()});
   if (!queueWatched) for (const toast of next.toasts) next = Q.dismissToast(next, toast.key);
   queueWatched = true;
   setQueue(next);
@@ -1351,12 +1371,50 @@ function renderDiagnostics() {
   if (snap?.processing) rows.push(['Вызовы ML', `успешно ${text(snap.processing.ml_succeeded)} · ошибок ${text(snap.processing.ml_failed)} · недоступно ${text(snap.processing.ml_unavailable)}`]);
   const events = incidentCounts(store());
   rows.push(['События (локально)', `активных ${events.active} · мониторинг потерян ${events.monitoring_lost} · закончились ${events.resolved}`]);
-  rows.push(['Revision', text(snap?.revision)], ['Объектов в снимке', String(snapshotRows().length)],
+  rows.push(['Revision', text(snap?.revision)], ['Объектов в снимке', `${allRows().length}${settings.routes === 'all' ? '' : ` · на моих маршрутах ${snapshotRows().length}`}`],
     ['Геооснова', mapStatus === 'unavailable' ? `недоступна: ${mapReason}` : manifest ? `OSM · ${manifest.date} · ${manifest.coverage}` : 'загрузка…']);
   if (manifest?.sha256) rows.push(['PMTiles sha256', manifest.sha256]);
   const dl = document.createElement('dl');
   for (const [label, value] of rows) field(dl, label, value);
   patchChildren($('diag-list'), [...dl.childNodes]); // a patch keeps a text selection the presenter is copying
+}
+
+// «Маршруты» in the header: one checkbox per route of the plan with its run vehicles, «все» / «снять все»,
+// and the settings as stored (the format an operator's routes will be issued in).
+const routeCatalog = () => (Array.isArray(routesFeed.data?.catalog) ? routesFeed.data.catalog : []);
+const choiceKeys = () => routeChoices(routeCatalog(), rawRows()).map(c => c.key);
+function renderRouteSettings() {
+  const choices = routeChoices(routeCatalog(), rawRows());
+  const keys = choices.map(c => c.key);
+  const summary = $('route-settings-summary');
+  summary.textContent = `Маршруты: ${scopeSummary(settings, keys)}`;
+  $('route-settings').dataset.scoped = String(settings.routes !== 'all');
+  if (!$('route-settings').open) return;
+  const vehiclesText = choice => (choice.vehicles.length ? `ТС ${choice.vehicles.join(', ')}` : 'нет ТС в прогоне');
+  const items = choices.map(choice => {
+    const box = el('input', {type: 'checkbox', dataset: {action: 'toggle-route', route: choice.key}});
+    box.checked = watches(settings, choice.key);
+    return el('label', {className: 'route-choice', 'data-key': choice.key}, box,
+      el('span', {className: 'route-label'}, choice.label),
+      el('span', {className: 'route-meta'}, `${choice.key === NO_ROUTE ? 'ТС без наряда в плане' : choice.key} · ${vehiclesText(choice)}`));
+  });
+  patchChildren($('route-settings-panel'), [
+    el('div', {className: 'route-head', 'data-key': 'head'}, el('b', {}, settings.operator),
+      el('button', {type: 'button', dataset: {action: 'routes-all'}}, 'Все'),
+      el('button', {type: 'button', dataset: {action: 'routes-none'}}, 'Снять все')),
+    el('div', {className: 'route-list', 'data-key': 'list'}, ...(items.length ? items : [el('p', {}, 'Маршруты загружаются…')])),
+    el('p', {className: 'route-note', 'data-key': 'note'}, 'В данных нет номера маршрута: маршрут — наряды с одинаковым набором плановых остановок, '
+      + 'подпись — улицы его конечных. В демо-плане у каждого наряда свой маршрут. Скрытые маршруты не теряют событий: очередь следит за всеми ТС.'),
+    el('code', {className: 'route-json', 'data-key': 'json'}, JSON.stringify(settings)),
+  ]);
+}
+function applySettings(next) {
+  settings = next;
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* private mode: this page only */ }
+  queue = Q.clearSelection(queue); // a selected event of a hidden route must not be acted on in bulk
+  saveQueue();
+  pendingOverview = true;
+  render();
 }
 
 function renderMapState() {
@@ -1380,6 +1438,7 @@ function render() {
   renderEvents();
   renderToasts();
   renderDiagnostics();
+  renderRouteSettings();
   renderRouteLayers(); // the leader and the overview follow the vehicles
   renderMapObjects();
   followSelected();
@@ -1470,9 +1529,9 @@ function onPanelClick(event) {
   else if (action === 'card-menu') { cardMenu = cardMenu === control.dataset.menu ? null : control.dataset.menu; renderCard(); }
   else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
   else if (action === 'tab') setTab(control.dataset.tab);
-  else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, wallNow()));
+  else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, wallNow(), shown));
   else if (action === 'toggle-ended') { endedOpen = !endedOpen; renderEvents(); }
-  else if (action === 'read-ended') queueAction(q => Q.markEndedRead(q));
+  else if (action === 'read-ended') queueAction(q => Q.markEndedRead(q, shown));
   else if (action === 'bulk-take') queueAction(q => Q.take(q, q.selection, dataNow()));
   else if (action === 'bulk-menu') { bulkMenu = bulkMenu === control.dataset.menu ? null : control.dataset.menu; renderEvents(); }
   else if (action === 'bulk-snooze') queueAction(q => Q.snooze(q, q.selection, Number(control.dataset.minutes), dataNow()));
@@ -1527,8 +1586,18 @@ $('card').addEventListener('submit', event => {
 $('clear-selection').addEventListener('click', () => choose(null, false));
 $('overview').addEventListener('click', () => { follow = false; overview(true); followSelected(); });
 $('follow').addEventListener('click', () => { follow = true; lastFollowAt = 0; focusSelected(); followSelected(); });
+$('route-settings-panel').addEventListener('change', event => {
+  const {action, route: key} = event.target.dataset;
+  if (action === 'toggle-route') applySettings(toggleRoute(settings, key, choiceKeys()));
+});
+$('route-settings-panel').addEventListener('click', event => {
+  const action = event.target.closest?.('[data-action]')?.dataset.action;
+  if (action === 'routes-all' || action === 'routes-none') applySettings(setAll(settings, action === 'routes-all'));
+});
+$('route-settings').addEventListener('toggle', () => { if ($('route-settings').open) { $('diagnostics').open = false; renderRouteSettings(); } });
+$('diagnostics').addEventListener('toggle', () => { if ($('diagnostics').open) $('route-settings').open = false; });
 // The header «События» opens the queue tab (v2: the queue replaces the dropdown).
-$('events-toggle').addEventListener('click', () => { $('diagnostics').open = false; setTab('events'); });
+$('events-toggle').addEventListener('click', () => { $('diagnostics').open = false; $('route-settings').open = false; setTab('events'); });
 // Hotkeys (v2): J/K next/previous event, W take, S snooze 5 min, C close (reason menu), Esc.
 document.addEventListener('keydown', event => {
   const typing = event.target.closest?.('textarea, select, input:not([type=checkbox]):not([type=radio])');
@@ -1536,7 +1605,7 @@ document.addEventListener('keydown', event => {
   const current = currentEventId();
   const view = current ? Q.eventView(queue, current, wallNow()) : null;
   if (event.code === 'KeyJ' || event.code === 'KeyK') {
-    const next = Q.nextEvent(queue, current, event.code === 'KeyJ' ? 1 : -1, wallNow());
+    const next = Q.nextEvent(queue, current, event.code === 'KeyJ' ? 1 : -1, wallNow(), shown);
     const incident = next ? findIncident(store(), next) : null;
     if (incident) { event.preventDefault(); openEvent(next); }
   } else if (event.code === 'KeyW' && view?.can.take) { event.preventDefault(); takeEvent(current); }
@@ -1555,7 +1624,8 @@ fetch('/api/build', {cache: 'no-store'}).then(r => r.ok ? r.json() : null).then(
 
 // The legend shows the same bitmaps as the map.
 const LEGEND_LOOKS = {normal: vehicleLook('normal'), warning: vehicleLook('warning'), severe: vehicleLook('severe'),
-  nodata: vehicleLook('nodata'), invalid: vehicleLook('normal', {gpsValid: false}), selected: vehicleLook('normal', {selected: true}), target: targetLook()};
+  nodata: vehicleLook('nodata'), invalid: vehicleLook('normal', {gpsValid: false}), marked: vehicleLook('nodata', {gpsMarked: true}),
+  selected: vehicleLook('normal', {selected: true}), target: targetLook()};
 for (const img of document.querySelectorAll('img.legend-symbol')) {
   const {canvas, box} = drawSymbol(LEGEND_LOOKS[img.dataset.symbol], 2);
   img.src = canvas.toDataURL();

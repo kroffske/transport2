@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from scripts.replay_ndtp import handshake
 from transport_backend.ingest import NDTPServer
 from transport_backend.ndtp import NAV, encode_frame
+from transport_backend.route_catalog import route_catalog
 from transport_backend.orchestration import MAP_BBOX, Orchestrator, PredictionJob
 from transport_backend.run import RunConflict, RunNotFound, RunPlan, RunRegistry
 from transport_backend.schedule import Schedule
@@ -459,7 +460,8 @@ def _route_flow(tmp_path, flows):
     now = [DAY + timedelta(minutes=6)]
     run = RunRegistry("dataset_wall", state.unit_mapping,
                       mapping=ClockMapping(1_700_000_000, DAY), clock=lambda: now[0])
-    flow = flows(state, NDTPServer(state, run=run), Schedule(read_plan(path)), _Model(),
+    plan = read_plan(path)
+    flow = flows(state, NDTPServer(state, run=run), Schedule(plan, routes=route_catalog(plan)), _Model(),
                  predict_interval_s=60)
     # Observed at the 00:01 stop (+20 s), then moving; one invalid fix.
     assert state.accept(_record(event="2026-01-06 00:01:20", lon=37.501))
@@ -494,6 +496,15 @@ def test_route_uses_snapshot_row_windows_stops_roles_and_counts_dropped(tmp_path
     # Only valid GPS, labelled by event time.
     assert route["passed"] == [[37.501, 55.7, "00:01:20"], [37.503, 55.7, "00:03:00"],
                                [37.5055, 55.7, "00:05:50"]]
+
+
+def test_rows_and_overview_carry_the_derived_route(tmp_path, flows):
+    flow, _, _ = _route_flow(tmp_path, flows)
+    rows = {v["tr_id"]: v for v in flow.snapshot()["vehicles"]}
+    overview = flow.routes()
+    assert rows["v"]["route_key"] != rows["w"]["route_key"] and rows["v"]["route_label"] == "—"
+    assert {r["tr_id"]: r["route_key"] for r in overview["routes"]} == {t: v["route_key"] for t, v in rows.items()}
+    assert sorted(r["tr_ids"] for r in overview["catalog"]) == [["v"], ["w"]]
 
 
 def test_route_keeps_target_when_more_than_forty_stops_and_planned_without_target(tmp_path, flows):

@@ -18,6 +18,7 @@ from transport_ml.data import read_plan
 
 from .ingest import NDTPServer
 from .orchestration import ModelClient, Orchestrator, RouteUnavailable
+from .route_catalog import read_addresses, route_catalog
 from .route_shapes import load_route_shapes
 from .run import RunConflict, RunNotFound, RunPlan, RunRegistry
 from .schedule import Schedule
@@ -127,7 +128,9 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
     async def lifespan(api: FastAPI):
         # Scan only the explicit unit/tr_id mapping; no traffic telemetry is loaded.
         mapping_table = load_unit_mapping([data / "validate" / "traffic.csv"])
-        schedule = Schedule(read_plan(data / "validate" / "schedule_plan.csv"),
+        plan_path = data / "validate" / "schedule_plan.csv"
+        plan = read_plan(plan_path)
+        schedule = Schedule(plan, routes=route_catalog(plan, read_addresses(plan_path)),
                             stop_radius_m=float(os.environ.get("STOP_RADIUS_M", "35")),
                             stop_speed_kmh=float(os.environ.get("STOP_SPEED_KMH", "3")),
                             observation_lag_s=float(os.environ.get("STOP_OBSERVATION_LAG_S", "900")),
