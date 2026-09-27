@@ -4,7 +4,7 @@
   "description": "Диспетчерская карта задержек Москвы: MapLibre + локальные PMTiles + Three.js-слой транспорта; сборка раздаётся consumer.",
   "main": "index.js",
   "scripts": {
-    "test": "node --test event-queue.test.mjs incidents.test.mjs map-labels.test.mjs map-symbols.test.mjs reasons.test.mjs route-context.test.mjs run.test.mjs",
+    "test": "node --test event-queue.test.mjs incidents.test.mjs map-labels.test.mjs map-symbols.test.mjs reasons.test.mjs route-context.test.mjs route-layers.test.mjs run.test.mjs",
     "build": "esbuild app.js --bundle --minify --format=iife --outfile=../consumer/static/app.js --loader:.css=css && esbuild node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs --bundle --minify --format=iife --outfile=../consumer/static/map-worker.js",
     "check:browser": "node browser-check.mjs"
   },

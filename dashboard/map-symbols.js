@@ -10,8 +10,9 @@
 //   heading      — a separate dark arrowhead outside the icon, turned by the transport layer
 //                  (0° = north, clockwise); none when Backend `heading` is null;
 //   target       — white diamond with a dark border and the Lucide `flag` glyph;
-//   stop         — small white circle with a dark border (a MapLibre layer, route-layers.js).
-// `vehicleLook`/`targetLook` are pure; `drawSymbol` needs a browser canvas.
+//   stop         — a circle whose fill and ring say its role on the route (`stopLook`, drawn by
+//                  `drawStopSymbol` into the icons of the route-layers.js stop layer).
+// `vehicleLook`/`targetLook`/`stopLook` are pure; `drawSymbol`/`drawStopSymbol` need a browser canvas.
 
 import {bus, flag} from './icons/lucide.js';
 
@@ -140,5 +141,51 @@ export function drawSymbol(look, ratio = 2) {
   if (look.kind === 'target') drawTarget(ctx, look);
   else if (look.kind === 'heading') drawHeading(ctx, look);
   else drawVehicle(ctx, look);
+  return {canvas, box};
+}
+
+// Stop roles on the selected route (task T-17, spec §S): told apart by size, fill and ring (solid,
+// dashed or none), never by a severity colour — that stays on the vehicle icon and delay values.
+//   passed        — small grey dot with a white halo, no dark ring;
+//   before_target — white circle with a solid ink ring 3 px (also `planned`: no target, the stops ahead);
+//   after_target  — white circle with a dashed slate ring: its time is only an assumption;
+//   target        — not a stop icon: the target diamond with a flag (`targetLook`).
+// The colours are the CSS tokens --stop-passed / --stop-ahead / --stop-after (style.css) of the legend.
+export const STOP_COLOR = {passed: '#a9b3ba', ahead: '#1b2a36', after: '#6b7780'};
+const STOP_LOOK = {
+  passed: {size: 8, fill: STOP_COLOR.passed, ringColor: '#ffffff', ringWidth: 1.5, border: 'halo'},
+  ahead: {size: 12, fill: '#ffffff', ringColor: STOP_COLOR.ahead, ringWidth: 3, border: 'solid'},
+  after: {size: 12, fill: '#ffffff', ringColor: STOP_COLOR.after, ringWidth: 3, border: 'dashed'},
+};
+const STOP_DASHES = 7;
+// The look group of a stop role: passed | ahead | after (target and unknown roles draw as ahead).
+export const stopKind = role => (role === 'passed' ? 'passed' : role === 'after_target' ? 'after' : 'ahead');
+
+// size is the diameter of the circle in css px (the ring is centred on its edge).
+export const stopLook = role => ({kind: 'stop', stop: stopKind(role), ...STOP_LOOK[stopKind(role)]});
+
+// A bitmap of a stop: the circle plus its ring, `box` css px square, drawn at `ratio` device pixels.
+export function drawStopSymbol(look, ratio = 2) {
+  const box = Math.ceil(look.size + 2 * look.ringWidth + 2);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = Math.ceil(box * ratio);
+  const ctx = canvas.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.translate(box / 2, box / 2);
+  const r = look.size / 2;
+  if (look.border === 'halo') {
+    ctx.beginPath(); ctx.arc(0, 0, r + look.ringWidth, 0, 2 * Math.PI);
+    ctx.fillStyle = look.ringColor; ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI);
+  ctx.fillStyle = look.fill; ctx.fill();
+  if (look.border === 'solid' || look.border === 'dashed') {
+    ctx.lineWidth = look.ringWidth;
+    ctx.strokeStyle = look.ringColor;
+    const dash = 2 * Math.PI * r / STOP_DASHES; // whole dashes round the ring, no seam
+    ctx.setLineDash(look.border === 'dashed' ? [dash * 0.55, dash * 0.45] : []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   return {canvas, box};
 }
