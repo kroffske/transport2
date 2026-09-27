@@ -14,6 +14,8 @@
 docker compose --profile demo up -d --build --force-recreate
 ```
 
+Чтобы `/api/build` показал коммит сборки, передайте его при запуске: `SOURCE_COMMIT=$(git rev-parse HEAD) docker compose --profile demo up -d --build --force-recreate` (PowerShell: `$env:SOURCE_COMMIT=(git rev-parse HEAD); docker compose --profile demo up -d --build --force-recreate`). Без этого в `/api/build` будет `unknown`, а сборку подтверждают хэши файлов.
+
 Откройте [дашборд](http://localhost:8002). Официальный эмулятор подаёт поток автоматически; выберите транспорт на карте, чтобы увидеть прогноз задержки. Демо длится около 24 минут. Повтор команды начинает новый прогон.
 
 **Первый запуск:** нужны Git, запущенный Docker с Compose v2 и интернет для сборки. На Windows используйте Docker Desktop в режиме Linux containers; команды подходят и для PowerShell. Python и Node.js устанавливать не нужно.
@@ -42,6 +44,12 @@ transport2/
 docker load -i data/emulator/ndtp-telemetry-emulator.tar
 ```
 
+Проверка образа (`shasum -a 256 -c` из корня репозитория):
+
+```text
+89399e531f20a508554441f1491be5676a524fa14c05f6e10e48fd22d849a199  data/emulator/ndtp-telemetry-emulator.tar
+```
+
 Остановка: `docker compose --profile demo down`. Что посмотреть на карте, назначение портов и ссылки на API — в [короткой инструкции для жюри](docs/runbooks/jury-demo.md).
 
 ## Возможности диспетчерского BI-терминала
@@ -57,7 +65,7 @@ docker load -i data/emulator/ndtp-telemetry-emulator.tar
 - **Обработка события.** Диспетчер может взять событие в работу, вернуть в новые, отложить на 2, 5, 10 или 15 минут времени данных с автоматическим напоминанием, снять отсрочку или закрыть с причиной. Причины включают уведомление водителя, ошибку GPS/прогноза, сход или замену ТС, пробку и другое.
 - **Чек-лист реакции.** Для события отмечаются проверка GPS, связь с водителем и проверка интервала с соседними ТС; при сильной задержке — сообщение старшему смены. Экран связи подготавливает текст для копирования и последующей отправки диспетчером по штатному каналу.
 - **Групповая работа с очередью.** Несколько событий можно одновременно взять в работу, отложить или закрыть. Горячие клавиши J/K/W/S/C позволяют перемещаться по очереди и выполнять основные действия без мыши.
-- **Заметки и история.** Карточка сохраняет изменения состояния, действия и текстовые заметки с временем. Очередь и история живут в памяти открытой страницы текущего прогона; перезагрузка страницы или новый прогон сбрасывает их.
+- **Заметки и история.** Карточка сохраняет изменения состояния, действия и текстовые заметки с временем. Очередь и история хранятся в браузере для текущего прогона (sessionStorage): перезагрузка страницы их сохраняет, новый прогон начинает с пустой очереди.
 - **Качество данных и устойчивость.** Неисправный GPS можно отметить вручную. При потере данных задержка не считается автоматически устранённой. При недоступности Backend или ML интерфейс показывает последний результат и его неактуальность; диагностика раскрывает приём NDTP, расчёты ML, ошибки и прогресс прогона.
 
 **Стек:** Python, FastAPI и CatBoost; MapLibre GL JS для карты, локальные PMTiles на основе OpenStreetMap, Three.js для значков транспорта в общем WebGL-контексте. Сервисы запускаются через Docker Compose. При работе карты не нужны внешние запросы за плитками или скриптами.
@@ -82,7 +90,7 @@ docker load -i data/emulator/ndtp-telemetry-emulator.tar
 | `transport_backend/` | TCP NDTP, bounded state, расписание, прогон эмулятора и HTTP orchestration | `run.py` владеет часами и прогоном; past-only computed stop detector, route context, failure readback |
 | `consumer/` | Раздача диспетчерской карты, `/api/snapshot`, `/api/route/{tr_id}`, `/api/routes`, `/api/build` и локальных PMTiles ([контракт](docs/api/backend-v1.md#consumer)) | Читает только Backend HTTP; старые результаты помечает явно |
 | `scripts/` | Драйвер официального эмулятора и historical NDTP sender | `emulator_driver.py` — источник демо (profile `demo`); `replay_ndtp.py` — только инструмент тестов |
-| `tests/` | ML, NDTP/state, прогон и route, драйвер эмулятора, schedule/orchestration и consumer contracts | `.venv/bin/python -m pytest tests -q` — 100 passed, 1 skipped на commit `09c742e` |
+| `tests/` | ML, NDTP/state, прогон и route, драйвер эмулятора, schedule/orchestration и consumer contracts | `.venv/bin/python -m pytest tests -q` — 106 passed, 1 skipped на commit `db86662` (в чистом clone без `data/train` и `data/test` часть тестов пропускается) |
 | `artifacts/` | Исторические модели и метрики T-3/T-5 | Локальные файлы; прежние модели не являются текущим кандидатом |
 | `models/final/` | Файлы текущей модели для ML-сервиса (`final_model.cbm`, `final_model.json`, `vehicle_origins.csv`) | В Git, SHA-256 в `SHA256SUMS`; compose монтирует по умолчанию (`MODEL_DIR=./models/final`) |
 | `.local/validate-tuning-2026-09-26/` | Frozen код обучения/инференса, отчёт и evidence модели | Игнорируется Git; для запуска демо не нужен, production inference перенесён в owning пакет |
