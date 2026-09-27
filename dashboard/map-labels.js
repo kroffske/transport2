@@ -1,7 +1,7 @@
 // Screen placement of vehicle labels next to their map dots, so no two labels cover each other.
 // Pure geometry: the caller measures labels and projects dots; nothing here touches the DOM or the map.
 //
-// Policy: labels are placed one by one in priority order (selected first, then ID). Each label takes
+// Policy: labels are placed one by one in priority order (selected first, then higher `priority`, then ID). Each label takes
 // the first side of its own dot that is free of already placed labels, other dots and fixed map
 // labels, and lies inside the map; if every side is taken it is stacked further above or below its dot.
 // The result depends only on the input geometry, so the same view always gives the same placement.
@@ -46,11 +46,12 @@ const within = (r, area) => !area || (r.x >= area.x && r.y >= area.y
   && r.x + r.width <= area.x + area.width && r.y + r.height <= area.y + area.height);
 const dotRect = d => ({x: d.x - d.radius, y: d.y - d.radius, width: 2 * d.radius, height: 2 * d.radius});
 
-// labels: [{id, x, y, width, height, selected?}] with x/y the dot in screen pixels.
-// obstacles: fixed rectangles (target label, direction chips). area: the visible map rectangle.
+// labels: [{id, x, y, width, height, selected?, priority?}] with x/y the dot in screen pixels; a stop time
+// label uses its stop as the dot. obstacles: fixed rectangles (map overlays). area: the visible map rectangle.
 // Returns Map id → {placement, offset: [dx, dy], rect}.
 export function placeLabels(labels, {obstacles = [], area = null} = {}) {
-  const order = [...labels].sort((a, b) => Boolean(b.selected) - Boolean(a.selected) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const order = [...labels].sort((a, b) => Boolean(b.selected) - Boolean(a.selected) || (b.priority ?? 0) - (a.priority ?? 0)
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const dots = order.map(l => ({id: l.id, x: l.x, y: l.y, radius: l.selected ? SELECTED_DOT_RADIUS : DOT_RADIUS}));
   const options = candidates(order.length);
   const placed = [];

@@ -82,3 +82,14 @@ test('offsets are symmetric and stacked levels keep the margin', () => {
   assert.equal(labelOffset('top+1', W, H)[1] - labelOffset('top', W, H)[1], -(H + LABEL_MARGIN));
   assert.throws(() => labelOffset('middle', W, H));
 });
+
+test('priority places a label before others of lower priority; the selected label still goes first', () => {
+  // Two labels competing for the same free side: the one placed first keeps «top».
+  const rows = [label('A', 500, 400), label('Z-stop', 500 + W / 2, 400, {priority: 2})];
+  const placed = placeLabels(rows);
+  assertNoOverlap(placed);
+  assert.equal(placed.get('Z-stop').placement, 'top', 'higher priority placed first despite its ID');
+  const withSelected = placeLabels([...rows, label('S', 500 - W / 2, 400, {selected: true})]);
+  assertNoOverlap(withSelected);
+  assert.equal(withSelected.get('S').placement, 'top', 'the selected label is placed before any priority');
+});

@@ -6,7 +6,6 @@
 export const WARNING_S = 120;
 export const SEVERE_S = 300;
 export const FILTERS = ['all', 'warning', 'nodata'];
-export const UNMAPPED = 'unmapped';
 
 const RANK = {severe: 0, warning: 1, normal: 2, nodata: 3};
 
@@ -22,20 +21,11 @@ export function assess(vehicle, fresh) {
 
 export const isWarning = assessment => assessment.level === 'severe' || assessment.level === 'warning';
 
-// A route key always includes the direction; a row without both is «без привязки» (null).
-export function routeKeyOf(vehicle) {
-  const route = vehicle?.route_id, direction = vehicle?.direction_id;
-  return route != null && route !== '' && direction != null && direction !== '' ? `${route}:${direction}` : null;
-}
-
 export function matchesFilter(assessment, filter) {
   if (filter === 'warning') return isWarning(assessment);
   if (filter === 'nodata') return assessment.level === 'nodata';
   return true;
 }
-
-// `route` is 'all', UNMAPPED or one route key.
-export const matchesRoute = (vehicle, route) => route === 'all' || (routeKeyOf(vehicle) ?? UNMAPPED) === route;
 
 export function countByFilter(rows, fresh) {
   const counts = {all: 0, warning: 0, nodata: 0};
@@ -46,28 +36,12 @@ export function countByFilter(rows, fresh) {
   return counts;
 }
 
-// Route keys present in `rows` with their object counts, unmapped last.
-export function countByRoute(rows) {
-  const counts = new Map();
-  for (const vehicle of rows) {
-    const key = routeKeyOf(vehicle) ?? UNMAPPED;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts].sort(([a], [b]) => (a === UNMAPPED) - (b === UNMAPPED) || a.localeCompare(b));
-}
-
-// IDs that are a warning in `rows` but were not one in `previousRows` (both current data).
-export function newWarningIds(previousRows, rows) {
-  const before = new Set(previousRows.filter(v => isWarning(assess(v, true))).map(v => String(v.tr_id)));
-  return new Set(rows.filter(v => isWarning(assess(v, true)) && !before.has(String(v.tr_id))).map(v => String(v.tr_id)));
-}
-
 // Rows for the list and map, most urgent first; search matches the displayed ID only.
-export function visibleRows(rows, {filter = 'all', route = 'all', query = '', fresh}) {
+export function visibleRows(rows, {filter = 'all', query = '', fresh}) {
   const needle = query.trim().toLowerCase();
   return rows
     .map(vehicle => ({vehicle, assessment: assess(vehicle, fresh)}))
-    .filter(({vehicle, assessment}) => matchesFilter(assessment, filter) && matchesRoute(vehicle, route)
+    .filter(({vehicle, assessment}) => matchesFilter(assessment, filter)
       && (!needle || String(vehicle.tr_id ?? '').toLowerCase().includes(needle)))
     .sort((a, b) => RANK[a.assessment.level] - RANK[b.assessment.level]
       || (finite(b.vehicle.prediction_s) ? Number(b.vehicle.prediction_s) : -Infinity)
@@ -76,117 +50,102 @@ export function visibleRows(rows, {filter = 'all', route = 'all', query = '', fr
 }
 
 // ---- Incidents -----------------------------------------------------------------------------
-// An incident is one episode of warnings for one group: (source mode, route key with direction).
-// Objects of one direction share an episode; the opposite direction is a separate group; an
-// object without a route mapping is its own group. Lifecycle: `active` while a member is a
-// current warning; `monitoring_lost` when no member is a current warning but a member has no
-// current data (offline source, degraded row, row gone) — this is never a resolution;
-// `resolved` only when every member is current and ≤ 120 s. A new warning after `resolved`
-// opens a new episode with a new ID. Repeating the same snapshot changes nothing.
+// An incident is one episode of warnings of one vehicle (tr_id): the live stream carries no route
+// or direction to group by. Lifecycle: `active` while the vehicle is a current warning;
+// `monitoring_lost` when it is not a current warning and has had no current data (offline source,
+// degraded row, row gone) for at least LOST_AFTER_S seconds of wall time — this is never a
+// resolution; `resolved` only when it is current and ≤ 120 s. A shorter gap (a new target's
+// prediction being computed, one missed poll) changes nothing: no state change, no history line,
+// no unread mark. A new warning after `resolved` opens a new episode with a new ID. Repeating the
+// same snapshot changes nothing.
 //
-// The store is local to one browser page and one run (demo) or mode visit (live); the caller
-// creates a new store on reset or mode change, so no action history carries over.
+// The store is local to one browser page and one emulator run; the caller creates a new store
+// when the run ID changes, so no action history carries over.
 
 export const NOTE_MAX = 280;
+// Wall seconds a vehicle may have no current data before its episode becomes `monitoring_lost`.
+// About one target change of the live stream at ×5 (a new target every ~12 s of wall time).
+export const LOST_AFTER_S = 15;
 
 export function createIncidentStore(source) {
-  return {source, observed: 0, sequence: 0, perGroup: {}, incidents: []};
+  return {source, observed: 0, sequence: 0, perVehicle: {}, incidents: []};
 }
-
-export const groupKey = (source, vehicle) => `${source}|${routeKeyOf(vehicle) ?? `${UNMAPPED}:${vehicle.tr_id}`}`;
 
 const log = (incident, at, kind, text) => { incident.history.push({at, kind, text}); };
 const minutesText = seconds => `${(seconds / 60).toFixed(1)} мин`;
-const openFor = (store, key) => store.incidents.find(i => i.key === key && i.state !== 'resolved');
+const openFor = (store, trId) => store.incidents.find(i => i.tr_id === trId && i.state !== 'resolved');
 
-function openIncident(store, key, vehicle, clock) {
+function openIncident(store, vehicle, clock) {
+  const trId = String(vehicle.tr_id);
   store.sequence += 1;
-  store.perGroup[key] = (store.perGroup[key] ?? 0) + 1;
+  store.perVehicle[trId] = (store.perVehicle[trId] ?? 0) + 1;
   const incident = {
-    id: `${key}#${store.perGroup[key]}`,
+    id: `${store.source}|${trId}#${store.perVehicle[trId]}`,
     number: store.sequence,
-    key,
-    source: store.source,
-    route_key: routeKeyOf(vehicle),
-    route_label: routeKeyOf(vehicle) ? vehicle.route_label ?? routeKeyOf(vehicle) : null,
+    tr_id: trId,
     state: 'active',
+    vehicle_state: 'warning', // warning | normal | nodata — the vehicle as last seen
     workflow: 'new',
     unread: true,
     opened_at: clock,
     updated_at: clock,
     resolved_at: null,
-    peak_s: 0,
-    members: [],
+    last_s: Number(vehicle.prediction_s),
+    peak_s: Number(vehicle.prediction_s),
+    nodata_since: null,
     notes: [],
     history: [],
   };
+  log(incident, clock, 'lifecycle', `Событие открыто: ${trId} ${minutesText(incident.last_s)}`);
   store.incidents.push(incident);
   return incident;
 }
 
 // Feed one snapshot into the store. Returns the IDs of episodes opened by this snapshot.
-export function observeSnapshot(store, rows, {fresh, clock = null}) {
+// `wallS` is the browser's monotonic time in seconds (performance.now() / 1000); `clock` is the
+// source time written into the history.
+export function observeSnapshot(store, rows, {fresh, clock = null, wallS}) {
+  if (!Number.isFinite(wallS)) throw new TypeError('observeSnapshot needs wallS (monotonic seconds)');
   const opened = [];
   const byId = new Map(rows.map(v => [String(v.tr_id), v]));
-  const warnings = new Map();
   for (const vehicle of rows) {
     if (!isWarning(assess(vehicle, fresh))) continue;
-    const key = groupKey(store.source, vehicle);
-    if (!warnings.has(key)) warnings.set(key, []);
-    warnings.get(key).push(vehicle);
-  }
-  for (const [key, list] of warnings) {
-    let incident = openFor(store, key);
-    const created = !incident;
-    if (created) {
-      incident = openIncident(store, key, list[0], clock);
-      opened.push(incident.id);
-    } else if (incident.state === 'monitoring_lost') {
+    const incident = openFor(store, String(vehicle.tr_id));
+    if (!incident) opened.push(openIncident(store, vehicle, clock).id);
+    else if (incident.state === 'monitoring_lost') {
       incident.state = 'active';
       incident.unread = true;
       log(incident, clock, 'lifecycle', 'Данные вернулись, задержка сохраняется');
     }
-    for (const vehicle of list) {
-      const id = String(vehicle.tr_id);
-      if (!incident.members.some(m => m.tr_id === id)) {
-        incident.members.push({tr_id: id, state: 'warning', last_s: null, peak_s: 0});
-        if (!created) {
-          incident.unread = true;
-          log(incident, clock, 'lifecycle', `Добавлен ${id}: прогноз ${minutesText(Number(vehicle.prediction_s))}`);
-        }
-      }
-    }
-    if (created) {
-      const who = list.map(v => `${v.tr_id} ${minutesText(Number(v.prediction_s))}`).join(', ');
-      log(incident, clock, 'lifecycle', `Событие открыто: ${who}`);
-    }
   }
   for (const incident of store.incidents) {
     if (incident.state === 'resolved') continue;
-    const lost = [];
-    for (const member of incident.members) {
-      const vehicle = byId.get(member.tr_id);
-      const assessment = vehicle ? assess(vehicle, fresh) : {level: 'nodata'};
-      if (assessment.level === 'nodata') { member.state = 'nodata'; lost.push(member.tr_id); continue; }
-      member.state = isWarning(assessment) ? 'warning' : 'normal';
-      member.last_s = Number(vehicle.prediction_s);
-      member.peak_s = Math.max(member.peak_s, member.last_s);
-      incident.peak_s = Math.max(incident.peak_s, member.last_s);
-    }
-    incident.updated_at = warnings.has(incident.key) ? clock : incident.updated_at;
-    if (warnings.has(incident.key)) continue;
-    if (lost.length) {
-      if (incident.state !== 'monitoring_lost') {
+    const vehicle = byId.get(incident.tr_id);
+    const assessment = vehicle ? assess(vehicle, fresh) : {level: 'nodata'};
+    if (assessment.level === 'nodata') {
+      incident.vehicle_state = 'nodata';
+      incident.nodata_since ??= wallS;
+      // A short gap is neither a loss nor a resolution: the episode stays as it was.
+      if (wallS - incident.nodata_since >= LOST_AFTER_S && incident.state !== 'monitoring_lost') {
         incident.state = 'monitoring_lost';
         incident.updated_at = clock;
-        log(incident, clock, 'lifecycle', `Мониторинг потерян: нет актуальных данных по ${lost.join(', ')} — событие не закрыто`);
+        log(incident, clock, 'lifecycle', `Мониторинг потерян: нет актуальных данных по ${incident.tr_id} — событие не закрыто`);
       }
-    } else {
-      incident.state = 'resolved';
-      incident.resolved_at = clock;
-      incident.updated_at = clock;
-      log(incident, clock, 'lifecycle', `Задержка закончилась: прогноз ≤ 2 мин у ${incident.members.map(m => m.tr_id).join(', ')}`);
+      continue;
     }
+    incident.nodata_since = null;
+    incident.last_s = Number(vehicle.prediction_s);
+    incident.peak_s = Math.max(incident.peak_s, incident.last_s);
+    if (isWarning(assessment)) {
+      incident.vehicle_state = 'warning';
+      incident.updated_at = clock;
+      continue;
+    }
+    incident.vehicle_state = 'normal';
+    incident.state = 'resolved';
+    incident.resolved_at = clock;
+    incident.updated_at = clock;
+    log(incident, clock, 'lifecycle', `Задержка закончилась: прогноз ≤ 2 мин у ${incident.tr_id}`);
   }
   store.observed += 1;
   return opened;
@@ -194,9 +153,9 @@ export function observeSnapshot(store, rows, {fresh, clock = null}) {
 
 export const findIncident = (store, id) => store.incidents.find(i => i.id === id) ?? null;
 
-// The episode shown for an object: its open one, else its latest resolved one.
+// The episode shown for a vehicle: its open one, else its latest resolved one.
 export function incidentForVehicle(store, trId) {
-  const mine = store.incidents.filter(i => i.members.some(m => m.tr_id === String(trId)));
+  const mine = store.incidents.filter(i => i.tr_id === String(trId));
   return mine.find(i => i.state !== 'resolved') ?? mine.at(-1) ?? null;
 }
 

@@ -2,11 +2,13 @@
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Москва · диспетчерская карта задержек</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231b2a36'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%23e39a2d'/%3E%3C/svg%3E"><link rel="stylesheet" href="/static/app.css"></head>
 <body>
 <header class="topbar">
-  <div class="brand"><h1>Диспетчерская карта задержек</h1><span>Москва · прототип</span></div>
-  <div id="mode-badge" class="mode-badge" role="status" aria-live="polite">Режим определяется…</div>
-  <div class="mode-switch" role="group" aria-label="Источник данных">
-    <button type="button" data-mode="demo" aria-pressed="false">Демо-сценарий</button>
-    <button type="button" data-mode="live" aria-pressed="false">Поток Backend</button>
+  <div class="brand"><h1>Диспетчерская карта задержек</h1><span>Москва</span></div>
+  <div id="run" class="run" role="status" aria-live="polite" aria-label="Прогон эмулятора" data-state="unknown">
+    <span id="run-source" class="run-source">Источник…</span>
+    <span id="run-id" class="run-id"></span>
+    <span id="run-speed" class="run-speed"></span>
+    <span id="run-clock" class="run-clock"></span>
+    <span class="run-state"><i class="run-progress" aria-hidden="true"><b id="run-progress-bar"></b></i><span id="run-state"></span></span>
   </div>
   <div id="data-status" class="data-status" role="status" aria-live="polite">Загрузка…</div>
   <div class="events">
@@ -14,7 +16,7 @@
     <section id="events-panel" class="events-panel" aria-label="Центр событий" hidden>
       <div class="events-head"><b>События</b><span id="events-summary"></span><button type="button" id="events-close" aria-label="Закрыть центр событий">×</button></div>
       <div id="events-list" class="events-list"></div>
-      <small class="events-note">Событие — эпизод задержки &gt; 2 мин по направлению. Прочитано, «в работе» и «задержка закончилась» — разные состояния. Только в этом браузере.</small>
+      <small class="events-note">Событие — эпизод задержки &gt; 2 мин. Прочитано, «в работе» и «задержка закончилась» — разные состояния. Только в этом браузере и этом прогоне.</small>
     </section>
   </div>
   <details id="diagnostics" class="diagnostics"><summary>Диагностика</summary><dl id="diag-list"></dl></details>
@@ -27,30 +29,18 @@
     <button type="button" id="overview" class="overview">Обзор</button>
     <div id="toasts" class="toasts" aria-live="polite"></div>
     <div class="legend" aria-label="Условные обозначения">
-      <span><i class="dot normal"></i>≤ 2 мин</span><span><i class="dot warning"></i>&gt; 2 мин</span><span><i class="dot severe"></i>≥ 5 мин</span><span><i class="dot nodata"></i>нет данных</span><span><i class="diamond"></i>цель</span><span id="legend-route"><i class="scheme"></i>схема направления</span>
-      <small id="legend-note">Цвет — прогноз задержки, не вероятность.</small>
+      <div class="legend-row"><b>ТС</b><span><i class="dot normal"></i>≤ 2 мин</span><span><i class="dot warning"></i>&gt; 2 мин</span><span><i class="dot severe"></i>≥ 5 мин</span><span><i class="dot nodata"></i>нет прогноза</span></div>
+      <div class="legend-row" id="legend-route"><b>Выбранное ТС</b><span><i class="line path"></i>путь по GPS прогона</span><span><i class="line passed"></i>пройдено</span><span><i class="stop"></i>остановка</span><span><i class="stop passed"></i>пройдена</span><span><i class="diamond"></i>цель</span></div>
+      <small id="legend-note">Цвет ТС — прогноз задержки у цели, не вероятность. Путь по GPS прогона — траектория ТС в этом окне данных, не официальная трасса маршрута.</small>
     </div>
   </section>
   <aside class="side">
-    <section id="scenario" class="scenario" aria-label="Демо-сценарий" hidden>
-      <div class="scenario-head"><b>Сценарий · значения заданы</b><span id="scenario-run" class="scenario-run"></span></div>
-      <div class="scenario-phase"><span id="scenario-phase" role="status" aria-live="polite"></span><span id="scenario-state" class="scenario-state"></span></div>
-      <ol id="scenario-steps" class="scenario-steps" aria-hidden="true"></ol>
-      <p id="scenario-description" class="scenario-description"></p>
-      <div class="scenario-controls" role="group" aria-label="Управление сценарием">
-        <button type="button" id="scenario-start" class="primary">Начать демо</button>
-        <button type="button" id="scenario-pause">Пауза</button>
-        <button type="button" id="scenario-next">Далее</button>
-        <button type="button" id="scenario-reset">Сброс</button>
-      </div>
-    </section>
     <section class="list-panel" aria-label="Транспорт">
       <div class="filters" role="group" aria-label="Фильтр">
         <button type="button" data-filter="all" aria-pressed="true">Все <b>0</b></button>
         <button type="button" data-filter="warning" aria-pressed="false">С предупреждениями <b>0</b></button>
-        <button type="button" data-filter="nodata" aria-pressed="false">Нет данных <b>0</b></button>
+        <button type="button" data-filter="nodata" aria-pressed="false">Нет прогноза <b>0</b></button>
       </div>
-      <div id="routes" class="routes" role="group" aria-label="Направление"></div>
       <div class="search-row"><input id="search" type="search" placeholder="Поиск по ID" aria-label="Поиск по ID" autocomplete="off"><button type="button" id="clear-selection">Сбросить выбор</button></div>
       <div id="vehicles" class="vehicle-list">Загрузка…</div>
     </section>

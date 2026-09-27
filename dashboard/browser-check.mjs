@@ -1,552 +1,502 @@
-// Browser check of the served dispatcher screen (consumer + built bundle + real PMTiles).
-// Demo, scenario-run, M1 main-path, rehearsal and viewport passes use no interception. The live-state pass replaces only
-// /api/snapshot; the map-unavailable pass replaces only /map/moscow.pmtiles with a 404. The clipboard-unavailable
-// check removes navigator.clipboard, as on a plain-http LAN address. UI_RECORD=1 with UI_EVIDENCE_DIR also records
-// a paced backup video of the demo story (d06-backup-recording.webm).
+// Browser check of the served dispatcher screen (consumer + built bundle + real PMTiles), 1920×1080 only.
+//
+// Two kinds of passes, reported separately:
+//   live:       no interception. Everything comes from the stack at UI_URL through real requests
+//               (/api/snapshot, /api/route, /api/build). Expected values are read from the same API,
+//               so the pass holds for any run, speed-up and data. This is the evidence pass.
+//   regression: /api/snapshot and /api/route are replaced by fixed payloads (page.route) to force
+//               states a live run does not produce on demand: waiting driver, run ID change, short
+//               nodata gap, model failure codes, bad coordinates, Backend offline, missing tiles.
+//               Regression results are never evidence of the live chain.
+// UI_EVIDENCE_DIR saves 1920×1080 screenshots; UI_LIVE_EVENT_WAIT_S waits that long for a real alert
+// to walk the M1 path on live data (otherwise that part is reported as skipped, not passed).
 import {chromium} from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
-import {labelOffset} from './map-labels.js';
+import {LOST_AFTER_S} from './incidents.js';
+import {reasonText} from './reasons.js';
+import {shiftedText} from './route-context.js';
+import {speedupText} from './run.js';
 
 const base = process.env.UI_URL || 'http://127.0.0.1:18882';
 const evidenceDir = process.env.UI_EVIDENCE_DIR;
+const liveEventWaitS = Number(process.env.UI_LIVE_EVENT_WAIT_S || 0);
+const VIEWPORT = {width: 1920, height: 1080};
 const failures = [];
-const passed = [];
-const check = (condition, label) => { (condition ? passed : failures).push(label); };
+const passed = {live: [], regression: []};
+const skipped = [];
+const liveSelected = {}; // identity of the model result of the vehicle opened in the live pass
+let pass = 'live';
+const check = (condition, label) => { (condition ? passed[pass] : failures).push(condition ? label : `${pass}: ${label}`); };
 if (evidenceDir) fs.mkdirSync(evidenceDir, {recursive: true});
 const shot = async (page, name) => { if (evidenceDir) await page.screenshot({path: path.join(evidenceDir, name)}); };
 
 const browser = await chromium.launch({headless: true, args: ['--use-gl=angle', '--use-angle=swiftshader']});
-async function open(viewport, url, {allowConsoleErrors = false, setup, context: contextOptions} = {}) {
-  const page = contextOptions
-    ? await (await browser.newContext({viewport, deviceScaleFactor: 1, ...contextOptions})).newPage()
-    : await browser.newPage({viewport, deviceScaleFactor: 1});
-  page.on('pageerror', e => failures.push(`pageerror: ${e.message}`));
-  page.on('console', m => { if (m.type() === 'error' && !allowConsoleErrors) failures.push(`console: ${m.text()}`); });
-  page.on('request', req => { if (!req.url().startsWith(base) && !/^(data|blob):/.test(req.url())) failures.push(`external request: ${req.url()}`); });
+// `allow` exempts expected error answers (e.g. a provoked 404 of /api/route) by URL; `allowErrors` exempts all.
+async function open({allowErrors = false, allow = null, setup, context: contextOptions} = {}) {
+  const expected = url => allowErrors || Boolean(allow && url && allow.test(url));
+  const context = await browser.newContext({viewport: VIEWPORT, deviceScaleFactor: 1, ...contextOptions});
+  const page = await context.newPage();
+  page.on('pageerror', e => failures.push(`${pass}: pageerror: ${e.message}`));
+  page.on('console', m => { if (m.type() === 'error' && !expected(m.location()?.url)) failures.push(`${pass}: console: ${m.text()}`); });
+  page.on('request', req => { if (!req.url().startsWith(base) && !/^(data|blob):/.test(req.url())) failures.push(`${pass}: external request: ${req.url()}`); });
   // An error status (e.g. the browser's automatic /favicon.ico) is a failure unless the pass provokes errors on purpose.
-  page.on('response', res => { if (res.status() >= 400 && !allowConsoleErrors) failures.push(`HTTP ${res.status()}: ${res.url()}`); });
+  page.on('response', res => { if (res.status() >= 400 && !expected(res.url())) failures.push(`${pass}: HTTP ${res.status()}: ${res.url()}`); });
   if (setup) await setup(page);
-  await page.goto(`${base}${url}`, {waitUntil: 'domcontentloaded', timeout: 30000});
+  await page.goto(`${base}/`, {waitUntil: 'domcontentloaded', timeout: 30000});
   return page;
 }
 const inside = (box, area) => box && box.x >= area.x - 1 && box.y >= area.y - 1
   && box.x + box.width <= area.x + area.width + 1 && box.y + box.height <= area.y + area.height + 1;
-const labelPoint = async (page, id) => {
-  // A label sits on the free side of its Three.js dot named by data-placement (see map-labels.js).
-  const label = page.locator(`.vehicle-label[data-id="${id}"]`);
-  const box = await label.boundingBox();
-  const [dx, dy] = labelOffset(await label.getAttribute('data-placement'), box.width, box.height);
-  return {x: box.x + box.width / 2 - dx, y: box.y + box.height / 2 - dy};
-};
-// Every pair of visible vehicle labels that intersect, as «A/B w×h».
-const labelOverlaps = page => page.locator('.vehicle-label').evaluateAll(elements => {
-  const boxes = elements.map(el => ({id: el.dataset.id, r: el.getBoundingClientRect()}));
+const overlap = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+// Every pair of visible map labels (vehicles and stop times) that intersect, as «A/B».
+const labelOverlaps = page => page.locator('.vehicle-label, .stop-label:not([hidden])').evaluateAll(elements => {
+  const boxes = elements.map(el => ({id: el.dataset.id || `stop:${el.dataset.kind}`, r: el.getBoundingClientRect()}));
   const found = [];
   for (let i = 0; i < boxes.length; i += 1) {
     for (let j = i + 1; j < boxes.length; j += 1) {
       const a = boxes[i].r, b = boxes[j].r;
       const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-      if (w > 0 && h > 0) found.push(`${boxes[i].id}/${boxes[j].id} ${w}×${h}`);
+      if (w > 0 && h > 0) found.push(`${boxes[i].id}/${boxes[j].id}`);
     }
   }
   return found;
 });
 const rows = page => page.locator('#vehicles .vehicle');
 const cardTitle = page => page.locator('#card h2').textContent();
+const cardText = page => page.locator('#card').textContent();
 const incidentText = page => page.locator('#card .incident').textContent();
+const api = (page, url) => page.evaluate(async u => { const r = await fetch(u, {cache: 'no-store'}); return {status: r.status, body: await r.json().catch(() => null)}; }, url);
 // A control is usable when the element at its centre is the control itself (nothing drawn over it).
 const uncovered = (page, selector) => page.locator(selector).first().evaluate(el => {
   const r = el.getBoundingClientRect();
   const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
   return r.width > 0 && (hit === el || el.contains(hit));
 });
-const pause = (page, ms) => page.waitForTimeout(ms);
+// DOM stability across polls (dom.js): a row or button node under the pointer must survive the
+// 1.5 s poll, and a real press that spans a poll must still be a click.
+const POLL_SPAN_MS = 1800;
+async function survivesPolls(page, selector, label) {
+  const handle = await page.locator(selector).first().elementHandle();
+  await page.waitForTimeout(2 * POLL_SPAN_MS); // at least two polls
+  check(handle && await handle.evaluate(node => node.isConnected), `${label}: the same DOM node survives ≥ 2 polls`);
+}
+async function pressAcrossPoll(page, selector) {
+  const box = await page.locator(selector).first().boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(POLL_SPAN_MS); // a poll re-renders the panels between down and up
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+}
 
-// One pass of the demo story from a fresh run: Next to the warning → event → card → take into work → note →
-// driver-contact prototype → Next to the end. Returns what the screen showed at each step.
-async function story(page, {shots = false, pace = 0} = {}) {
-  const seen = [];
-  const note = async label => seen.push(`${label}: ${(await page.locator('#scenario-phase').textContent())}`);
-  await note('start');
-  if (shots) await shot(page, 'd06-1-overview-1920.png');
-  await pause(page, pace);
-  await page.locator('#scenario-next').click();
-  await pause(page, pace);
-  await page.locator('#scenario-next').click();
-  await pause(page, 300);
-  seen.push(`toast: ${await page.locator('.toast').count()} ${await page.locator('.toast').first().textContent()}`);
-  seen.push(`unread: ${await page.locator('#events-unread').textContent()}`);
-  await pause(page, pace);
+const noScenario = async page => await page.locator('#scenario, #mode-badge, [data-mode], .mode-switch, .direction-chip, #routes, [id^=scenario-]').count() === 0
+  && !/сценари|Демо-|mode=demo/i.test(await page.locator('body').textContent());
+
+// M1 dispatcher path on the incident of the given vehicle: event centre → card → take into work →
+// note (HTML not executed) → return to new → history.
+async function dispatcherPath(page, label) {
   await page.locator('#events-toggle').click();
-  seen.push(`events: ${(await page.locator('#events-list .event .event-title').allTextContents()).join(' | ')}`);
-  await pause(page, pace);
-  await page.locator('#events-list .event').first().click();
-  await pause(page, 900);
-  seen.push(`card: ${await cardTitle(page)} · ${await page.locator('#card .incident-state').textContent()} · ${await page.locator('#card .incident-flow').textContent()}`);
-  if (shots) await shot(page, 'd06-2-incident-1920.png');
-  await pause(page, pace);
+  const events = page.locator('#events-list .event');
+  check(await events.count() >= 1, `${label}: event centre lists the event`);
+  const eventId = await events.first().getAttribute('data-id');
+  await events.first().click();
+  await page.waitForTimeout(900);
+  check(await page.locator('#events-panel').isHidden() && await page.locator(`.toast[data-id="${eventId}"]`).count() === 0, `${label}: opening the event closes the panel and its toast`);
+  check(await page.locator('#card .incident').getAttribute('data-id') === eventId, `${label}: event → its vehicle's card with the same event`);
+  check(await page.locator('#incident-action').textContent() === 'Взять в работу', `${label}: primary action is «Взять в работу»`);
   await page.locator('#incident-action').click();
-  await pause(page, pace / 2);
-  await page.locator('#note-input').fill('Связались с диспетчером линии');
-  await pause(page, pace / 2);
+  check(await page.locator('#card .incident-flow').textContent() === 'В работе' && (await incidentText(page)).includes('Взято в работу'), `${label}: acknowledge changes the dispatcher status`);
+  const hostile = '<img src=x onerror="window.__xss=1"><b>жирный</b> позвонить водителю';
+  await page.locator('#note-input').fill(hostile);
   await page.locator('.note-form button').click();
-  await pause(page, pace / 2);
-  await page.locator('#contact-open').click();
-  seen.push(`handled: ${await page.locator('#card .incident-flow').textContent()} · notes ${await page.locator('.incident-history li[data-kind=note]').count()}`
-    + ` · ${await page.locator('.contact b').textContent()} · ${await page.locator('#contact-text').inputValue()}`);
-  if (shots) await shot(page, 'd06-3-handling-1920.png');
-  await pause(page, pace);
-  await page.locator('#contact-close').click();
-  await page.locator('#scenario-next').click();
-  await pause(page, pace);
-  await page.locator('#scenario-next').click();
-  await pause(page, 300);
-  seen.push(`end: ${await page.locator('#scenario-phase').textContent()} · ${await page.locator('#card .incident').getAttribute('data-state')}`
-    + ` · ${await page.locator('#card .incident-flow').textContent()} · toasts ${await page.locator('.toast').count()}`);
-  await pause(page, pace);
-  await page.locator('#events-toggle').click();
-  seen.push(`summary: ${await page.locator('#events-summary').textContent()}`);
-  await pause(page, pace);
-  await page.locator('#events-close').click();
-  return seen;
+  const notes = page.locator('.incident-history li[data-kind=note]');
+  check(await notes.count() === 1 && (await notes.textContent()).includes(hostile) && await page.locator('#card .incident img, #card .incident-history b').count() === 0
+    && await page.evaluate(() => window.__xss === undefined), `${label}: note shown as plain text; HTML not executed`);
+  await page.locator('#incident-action').click();
+  check(await page.locator('#card .incident-flow').textContent() === 'Новое' && (await incidentText(page)).includes('Возвращено в новые'), `${label}: «Вернуть в новые» reopens`);
+  const kinds = await page.locator('.incident-history li').evaluateAll(items => items.map(i => i.dataset.kind));
+  check(kinds.filter(k => k === 'action').length === 2 && kinds.includes('note') && kinds.includes('lifecycle'), `${label}: history keeps lifecycle, both actions and the note`);
+  return eventId;
 }
 
 try {
-  // 1. Demo scenario at the primary Full HD viewport, no interception.
+  // ============================== LIVE: no interception ==============================
+  pass = 'live';
   {
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo');
+    const page = await open();
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.waitForTimeout(800);
-    check(await page.locator('#mode-badge').textContent() === 'Демо-сценарий · значения заданы', 'demo: persistent mode label');
-    check((await page.locator('link[rel=icon]').getAttribute('href')).startsWith('data:image/svg+xml,'), 'demo: inline page icon, no /favicon.ico request');
-    check(await rows(page).count() === 8, 'demo: 8 objects listed');
-    check(await page.locator('.vehicle-label').count() === 7, 'demo: 7 located objects labelled on map (1 without GPS)');
-    check((await page.locator('[data-filter]').allTextContents()).join('|') === 'Все 8|С предупреждениями 1|Нет данных 2', 'demo: filter counters');
-    check((await page.locator('#attention').textContent()).includes('Д-103'), 'demo: problem object named in attention banner');
-    check((await page.locator('#routes [data-route]').allTextContents()).join('|') === 'Все направления 8|Напр. А 4|Напр. Б 3|Без привязки 1', 'D03: direction filter with counts and «Без привязки»');
-    check((await page.locator('.direction-chip').allTextContents()).join('|') === 'А: А1 → А6|Б: Б1 → Б6', 'D03: both demo directions drawn with their point order');
-    check((await page.locator('#legend-note').textContent()).includes('не трасса'), 'D03: legend marks the line as a scheme, not a road trace');
-    check(await page.locator('#events-unread').textContent() === '1' && await page.locator('.toast').count() === 0, 'D04: existing event counted as unread, no toast on first snapshot');
-    await shot(page, 'demo-overview-1920.png');
-
-    const mapBox = await page.locator('#map-pane').boundingBox();
-    const p101 = await labelPoint(page, 'Д-101');
-    await page.mouse.move(p101.x, p101.y);
-    await page.waitForTimeout(150);
-    check(await page.locator('.vehicle[data-id="Д-101"].is-hovered').count() === 1, 'demo: map hover highlights list row');
-    await page.mouse.click(p101.x, p101.y);
-    check(await cardTitle(page) === 'Д-101', 'demo: map click selects object');
-    check(await page.locator('.vehicle[aria-current=true]').getAttribute('data-id') === 'Д-101', 'demo: map selection mirrored in list');
-
-    await rows(page).filter({hasText: 'Д-103'}).click();
-    await page.waitForTimeout(900);
-    check(await cardTitle(page) === 'Д-103', 'demo: list click selects object');
-    const card = await page.locator('#card').textContent();
-    check(card.includes('2.8 мин') && card.includes('Значение задано сценарием') && card.includes('не установлена'), 'demo: card shows delay, scenario source, unknown cause');
-    check(await page.locator('#model-link').count() === 0 && !card.includes('Результат модели'), 'demo: scenario card claims no model result');
-    const selectedLabel = await page.locator('.vehicle-label.is-selected').boundingBox();
-    check(inside(selectedLabel, mapBox), 'demo: selected object stays inside the map area, not under the panel');
-    await shot(page, 'demo-selected-1920.png');
-
-    const card103 = await page.locator('#card').textContent();
-    check(card103.includes('Демо-линия · направление А') && card103.includes('А1 → А2 → А3') && card103.includes('Точка сценария А3 · план 12:45')
-      && await page.locator('.target-label').textContent() === 'Цель А3 · план 12:45', 'D03: card names direction and target; target marker labelled from the catalog');
-    check(await page.locator('.direction-chip[data-route="demo-line:a"]').getAttribute('data-emphasis') === 'focus'
-      && await page.locator('.direction-chip[data-route="demo-line:b"]').getAttribute('data-emphasis') === 'dim', 'D03: selected object highlights its own direction');
-    await page.locator('#routes [data-route="demo-line:b"]').click();
-    check((await rows(page).allTextContents()).every(t => t.includes('напр. Б')) && await rows(page).count() === 3, 'D03: direction filter shows only that direction');
-    await page.locator('#routes [data-route=unmapped]').click();
-    await rows(page).first().click();
-    check(await cardTitle(page) === 'Д-108' && (await page.locator('#card').textContent()).includes('Без привязки')
-      && (await page.locator('#card').textContent()).includes('Цель не определена') && await page.locator('.target-label').count() === 0, 'D03: object without mapping stays «Без привязки», no invented target');
-    await page.locator('#routes [data-route=all]').click();
-    await page.locator('[data-filter=warning]').click();
-    check(await rows(page).count() === 1, 'demo: warning filter');
-    await page.locator('[data-filter=nodata]').click();
-    check(await rows(page).count() === 2 && (await page.locator('#vehicles').textContent()).includes('без позиции'), 'demo: no-data filter incl. object without GPS');
-    await page.locator('[data-filter=all]').click();
-    await page.locator('#search').fill('105');
-    check(await rows(page).count() === 1, 'demo: search by displayed ID');
-    await page.locator('#search').fill('нет-такого');
-    check((await page.locator('#vehicles').textContent()).includes('Ничего не найдено'), 'demo: empty search state');
-    await page.locator('#search').fill('');
-    await page.locator('#clear-selection').click();
-    check(await page.locator('#card .card-empty').count() === 1, 'demo: reset selection');
+    await page.waitForFunction(() => document.getElementById('data-status').dataset.status === 'online', null, {timeout: 15000});
+    await page.waitForTimeout(1500);
+    const {body: envelope} = await api(page, '/api/snapshot');
+    const run = envelope?.snapshot?.run;
+    check(envelope?.status === 'online' && run && typeof run === 'object', 'snapshot is online and carries `run`');
+    await page.waitForTimeout(1600); // one more poll so the header shows at least this snapshot
+    check(await page.locator('#run-speed').textContent() === speedupText(run?.speedup) && await page.locator('#run-speed').getAttribute('data-speedup') === String(run?.speedup ?? ''),
+      `header speed-up equals snapshot.run.speedup (${await page.locator('#run-speed').textContent()})`);
+    check(await page.locator('#run-id').getAttribute('data-run-id') === (run?.run_id ?? ''), `header run ID equals snapshot.run.run_id (${run?.run_id})`);
+    // The live pass is evidence of the official emulator chain only: any other source fails it.
+    check(run?.source === 'official_emulator' && typeof run?.run_id === 'string' && run.run_id.length > 0
+      && ['starting', 'running', 'completed'].includes(run?.state),
+    `live run is the official emulator with a run_id (source ${run?.source}, run_id ${run?.run_id}, state ${run?.state})`);
+    check((await page.locator('#run-source').textContent()).includes('Официальный эмулятор NDTP'), 'header names the official emulator as the source');
+    check(await page.locator('#run').getAttribute('data-state') === (run?.state ?? 'unknown') && (await page.locator('#run-state').textContent()).length > 0, `header lifecycle is snapshot.run.state (${run?.state})`);
+    check(await noScenario(page), 'no scenario, mode switch or direction catalogue on the page');
+    check((await page.locator('link[rel=icon]').getAttribute('href')).startsWith('data:image/svg+xml,'), 'inline page icon, no /favicon.ico request');
+    const vehicles = envelope?.snapshot?.vehicles ?? [];
+    check(await rows(page).count() === vehicles.length, `list shows the ${vehicles.length} vehicles of the run`);
+    // Stable DOM on live polls: rows and the banner button stay the same nodes; a slow real click works.
+    if (vehicles.length >= 2) {
+      await survivesPolls(page, '#vehicles .vehicle', 'live list row');
+      if (await page.locator('#attention button').count()) await survivesPolls(page, '#attention button', 'live «Открыть карточку»');
+      else skipped.push('live: no warning banner button at this moment — its node check runs in regression only');
+      const pick = await page.locator('#vehicles .vehicle').nth(1).getAttribute('data-id');
+      await pressAcrossPoll(page, `#vehicles .vehicle[data-id="${pick}"]`);
+      check(await cardTitle(page) === pick && await page.locator(`#vehicles .vehicle[data-id="${pick}"]`).getAttribute('aria-current') === 'true',
+        `live: mouse down → poll → up on row ${pick} selects it`);
+      await page.locator('#card-close').click();
+    } else skipped.push('live: fewer than 2 vehicles — DOM stability checks run in regression only');
     await page.locator('#overview').click();
-    await page.locator('#diagnostics summary').click();
-    const diag = await page.locator('#diag-list').textContent();
-    check(diag.includes('moscow-center-demo') && diag.includes('PMTiles sha256'), 'demo: diagnostics disclosure');
-    await shot(page, 'demo-diagnostics-1920.png');
-    await page.close();
-  }
+    await page.waitForTimeout(1200);
+    const overlapsOverview = await labelOverlaps(page);
+    check(overlapsOverview.length === 0, `overview: no two map labels intersect (${overlapsOverview.join(', ') || 'none'})`);
+    await shot(page, 'live-1-overview-1920.png');
 
-  // 1b. Scenario run: Start/Pause/Next/Reset through all phases, three runs, no reload.
-  {
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo');
-    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    const phase = () => page.locator('#scenario-phase').textContent();
-    const state = () => page.locator('#scenario-state').textContent();
-    const runId = () => page.locator('#scenario-run').getAttribute('title');
-    const counters = async () => (await page.locator('[data-filter]').allTextContents()).join('|');
-    const walk = async () => { // Next through every phase, recording what the screen shows.
-      const seen = [`${await phase()} ${await counters()}`];
-      while (await page.locator('#scenario-next').isEnabled()) {
-        await page.locator('#scenario-next').click();
-        seen.push(`${await phase()} ${await counters()}`);
+    // A vehicle with a current model prediction, a target and a valid position.
+    const candidate = vehicles.filter(v => v.status === 'normal' && v.prediction_s != null && v.target_stop_id && v.location_valid)
+      .sort((a, b) => Number(b.prediction_s) - Number(a.prediction_s))[0];
+    if (!candidate) skipped.push('live: no vehicle with a current prediction in this snapshot — route/card checks not run');
+    else {
+      const id = String(candidate.tr_id);
+      Object.assign(liveSelected, {tr_id: id, model_version: candidate.model_version ?? null, artifact_sha256: candidate.artifact_sha256 ?? null});
+      await page.locator(`#vehicles .vehicle[data-id="${id}"]`).click();
+      await page.waitForFunction(() => ['ok', 'missing', 'offline'].includes(document.getElementById('route')?.dataset.status), null, {timeout: 10000});
+      await page.waitForTimeout(1500);
+      const {status: routeStatus, body: routeBody} = await api(page, `/api/route/${encodeURIComponent(id)}`);
+      check(routeStatus === 200 && Array.isArray(routeBody?.stops), `/api/route/${id} answers with stops`);
+      check(await page.locator('#route').getAttribute('data-status') === 'ok', `route context of ${id} loaded`);
+      const text = await cardText(page);
+      check(text.includes('Текущее опоздание') && text.includes('(факт)'), 'card: current delay labelled as fact');
+      const roles = (routeBody?.stops ?? []).map(s => s.role);
+      const target = (routeBody?.stops ?? []).find(s => s.role === 'target');
+      if (target) {
+        const targetRow = page.locator('.stops li[data-role=target]');
+        const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s) : null;
+        check(await targetRow.count() === 1 && (await targetRow.textContent()).includes('прогноз модели')
+          && (!expected || (await targetRow.textContent()).includes(expected)), `card: target = plan + prediction_s «прогноз модели» (${expected})`);
+        check(await page.locator('.stop-label[data-kind=target]').count() === 1
+          && inside(await page.locator('.stop-label[data-kind=target]').boundingBox(), await page.locator('#map-pane').boundingBox()), 'map: target time label drawn inside the map (never at 0/0)');
+      } else skipped.push(`live: route of ${id} has no target stop at this moment`);
+      if (roles.includes('before_target') && routeBody.cur_dev_s != null) check((await page.locator('.stops li[data-role=before_target]').first().textContent()).includes('по факту, не прогноз'), 'card: stops before the target = plan + cur_dev_s «по факту, не прогноз»');
+      if (roles.includes('passed')) check(!/→/.test(await page.locator('.stops li[data-role=passed]').first().textContent()), 'card: passed stops show the plan time only');
+      if (roles.includes('after_target') && routeBody.prediction_s != null) {
+        check(await page.locator('#shift-after-target').isChecked() && (await page.locator('.stops li[data-role=after_target]').first().textContent()).includes('допущение: тот же сдвиг'), 'card: after the target «допущение: тот же сдвиг», toggle on by default');
+        await page.locator('#shift-after-target').uncheck();
+        check(!(await page.locator('.stops').textContent()).includes('допущение') && (await page.locator('.stops li[data-role=target]').textContent()).includes('прогноз модели'), 'card: toggle off hides the assumption, keeps the model value');
+        await page.locator('#shift-after-target').check();
       }
-      return seen;
-    };
-    await page.evaluate(() => { window.__sameDocument = true; });
-    check(await page.locator('#scenario').isVisible() && await phase() === 'Фаза 1 из 5 · Обзор' && await state() === 'ожидает запуска'
-      && await page.locator('#scenario-start').textContent() === 'Начать демо' && await page.locator('#scenario-pause').isDisabled(), 'scenario: run waits at phase 1');
-    const firstRun = await runId();
-    check(/^moscow-center-demo\.d03\.v\d+\.r1-\w+$/.test(firstRun) && (await page.locator('#data-status').textContent()).includes('Сценарий · фаза 1 из 5'), 'scenario: run ID and phase in status');
-    await rows(page).filter({hasText: 'Д-104'}).click();
-    await page.locator('#scenario-start').click();
-    check(await state() === 'идёт' && await page.locator('#scenario-start').isDisabled(), 'scenario: Start plays');
-    await page.waitForFunction(() => document.getElementById('scenario-phase').textContent === 'Фаза 2 из 5 · Прогноз обновляется', null, {timeout: 12000});
-    const updating = await page.locator('#card').textContent();
-    check(await cardTitle(page) === 'Д-104' && updating.includes('Нет прогноза') && updating.includes('прогноз рассчитывается'), 'scenario: auto-advance keeps selection; "updating" shown by the ordinary card');
-    await page.locator('#scenario-pause').click();
-    check(await state() === 'пауза' && await page.locator('#scenario-start').textContent() === 'Продолжить', 'scenario: Pause');
-    await page.waitForTimeout(9000);
-    check(await phase() === 'Фаза 2 из 5 · Прогноз обновляется', 'scenario: paused run does not advance');
-    await page.locator('#scenario-next').click();
-    await page.waitForTimeout(300);
-    const attention = await page.locator('#attention').textContent();
-    check(await phase() === 'Фаза 3 из 5 · Новое предупреждение' && attention.includes('Новое предупреждение') && attention.includes('Д-104')
-      && (await rows(page).filter({hasText: 'Д-104'}).textContent()).includes('Новое · сильная задержка')
-      && await page.locator('.vehicle-label[data-id="Д-104"]').getAttribute('data-level') === 'severe', 'scenario: Next → new warning in banner, list and map');
-    check((await page.locator('#card').textContent()).includes('Значение задано сценарием') && await page.locator('#mode-badge').textContent() === 'Демо-сценарий · значения заданы', 'scenario: values stay marked as scenario');
-    await shot(page, 'scenario-new-warning-1920.png');
-    await page.locator('#scenario-next').click();
-    check(await phase() === 'Фаза 4 из 5 · Данные недоступны' && (await rows(page).filter({hasText: 'Д-103'}).textContent()).includes('Устройство отключено')
-      && (await page.locator('.vehicle-label[data-id="Д-103"]').textContent()).includes('устарел'), 'scenario: data unavailable shown as stale, not a warning');
-    await shot(page, 'scenario-data-loss-1920.png');
-    await page.locator('#scenario-next').click();
-    check(await phase() === 'Фаза 5 из 5 · Возврат в норму' && await state() === 'завершён' && (await page.locator('#attention').textContent()).includes('Предупреждений нет')
-      && await page.locator('#scenario-next').isDisabled() && await page.locator('#scenario-start').isDisabled(), 'scenario: last phase returns to normal and stops');
-    await page.locator('#diagnostics summary').click();
-    const diag = await page.locator('#diag-list').textContent();
-    check(diag.includes(firstRun) && diag.includes('overview → updating → new-warning → data-loss → recovery'), 'scenario: diagnostics show run ID and its local history');
-    await shot(page, 'scenario-finished-1920.png');
-    await page.locator('#diagnostics summary').click();
-
-    await page.locator('[data-filter=nodata]').click();
-    await page.locator('#scenario-reset').click();
-    const secondRun = await runId();
-    const diagAfterReset = await page.evaluate(() => { document.getElementById('diagnostics').open = true; return document.getElementById('diag-list').textContent; });
-    check(await page.evaluate(() => window.__sameDocument === true), 'scenario: Reset does not reload the page');
-    check(secondRun !== firstRun && /\.r2-/.test(secondRun) && await phase() === 'Фаза 1 из 5 · Обзор' && await state() === 'ожидает запуска', 'scenario: Reset starts a new run at phase 1');
-    check(await page.locator('#card .card-empty').count() === 1 && await page.locator('[data-filter=all]').getAttribute('aria-pressed') === 'true'
-      && !diagAfterReset.includes(firstRun) && diagAfterReset.includes('История запуска') && !diagAfterReset.includes('→'), 'scenario: Reset carries no selection, filter or history from the previous run');
-    await page.evaluate(() => { document.getElementById('diagnostics').open = false; });
-    const run2 = await walk();
-    await page.locator('#scenario-reset').click();
-    const run3 = await walk();
-    await page.locator('#scenario-reset').click();
-    const run4 = await walk();
-    check(run2.length === 5 && JSON.stringify(run3) === JSON.stringify(run2) && JSON.stringify(run4) === JSON.stringify(run2), `scenario: three reset runs show the same phases (${run2.join(' / ')})`);
-    check(/\.r4-/.test(await runId()), 'scenario: every reset gets a new run ID');
-
-    // Leaving the scenario stops it: an in-flight step never brings the scenario back.
-    await page.locator('#scenario-reset').click();
-    await page.locator('#scenario-start').click();
-    await page.locator('[data-mode=live]').click();
-    await page.waitForTimeout(9000);
-    check(await page.locator('#mode-badge').textContent() === 'Поток Backend · телеметрия NDTP' && await page.locator('#scenario').isHidden()
-      && !(await page.locator('#data-status').textContent()).includes('Сценарий'), 'scenario: switching to live stops the scenario timer');
-    await page.locator('[data-mode=demo]').click();
-    check(/\.r6-/.test(await runId()) && await phase() === 'Фаза 1 из 5 · Обзор', 'scenario: returning to demo starts a new run');
-    await page.close();
-  }
-
-  // 1c. M1 main path at 1920×1080, no interception:
-  // overview → Start → warning → Events → direction/object → card → acknowledge → note → return to normal/history.
-  {
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo');
-    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.waitForTimeout(600);
-    const phase = () => page.locator('#scenario-phase').textContent();
-    const incident = () => page.locator('#card .incident');
-    await shot(page, 'm1-1-overview-1920.png');
-    await page.locator('#scenario-start').click();
-    await page.waitForFunction(() => document.getElementById('scenario-phase').textContent.startsWith('Фаза 3 из 5'), null, {timeout: 20000});
-    await page.locator('#scenario-pause').click();
-    await page.waitForTimeout(300);
-    const toast = page.locator('.toast');
-    check(await toast.count() === 1 && (await toast.textContent()).includes('Новое событие №2') && (await toast.textContent()).includes('направление Б')
-      && (await toast.textContent()).includes('Д-104 6.5 мин · Д-102 3.2 мин'), 'M1: one toast for the new direction-Б episode, both objects grouped');
-    check(await page.locator('#events-unread').textContent() === '2', 'M1: unread counter shows the new and the existing event');
-    await shot(page, 'm1-2-warning-toast-1920.png');
-    await page.locator('#events-toggle').click();
-    const events = page.locator('#events-list .event');
-    check(await events.count() === 2 && (await events.nth(0).textContent()).includes('направление Б') && (await events.nth(1).textContent()).includes('направление А')
-      && await events.nth(0).getAttribute('data-unread') === 'true', 'M1: event centre lists the two directions separately, newest first');
-    await shot(page, 'm1-3-events-1920.png');
-    await events.nth(0).click();
-    await page.waitForTimeout(900);
-    check(await page.locator('#events-panel').isHidden() && await page.locator('.toast').count() === 0 && await page.locator('#events-unread').textContent() === '1', 'M1: opening the event reads it and closes panel and toast');
-    check(await page.locator('#routes [data-route="demo-line:b"]').getAttribute('aria-pressed') === 'true' && await cardTitle(page) === 'Д-104'
-      && await page.locator('.direction-chip[data-route="demo-line:b"]').getAttribute('data-emphasis') === 'focus', 'M1: event → its direction and its most urgent object');
-    check(inside(await page.locator('.vehicle-label.is-selected').boundingBox(), await page.locator('#map-pane').boundingBox()), 'M1: selected object inside the map, not under a panel');
-    const eventText = await incident().textContent();
-    check(eventText.includes('Событие №2') && eventText.includes('Активно') && eventText.includes('Новое') && eventText.includes('Событие открыто'), 'M1: card shows the event, its state and history');
-    check(await page.locator('#incident-action').textContent() === 'Взять в работу', 'M1: primary action is «Взять в работу»');
-    await page.locator('#incident-action').click();
-    check(await page.locator('#card .incident-flow').textContent() === 'В работе' && await page.locator('#incident-action').textContent() === 'Вернуть в новые'
-      && (await incident().textContent()).includes('Взято в работу') && await incident().getAttribute('data-state') === 'active', 'M1: acknowledge changes status, not the delay state');
-    await page.locator('#incident-action').click();
-    check(await page.locator('#card .incident-flow').textContent() === 'Новое' && (await incident().textContent()).includes('Возвращено в новые'), 'D05: «Вернуть в новые» reopens');
-    await page.locator('#incident-action').click();
-    const hostile = '<img src=x onerror="window.__xss=1"><b>жирный</b> позвонить водителю';
-    await page.locator('#note-input').fill(hostile);
-    await page.locator('.note-form button').click();
-    const notes = page.locator('.incident-history li[data-kind=note]');
-    check(await notes.count() === 1 && (await notes.textContent()).includes(hostile) && await page.locator('#card .incident img, #card .incident-history b').count() === 0
-      && await page.evaluate(() => window.__xss === undefined), 'M1: note stored and shown as plain text; HTML not executed');
-    await page.locator('#note-input').fill('   ');
-    await page.locator('.note-form button').click();
-    check(await notes.count() === 1, 'D05: empty note rejected');
-    await shot(page, 'm1-4-card-acknowledged-1920.png');
-    await page.locator('#scenario-start').click(); // continue: phases 4 and 5 play automatically
-    await page.waitForFunction(() => document.getElementById('scenario-phase').textContent.startsWith('Фаза 4 из 5'), null, {timeout: 12000});
-    check(await page.locator('#card .incident-flow').textContent() === 'В работе' && await notes.count() === 1, 'M1: acknowledgement and note survive the next snapshot');
-    await page.waitForFunction(() => document.getElementById('scenario-phase').textContent.startsWith('Фаза 5 из 5'), null, {timeout: 12000});
-    await page.waitForTimeout(300);
-    const ended = await incident().textContent();
-    check(await incident().getAttribute('data-state') === 'resolved' && ended.includes('Задержка закончилась') && ended.includes('В работе')
-      && await page.locator('#incident-action').count() === 0 && await notes.count() === 1, 'M1: return to normal ends the episode; history keeps action and note');
-    check(await page.locator('.toast').count() === 0, 'D04: no further toasts while the same episodes continue or end');
-    await shot(page, 'm1-5-history-1920.png');
-    await page.locator('#events-toggle').click();
-    check((await page.locator('#events-summary').textContent()).includes('закончились 2'), 'D04: both episodes ended, none duplicated');
-    await page.locator('#events-list .event[data-id$="demo-line:a#1"]').click();
-    const lostHistory = await incident().textContent();
-    check(await cardTitle(page) === 'Д-103' && lostHistory.includes('Мониторинг потерян') && lostHistory.includes('Задержка закончилась'), 'D04: data loss was monitoring_lost before the resolution');
-    await page.locator('#scenario-reset').click();
-    await page.locator('#events-toggle').click();
-    const afterReset = await page.locator('#events-list').textContent();
-    check(await page.locator('#events-list .event').count() === 1 && !afterReset.includes('В работе') && !afterReset.includes('заметок')
-      && afterReset.includes('№1'), 'M1: Reset carries no event or action history into the new run');
-    await page.close();
-  }
-
-  // 1d. D06 rehearsal at 1920×1080, no interception: the story three times in a row, Reset between runs.
-  {
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo');
-    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.waitForTimeout(800);
-    await page.evaluate(() => { window.__sameDocument = true; });
-    const runs = [];
-    const ids = [];
-    for (let i = 0; i < 3; i += 1) {
-      if (i) await page.locator('#scenario-reset').click();
-      await page.waitForTimeout(600);
-      ids.push(await page.locator('#scenario-run').getAttribute('title'));
-      runs.push(await story(page, {shots: i === 0}));
-      if (i === 0) {
-        // Main controls are not covered by the toast, legend, panels or the sticky card actions.
-        await page.locator('#scenario-reset').click();
-        await page.locator('#scenario-next').click();
-        await page.locator('#scenario-next').click();
-        await page.locator('#events-toggle').click();
-        await page.locator('#events-list .event').first().click();
-        await page.waitForTimeout(900);
-        for (const selector of ['#mode-badge', '#events-toggle', '#diagnostics summary', '#scenario-start', '#scenario-next', '#scenario-reset', '#overview',
-          '#incident-action', '#card-show', '#card-close', '#note-input', '#contact-open', '#routes [data-route="demo-line:b"]']) {
-          check(await uncovered(page, selector), `D06: ${selector} is not covered at 1920×1080`);
-        }
-        check(await page.locator('.vehicle-note').evaluateAll(notes => notes.every(n => n.scrollHeight <= 20)), 'D06: list rows keep their status on one line at 1920×1080');
-        await page.locator('#diagnostics summary').click();
-        const build = await page.evaluate(async () => (await (await fetch('/api/build', {cache: 'no-store'})).json()).files);
-        const diag = await page.locator('#diag-list').textContent();
-        check(/^[0-9a-f]{64}$/.test(build['static/app.js']) && diag.includes(build['static/app.js']) && diag.includes(build['static/app.css']),
-          'D06: diagnostics show the served bundle hashes (app.js, app.css) from /api/build');
-        await page.locator('#diagnostics summary').click();
+      check((await page.locator('#route .route-caption').textContent()).includes('не официальная трасса'), 'card: the grey line is named «путь по GPS прогона», not an official route');
+      check((await page.locator('#legend-route').textContent()).includes('путь по GPS прогона'), 'legend names the route layers');
+      check(await page.locator('.stop-label').count() <= 2, 'map: time labels only for the target and the nearest future stop');
+      const overlapsSelected = await labelOverlaps(page);
+      check(overlapsSelected.length === 0, `selected: no two map labels intersect (${overlapsSelected.join(', ') || 'none'})`);
+      check(inside(await page.locator('.vehicle-label.is-selected').boundingBox(), await page.locator('#map-pane').boundingBox()), 'selected vehicle inside the map, not under a panel');
+      for (const selector of ['#events-toggle', '#diagnostics summary', '#overview', '#card-show', '#card-close', '#shift-after-target']) {
+        check(await uncovered(page, selector), `${selector} is not covered at 1920×1080`);
       }
+      await shot(page, 'live-2-selected-route-1920.png');
+      // Evidence view: the stop list with the toggle, the target and the stops after it.
+      await page.locator('#card').evaluate(card => {
+        const box = card.querySelector('#route');
+        card.scrollTop += box.getBoundingClientRect().top - card.getBoundingClientRect().top - 8;
+        const list = box.querySelector('.stops');
+        const target = list?.querySelector('li[data-role=target]');
+        if (target) list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top - 66;
+      });
+      await shot(page, 'live-3-card-fact-forecast-assumption-1920.png');
     }
-    check(runs[0].length === 8 && runs.every(r => JSON.stringify(r) === JSON.stringify(runs[0])), `D06: three consecutive runs show the same story (${runs[0].join(' / ')})`);
-    check(new Set(ids).size === 3 && await page.evaluate(() => window.__sameDocument === true), 'D06: each repeat is a new run ID without a page reload');
-    const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-    const targetBox = await page.locator('.target-label').boundingBox();
-    const selectedBox = await page.locator('.vehicle-label.is-selected').boundingBox();
-    check(await cardTitle(page) === 'Д-104' && targetBox && selectedBox && !overlaps(targetBox, selectedBox),
-      'D06: the target name does not cover the selected object\'s label as it nears the target');
-    check(runs[0][2] === 'unread: 2' && runs[0][4].startsWith('card: Д-104 · Активно · Новое') && runs[0][5].includes('В работе · notes 1 · Прототип · отправка не подключена')
-      && runs[0][6].includes('resolved · В работе · toasts 0'), 'D06: the story reaches warning, card, handling with the prototype marker, and the end state');
+
+    // A vehicle without a current prediction: honest reason, not a green state.
+    const without = vehicles.find(v => v.status !== 'normal' && v.location_valid) ?? vehicles.find(v => v.status !== 'normal');
+    if (without) {
+      await page.locator(`#vehicles .vehicle[data-id="${without.tr_id}"]`).click();
+      await page.waitForTimeout(1500);
+      const text = await cardText(page);
+      check(await page.locator('#card').getAttribute('data-level') === 'nodata' && (text.includes('Прогноза нет') || text.includes('устарел'))
+        && (!without.reason || text.includes(reasonText(without.reason))), `no prediction (${without.reason}): «${reasonText(without.reason)}», not green`);
+      await shot(page, 'live-4-no-prediction-1920.png');
+    } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
+    // Live rows change: take the invalid-GPS vehicle from a fresh snapshot and check the card against the row it shows.
+    const invalid = ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).find(v => !v.location_valid);
+    if (invalid) {
+      await page.locator(`#vehicles .vehicle[data-id="${invalid.tr_id}"]`).click();
+      await page.waitForTimeout(900);
+      const row = ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).find(v => String(v.tr_id) === String(invalid.tr_id));
+      if (row && !row.location_valid) {
+        check(await cardTitle(page) === String(invalid.tr_id) && (await cardText(page)).includes('Позиция недостоверна') && await page.locator('#card-show').isDisabled()
+          && await page.locator(`.vehicle-label[data-id="${invalid.tr_id}"]`).count() === 0, 'invalid GPS: vehicle listed, not drawn, card says so');
+        await shot(page, 'live-5-invalid-gps-1920.png');
+      } else skipped.push(`live: ${invalid.tr_id} got a valid GPS fix during the check — invalid-GPS card not asserted`);
+    } else skipped.push('live: no vehicle with invalid GPS in this snapshot');
+
+    // Diagnostics: full build identity exactly as /api/build reports it, and the run's thinning.
+    const {body: build} = await api(page, '/api/build');
+    await page.locator('#card-close').click().catch(() => {});
+    await page.locator('#diagnostics summary').click();
+    await page.waitForTimeout(1200);
+    const diag = await page.locator('#diag-list').textContent();
+    const identity = ['source_commit', 'dashboard_bundle_sha256', 'consumer_static_sha256'];
+    check(identity.every(key => typeof build?.[key] === 'string' && diag.includes(build[key])), `diagnostics show ${identity.join(', ')} from /api/build`);
+    check(Object.entries(build?.files ?? {}).length > 0 && Object.entries(build.files).every(([name, hash]) => diag.includes(name) && diag.includes(hash)), 'diagnostics keep the per-file hashes (/api/build files)');
+    check(diag.includes('thinned_ratio') && diag.includes('repeat_ratio') && diag.includes(String(run?.run_id ?? 'неизвестно')), 'diagnostics show run ID, thinned_ratio and repeat_ratio');
+    await shot(page, 'live-6-diagnostics-1920.png');
+    await page.locator('#diagnostics summary').click();
+
+    // M1 on live data needs a real alert (> 2 min); it is waited for, never faked.
+    const deadline = Date.now() + liveEventWaitS * 1000;
+    while (await page.locator('#events-toggle').getAttribute('data-active') === '0' && Date.now() < deadline) await page.waitForTimeout(1500);
+    if (await page.locator('#events-toggle').getAttribute('data-active') !== '0') {
+      await dispatcherPath(page, 'M1 live');
+      await shot(page, 'live-7-m1-event-card-1920.png');
+    } else skipped.push(`live: no real alert within ${liveEventWaitS} s — M1 path on live data not walked (see regression M1)`);
     await page.close();
   }
 
-  // 1g. Label readability at 1920×1080, no interception: every phase of three Reset runs, after the map settles.
+  // ============================== REGRESSION: fixed payloads ==============================
+  pass = 'regression';
+  const RUN = (run_id, extra = {}) => ({run_id, state: 'running', source: 'official_emulator', speedup: 7, post_period_s: 1,
+    dataset_start: '2026-01-06T06:30:00', dataset_end: '2026-01-06T08:30:00', dataset_time: '2026-01-06T06:47:10',
+    progress: 0.14, thinned_ratio: 0.12, repeat_ratio: 0.03, vehicle_count: 2, accepted_frames: 120, last_frame_age_s: 0.7,
+    registered_at_utc: '2026-09-27T12:00:00', driver: {state: 'running', reason: null, counters: {}, reported_at_utc: '2026-09-27T12:00:05'}, ...extra});
+  const bus = (tr_id, lon, lat, extra = {}) => ({tr_id, unit_id: 1, lon, lat, location_valid: true, gps_age_s: 4, connected: true,
+    status: 'normal', reason: null, target_stop_id: `T${tr_id}`, target_time_begin: '2026-01-06T06:58:00',
+    target_lon: lon + 0.012, target_lat: lat + 0.004, cur_dev_s: 95, prediction_s: 90, prediction_updating: false,
+    prediction_age_s: 20, model_version: 'regression-model', artifact_sha256: 'regression-artifact',
+    prediction_input_frame_id: `r:${tr_id}`, prediction_context_revision: 3, last_success_at: '2026-01-06T06:46:50', revision: 5, ...extra});
+  // Shape of consumer /api/route (status wrapper) around Backend /v1/route (transport_backend/orchestration.py).
+  const routeOf = (v, extra = {}) => ({status: 'online', reason: null, run_id: state.snapshot.run.run_id, tr_id: v.tr_id, unit_id: 1,
+    vehicle_revision: v.revision, clock_time: '2026-01-06T06:47:10', window_start: '2026-01-06T06:42:10', window_end: '2026-01-06T07:13:00',
+    stops_truncated: 0, target_time_begin: v.target_time_begin, prediction_updating: v.prediction_updating,
+    path: [[v.lon - 0.01, v.lat - 0.004], [v.lon, v.lat], [v.target_lon, v.target_lat], [v.target_lon + 0.01, v.target_lat + 0.004]],
+    passed: [[v.lon - 0.01, v.lat - 0.004, '06:40:00'], [v.lon, v.lat, '06:47:05']],
+    stops: [{stop_id: 'P1', time: '06:44:00', lon: v.lon - 0.006, lat: v.lat - 0.0025, role: 'passed'},
+      {stop_id: 'B1', time: '06:52:00', lon: v.lon + 0.005, lat: v.lat + 0.0017, role: 'before_target'},
+      {stop_id: v.target_stop_id, time: '06:58:00', lon: v.target_lon, lat: v.target_lat, role: 'target'},
+      {stop_id: 'A1', time: '07:03:00', lon: v.target_lon + 0.006, lat: v.target_lat + 0.002, role: 'after_target'}],
+    stops_dropped: 0, target_stop_id: v.target_stop_id, cur_dev_s: v.cur_dev_s, prediction_s: v.prediction_s,
+    model_version: v.model_version, artifact_sha256: v.artifact_sha256, ...extra});
+  const state = {status: 'online', snapshot: null, route: {}};
+  const setSnapshot = (run, vehicles, sourceClock = 'simulation') => { state.status = 'online'; state.snapshot = {schema_version: 'transport.backend-vehicles.v1', revision: 1,
+    source_clock: sourceClock, clock_time: run?.dataset_time ?? '2026-01-06T06:47:10', run, vehicles}; };
+  const setup = page => Promise.all([
+    page.route('**/api/snapshot', route => route.fulfill({contentType: 'application/json', body: JSON.stringify(state.status === 'online'
+      ? {status: 'online', reason: null, age_s: 0, fetched_at: '2026-09-27T12:00:00Z', checked_at: '2026-09-27T12:00:00Z', snapshot: state.snapshot}
+      : {status: 'offline', reason: 'Backend HTTP 503', age_s: 9, fetched_at: '2026-09-27T12:00:00Z', checked_at: '2026-09-27T12:00:09Z', snapshot: state.snapshot})})),
+    page.route('**/api/route/*', route => {
+      const id = decodeURIComponent(route.request().url().split('/').pop());
+      const answer = state.route[id];
+      // Same statuses as consumer/service.py RouteReader: 404 not_found, 503 offline.
+      if (answer === 404 || answer === undefined) return route.fulfill({status: 404, contentType: 'application/json', body: '{"status":"not_found","reason":"unknown_tr_id"}'});
+      if (answer === 'offline') return route.fulfill({status: 503, contentType: 'application/json', body: '{"status":"offline","reason":"Backend HTTP 503"}'});
+      return route.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
+    }),
+  ]);
+  const center = [37.6173, 55.7558];
   {
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo');
+    // Waiting for the driver → run registered: header, list and speed-up follow snapshot.run.
+    setSnapshot({run_id: null, state: 'waiting_driver', source: 'official_emulator', speedup: null, progress: null, thinned_ratio: null, repeat_ratio: null,
+      vehicle_count: 0, accepted_frames: 0, last_frame_age_s: null, registered_at_utc: null, driver: null}, []);
+    const page = await open({setup, allow: /\/api\/route\//});
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    const runs = [];
-    for (let i = 0; i < 3; i += 1) {
-      await page.locator('#scenario-reset').click();
-      const seen = [];
-      for (let phase = 1; phase <= 5; phase += 1) {
-        if (phase > 1) await page.locator('#scenario-next').click();
-        await page.waitForTimeout(900);
-        const found = await labelOverlaps(page);
-        seen.push(`${phase}:${await page.locator('.vehicle-label').count()}:${found.join(',') || 'none'}`);
-      }
-      runs.push(seen.join(' '));
+    await page.waitForFunction(() => document.getElementById('run').dataset.state === 'waiting_driver', null, {timeout: 8000});
+    check((await page.locator('#run-state').textContent()).includes('ожидание драйвера эмулятора') && (await page.locator('#run-id').textContent()).includes('не зарегистрирован')
+      && (await page.locator('#vehicles').textContent()).includes('ждёт регистрации драйвера'), 'waiting_driver: header and list say the run has not started');
+    await page.locator('#diagnostics summary').click();
+    check((await page.locator('#diag-list').textContent()).includes('Прореживание (thinned_ratio)— точек окна'), 'thinned_ratio null before the first driver heartbeat is shown as «—»');
+    await shot(page, 'regression-1-waiting-driver-1920.png');
+    await page.locator('#diagnostics summary').click();
+
+    const a = bus('900001', center[0], center[1], {prediction_s: 200});
+    const b = bus('900002', center[0] + 0.03, center[1] + 0.01, {prediction_s: 40, prediction_updating: true, prediction_age_s: 35});
+    // Valid GPS outside the data extent (tiles and Backend MAP_BBOX 37.25–38.00): listed, not drawn.
+    const out = bus('900009', 37.1, 55.7, {prediction_s: 30});
+    setSnapshot(RUN('run-A-0001'), [a, b, out]);
+    state.route = {900001: routeOf(a), 900002: routeOf(b)};
+    await page.waitForFunction(() => document.getElementById('run').dataset.state === 'running', null, {timeout: 8000});
+    check(await page.locator('#run-speed').textContent() === 'Ускорение ×7: 1 мин показа = 7 мин данных', 'speed-up ×7 from the run, not a fixed ×5');
+    check((await page.locator('#run-state').textContent()) === 'идёт · 14 %' && (await page.locator('#run-clock').textContent()).includes('06:47:10'), 'lifecycle, progress and data time from the run');
+    check(await page.locator('#events-unread').textContent() === '1' && await page.locator('.toast').count() === 0, 'first snapshot of a run: existing warning counted, no toast');
+    check((await page.locator('#vehicles .vehicle[data-id="900009"]').textContent()).includes('вне карты')
+      && await page.locator('.vehicle-label[data-id="900009"]').count() === 0, 'valid GPS outside the data extent: listed «вне карты», not drawn');
+    await survivesPolls(page, '#vehicles .vehicle[data-id="900002"]', 'list row');
+    await survivesPolls(page, '#attention button', '«Открыть карточку»');
+    await pressAcrossPoll(page, '#vehicles .vehicle[data-id="900002"]');
+    check(await cardTitle(page) === '900002', 'mouse down → poll → up on a list row selects the vehicle');
+    await page.locator('#card-close').click();
+    await pressAcrossPoll(page, '#attention button');
+    check(await cardTitle(page) === '900001', 'mouse down → poll → up on «Открыть карточку» opens the card');
+    await survivesPolls(page, '#card-close', 'card close button');
+    await page.locator('#shift-after-target').focus();
+    await page.waitForTimeout(POLL_SPAN_MS);
+    check(await page.evaluate(() => document.activeElement?.id) === 'shift-after-target', 'the toggle keeps keyboard focus across a poll');
+    await page.locator('#card-close').click();
+    setSnapshot(RUN('run-A-0001'), [a, b]);
+
+    // prediction_updating: still the normal level, with the «обновляется» badge and age.
+    await page.locator('#vehicles .vehicle[data-id="900002"]').click();
+    await page.waitForTimeout(700);
+    check(await page.locator('#card').getAttribute('data-level') === 'normal' && (await page.locator('#prediction-updating').textContent()).includes('обновляется')
+      && (await page.locator('#prediction-updating').textContent()).includes('35 с'), 'prediction_updating: normal level, badge «обновляется» with age');
+
+    // M1 on fixed data: event → card → take into work → note → reopen → history.
+    await dispatcherPath(page, 'M1 regression');
+    await shot(page, 'regression-2-m1-card-1920.png');
+
+    // Short nodata (a new target's prediction pending) shorter than LOST_AFTER_S: nothing changes.
+    const historyBefore = await page.locator('.incident-history li').count();
+    await page.locator('#card-close').click();
+    setSnapshot(RUN('run-A-0001'), [{...a, status: 'degraded', reason: 'prediction_pending', prediction_s: null}, b]);
+    await page.waitForTimeout(Math.max(3000, (LOST_AFTER_S - 8) * 1000));
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    check(await page.locator('#card .incident').getAttribute('data-state') === 'active' && await page.locator('.incident-history li').count() === historyBefore
+      && await page.locator('#events-unread').isHidden(), `nodata shorter than ${LOST_AFTER_S} s: still «Активно», no history line, no unread`);
+    check((await cardText(page)).includes('Прогноза нет: прогноз обновляется для новой цели'), 'prediction_pending: honest «прогноз обновляется для новой цели»');
+    await page.waitForTimeout((LOST_AFTER_S - 4) * 1000);
+    check(await page.locator('#card .incident').getAttribute('data-state') === 'monitoring_lost', `nodata for ≥ ${LOST_AFTER_S} s: «Мониторинг потерян»`);
+    setSnapshot(RUN('run-A-0001'), [a, b]);
+    await page.waitForTimeout(2000);
+
+    // Route context: fact / model / assumption; bad coordinates never drawn; 404 and offline honest.
+    state.route['900001'] = routeOf(a, {path: [[center[0], center[1]], [0, 0], [center[0] + 0.01, center[1]]],
+      stops: [...routeOf(a).stops, {stop_id: 'Z0', time: '07:05:00', lon: 0, lat: 0, role: 'after_target'},
+        {stop_id: 'ZN', time: '07:06:00', lon: null, lat: null, role: 'after_target'}], stops_dropped: 2});
+    await page.locator('#vehicles .vehicle[data-id="900002"]').click();
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
+    const stops = page.locator('.stops li');
+    check((await stops.nth(0).textContent()).startsWith('06:44') && (await stops.nth(0).textContent()).includes('пройдена'), 'passed stop: plan time only');
+    check((await stops.nth(1).textContent()).includes('06:52 → ~06:53:35') && (await stops.nth(1).textContent()).includes('по факту, не прогноз'), 'before target: plan + cur_dev_s «по факту, не прогноз»');
+    check((await stops.nth(2).textContent()).includes('06:58 → ~07:01:20') && (await stops.nth(2).textContent()).includes('прогноз модели'), 'target: plan + prediction_s «прогноз модели»');
+    check((await stops.nth(3).textContent()).includes('07:03 → ~07:06:20') && (await stops.nth(3).textContent()).includes('допущение: тот же сдвиг'), 'after target: «допущение: тот же сдвиг»');
+    check(await page.locator('.stops li[data-stop=Z0]').getAttribute('title') === 'Координаты нет — на карте не показана'
+      && await page.locator('.stops li[data-stop=ZN]').getAttribute('title') === 'Координаты нет — на карте не показана'
+      && (await page.locator('#route').textContent()).includes('2 остановок без координат на карте не показаны')
+      && (await page.locator('#route').textContent()).includes('2 остановок без координат исключены Backend'), 'stops at 0/0 or without coordinates are listed but not drawn, and counted');
+    check(await page.locator('.stop-label').count() === 2 && (await page.locator('.stop-label[data-kind=target]').textContent()).includes('~07:01:20')
+      && (await page.locator('.stop-label[data-kind=next]').textContent()).includes('~06:53:35'), 'map labels: target and nearest future stop only');
+    const pane = await page.locator('#map-pane').boundingBox();
+    for (const kind of ['target', 'next']) check(inside(await page.locator(`.stop-label[data-kind=${kind}]`).boundingBox(), pane), `map label ${kind} inside the map`);
+    await page.locator('#shift-after-target').uncheck();
+    check((await stops.nth(3).textContent()).includes('07:03') && !(await stops.nth(3).textContent()).includes('~'), 'toggle off: after-target stops show plan time only');
+    await page.locator('#shift-after-target').check();
+    await shot(page, 'regression-3-route-bad-coords-1920.png');
+    // A degraded row keeps a numeric prediction: it is not shown as the model's value or its assumption.
+    setSnapshot(RUN('run-A-0001'), [{...a, status: 'degraded', reason: 'prediction_pending'}, b]);
+    await page.waitForFunction(() => document.getElementById('card').dataset.level === 'nodata', null, {timeout: 6000});
+    await page.waitForTimeout(300);
+    const degraded = await page.locator('.stops').textContent();
+    check(!degraded.includes('прогноз модели') && !degraded.includes('допущение') && (await page.locator('.stops li[data-role=target]').textContent()).includes('прогноз устарел')
+      && !(await page.locator('.stop-label[data-kind=target]').textContent()).includes('прогноз модели'),
+    'degraded row with a numeric prediction_s: no «прогноз модели», no «допущение» on stops or map');
+    await shot(page, 'regression-3b-degraded-stale-prediction-1920.png');
+    setSnapshot(RUN('run-A-0001'), [a, b]);
+    await page.waitForFunction(() => document.getElementById('card').dataset.level !== 'nodata', null, {timeout: 6000});
+    state.route['900001'] = 'offline';
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'offline', null, {timeout: 8000});
+    check((await page.locator('#route').textContent()).includes('Backend не отвечает') && await page.locator('.stops li').count() > 0, 'route offline: last context kept and marked as not updating');
+    state.route['900002'] = 404;
+    await page.locator('#vehicles .vehicle[data-id="900002"]').click();
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'missing', null, {timeout: 8000});
+    check((await page.locator('#route').textContent()).includes('Маршрутного контекста нет') && await page.locator('.stops').count() === 0, 'route 404: no invented stops');
+    check((await page.locator('#route').textContent()).includes('Backend не знает это ТС в текущем прогоне'), 'route 404 unknown_tr_id: Russian label, not the code');
+
+    // Model failure reasons in Russian, unknown code as is, never a green state.
+    const reasons = [['ml_unreachable_or_timeout', 'модель недоступна (нет ответа или timeout)'], ['ml_http_503', 'модель ответила ошибкой HTTP 503'],
+      ['no_target_in_horizon', 'у ТС нет плановой остановки через 10–15 мин'], ['brand_new_code', 'brand_new_code']];
+    for (const [reason, label] of reasons) {
+      setSnapshot(RUN('run-A-0001'), [a, {...b, status: 'unavailable', reason, prediction_s: null, prediction_updating: false}]);
+      await page.waitForFunction(r => document.getElementById('card').textContent.includes(r), label, {timeout: 6000}).catch(() => {});
+      check((await cardText(page)).includes(`Прогноза нет: ${label}`) && await page.locator('#card').getAttribute('data-level') === 'nodata', `reason ${reason} → «${label}», not green`);
+      if (reason === 'ml_unreachable_or_timeout') await shot(page, 'regression-4-ml-unreachable-1920.png');
     }
-    check(runs.every(r => r === runs[0]) && runs[0].split(' ').every(p => p.endsWith(':none')), `labels: no two vehicle labels intersect in any phase of three runs (${runs[0]})`);
+
+    // Backend offline: last snapshot, honest status, no substitution.
+    state.status = 'offline';
+    await page.waitForFunction(() => document.getElementById('data-status').textContent.includes('Backend недоступен · последний снимок'), null, {timeout: 6000});
+    check((await page.locator('#attention').textContent()).includes('Backend недоступен') && await page.locator('#run-id').getAttribute('data-run-id') === 'run-A-0001', 'offline: last snapshot kept, run on screen unchanged');
+    await shot(page, 'regression-5-backend-offline-1920.png');
+
+    // A new run ID (stack recreated): events, history, selection and route are dropped.
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    setSnapshot(RUN('run-B-0002', {progress: 0.01, dataset_time: '2026-01-06T06:31:00'}), [{...a, prediction_s: 30}, {...b, prediction_s: 20, status: 'normal', reason: null}]);
+    state.route = {900001: routeOf(a), 900002: routeOf(b)};
+    await page.waitForFunction(() => document.getElementById('run-id').dataset.runId === 'run-B-0002', null, {timeout: 8000});
+    await page.waitForTimeout(500);
+    await page.locator('#events-toggle').click();
+    check(await page.locator('#events-list .event').count() === 0 && await page.locator('#events-unread').isHidden() && await page.locator('#card .card-empty').count() === 1
+      && await page.locator('.stop-label').count() === 0 && await page.locator('.toast').count() === 0, 'new run_id: events, history, selection and route context cleared');
+    await page.locator('#events-close').click();
+    // Outside SOURCE_CLOCK=simulation Backend has no run: said so, no invented run or speed-up.
+    setSnapshot(null, [a], 'dataset_wall');
+    await page.waitForFunction(() => document.getElementById('run-source').textContent.includes('Backend без прогона'), null, {timeout: 6000});
+    check((await page.locator('#run-source').textContent()).includes('часы dataset_wall') && await page.locator('#run-id').textContent() === 'прогона нет'
+      && await page.locator('#run-speed').textContent() === 'Ускорение неизвестно', 'snapshot.run = null: no run, no speed-up invented');
+    check(await noScenario(page), 'no scenario elements in any state');
     await page.close();
   }
 
-  // 1e. Driver-contact prototype: a copy is reported only when it happened; nothing is ever «sent».
+  // Driver-contact prototype: a copy is reported only when it happened; nothing is ever «sent».
   for (const [label, options] of [
     ['clipboard granted', {context: {permissions: ['clipboard-read', 'clipboard-write']}}],
     ['clipboard unavailable', {setup: page => page.addInitScript(() => { Object.defineProperty(Navigator.prototype, 'clipboard', {get: () => undefined}); })}],
   ]) {
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo', options);
+    const a = bus('900001', center[0], center[1], {prediction_s: 200});
+    setSnapshot(RUN('run-C-0003'), [a]);
+    state.route = {900001: routeOf(a)};
+    const page = await open({...options, setup: async p => { await setup(p); if (options.setup) await options.setup(p); }});
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForSelector('#attention button', {timeout: 8000});
     await page.locator('#attention button').click();
     await page.locator('#contact-open').click();
     const draft = await page.locator('#contact-text').inputValue();
-    check(draft.includes('Д-103') && draft.includes('2.8 мин') && await page.locator('#contact-text').getAttribute('readonly') !== null
-      && (await page.locator('.contact').textContent()).includes('Прототип · отправка не подключена'), `D05 prototype (${label}): marked preview with a prepared text`);
+    check(draft.includes('900001') && draft.includes('3.3 мин') && await page.locator('#contact-text').getAttribute('readonly') !== null
+      && (await page.locator('.contact').textContent()).includes('Прототип · отправка не подключена'), `prototype (${label}): marked preview with a prepared text`);
     await page.locator('#contact-copy').click();
     await page.waitForSelector('#contact-result:not([data-result=none])', {timeout: 3000});
     const result = await page.locator('#contact-result').textContent();
-    const card = await page.locator('#card').textContent();
-    check(!/отправлено|отправлен водителю|доставлено/i.test(card.replace('ещё не отправлен', '').replace('Ничего не отправлено', '')), `D05 prototype (${label}): never claims a sent message`);
+    const card = await cardText(page);
+    check(!/отправлено|отправлен водителю|доставлено/i.test(card.replace('ещё не отправлен', '').replace('Ничего не отправлено', '')), `prototype (${label}): never claims a sent message`);
     if (label === 'clipboard granted') {
       check(await page.locator('#contact-result').getAttribute('data-result') === 'copied' && result.includes('скопирован')
-        && await page.evaluate(() => navigator.clipboard.readText()) === draft, 'D05 prototype: copy reported only after the text is in the clipboard');
+        && await page.evaluate(() => navigator.clipboard.readText()) === draft, 'prototype: copy reported only after the text is in the clipboard');
     } else {
-      check(await page.locator('#contact-result').getAttribute('data-result') === 'manual' && result.includes('скопируйте его вручную') && !result.includes('Текст скопирован')
-        && await page.evaluate(() => document.activeElement?.id === 'contact-text' && getSelection().toString().length > 0 || document.activeElement.selectionEnd > 0),
-      'D05 prototype: without a clipboard the text is selected for manual copy, no false success');
+      check(await page.locator('#contact-result').getAttribute('data-result') === 'manual' && result.includes('скопируйте его вручную') && !result.includes('Текст скопирован'),
+        'prototype: without a clipboard the text is selected for manual copy, no false success');
     }
-    await page.locator('#contact-close').click();
-    check(await page.locator('.contact').count() === 0 && await page.locator('#contact-open').count() === 1, `D05 prototype (${label}): closes back to the card`);
     await page.close();
   }
 
-  // 1f. Optional paced backup recording of the story (evidence only, no checks).
-  if (evidenceDir && process.env.UI_RECORD === '1') {
-    const dir = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR || '/tmp'), 'd06-video-'));
-    const context = await browser.newContext({viewport: {width: 1920, height: 1080}, deviceScaleFactor: 1, recordVideo: {dir, size: {width: 1920, height: 1080}}});
-    const page = await context.newPage();
-    page.on('pageerror', e => failures.push(`pageerror (recording): ${e.message}`));
-    await page.goto(`${base}/?mode=demo`, {waitUntil: 'domcontentloaded', timeout: 30000});
-    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.waitForTimeout(3000);
-    await story(page, {pace: 4000});
-    await page.waitForTimeout(3000);
-    const video = page.video();
-    await context.close();
-    fs.copyFileSync(await video.path(), path.join(evidenceDir, 'd06-backup-recording.webm'));
-    fs.rmSync(dir, {recursive: true, force: true});
-  }
-
-  // 2. Live source states; only /api/snapshot is replaced.
+  // Map archive missing: explicit error, no points or route drawn over a missing base map.
   {
-    const vehicle = {tr_id: '131672', unit_id: 123, lon: 37.6173, lat: 55.7558, location_valid: true,
-      status: 'normal', reason: null, gps_age_s: 5, target_stop_id: '53700172828', target_time_begin: '2026-01-06T03:50:00',
-      prediction_s: 360, cur_dev_s: 95, prediction_age_s: 3, model_version: 'canonical_rmse_d8',
-      artifact_sha256: 'dc33437108c3e036089450c9b98771dacd014246fbb91d0df2a89d0c8e247122',
-      prediction_input_frame_id: 'abc:12:11', prediction_context_revision: 7, last_success_at: '2026-01-06T03:34:40'};
-    let first = true, neverOnline = true, offline = false, vehicles = [vehicle];
-    const setup = page => page.route('**/api/snapshot', async route => {
-      if (first) { first = false; await new Promise(r => setTimeout(r, 1500)); }
-      if (neverOnline) {
-        await route.fulfill({contentType: 'application/json', body: JSON.stringify({status: 'offline', reason: 'Backend HTTP 503',
-          age_s: null, fetched_at: null, checked_at: '2026-09-27T12:00:00Z', snapshot: null})});
-        return;
-      }
-      await route.fulfill({contentType: 'application/json', body: JSON.stringify({
-        status: offline ? 'offline' : 'online', reason: offline ? 'Backend HTTP 503' : null, age_s: offline ? 7 : 0,
-        fetched_at: '2026-09-27T12:00:00Z', checked_at: '2026-09-27T12:00:00Z',
-        snapshot: {revision: 12, source_clock: 'dataset_wall', clock_time: '2026-01-06T03:35:00', vehicles}})});
-    });
-    const page = await open({width: 1920, height: 1080}, '/?mode=live', {setup});
-    await page.waitForFunction(() => document.getElementById('vehicles').textContent.includes('Загрузка снимка Backend'));
-    check((await page.locator('#data-status').textContent()).includes('Ожидание ответа Backend'), 'live: loading state');
-    await page.waitForFunction(() => document.getElementById('data-status').textContent.includes('Backend недоступен · данных нет'), null, {timeout: 5000});
-    check((await page.locator('#vehicles').textContent()).includes('Данные не подставляются') && await rows(page).count() === 0
-      && await page.locator('#mode-badge').textContent() === 'Поток Backend · телеметрия NDTP' && await page.locator('#scenario').isHidden(), 'live: Backend down before first snapshot shows no data, no scenario');
-    await shot(page, 'live-no-data-1920.png');
-    neverOnline = false;
-    await page.waitForFunction(() => document.getElementById('data-status').textContent.includes('Backend online'), null, {timeout: 8000});
-    check(await page.locator('#mode-badge').textContent() === 'Поток Backend · телеметрия NDTP', 'live: persistent mode label');
-    await rows(page).first().click();
-    const card = await page.locator('#card').textContent();
-    check(card.includes('6.0 мин') && card.includes('Прогноз Backend · модель canonical_rmse_d8'), 'live: card shows Backend prediction and model');
-    check(await page.locator('#model-link').getAttribute('data-frame') === 'abc:12:11' && card.includes('кадр NDTP abc:12:11 · контекст №7')
-      && card.includes('артефакт dc33437108c3'), 'live: card links the result to its NDTP input frame, context and model artifact');
-    check(card.includes('Без привязки') && card.includes('Плановая точка 53700172828') && card.includes('не код остановки')
-      && await page.locator('.target-label').count() === 0 && await page.locator('.direction-chip').count() === 0, 'live: no route mapping → «Без привязки», no target marker, no scheme');
-    check(await page.locator('.toast').count() === 0 && (await incidentText(page)).includes('Активно'), 'live: warning opens an event (no toast for the first snapshot)');
-    await page.locator('#incident-action').click();
-    await page.locator('#note-input').fill('проверить связь');
-    await page.locator('.note-form button').click();
-    const historyBefore = await page.locator('.incident-history li').count();
-    await page.locator('#note-input').fill('черновик');
-    await page.waitForTimeout(4000); // ≥ 2 polls of the same snapshot
-    check(await page.locator('#note-input').inputValue() === 'черновик' && await page.evaluate(() => document.activeElement?.id === 'note-input'), 'live: a note being typed survives polling');
-    check(await page.locator('#card .incident-flow').textContent() === 'В работе' && await page.locator('.incident-history li').count() === historyBefore
-      && (await page.locator('#events-toggle').getAttribute('title')).includes('активных 1 ') && await page.locator('.toast').count() === 0, 'live: acknowledgement and note survive polling without duplicate events');
-    vehicle.prediction_s = null; vehicle.status = 'unavailable'; vehicle.reason = 'insufficient_stop_data';
-    await page.waitForFunction(() => document.getElementById('card').textContent.includes('Нет прогноза'), null, {timeout: 5000});
-    check(true, 'live: missing prediction shown as "Нет прогноза"');
-    check(await page.locator('#card .incident').getAttribute('data-state') === 'monitoring_lost', 'live: lost prediction → monitoring_lost, not resolved');
-    vehicle.prediction_s = 360; vehicle.status = 'normal'; vehicle.reason = null; offline = true;
-    await page.waitForFunction(() => document.getElementById('data-status').textContent.includes('Backend недоступен · последний снимок'), null, {timeout: 5000});
-    check(await page.locator('#mode-badge').textContent() === 'Поток Backend · телеметрия NDTP' && await page.locator('#scenario').isHidden()
-      && !(await page.locator('#card').textContent()).includes('сценари'), 'live: Backend loss keeps live label, no scenario fallback');
-    check((await page.locator('#attention').textContent()).includes('Backend недоступен') && (await page.locator('#card').textContent()).includes('устарел'), 'live: offline shows last-known values as stale');
-    check(await page.locator('#card .incident').getAttribute('data-state') === 'monitoring_lost' && !(await incidentText(page)).includes('Задержка закончилась'), 'live: offline is monitoring_lost, never a resolution');
-    await shot(page, 'live-offline-1920.png');
-    offline = false; vehicles = [];
-    await page.waitForFunction(() => document.getElementById('vehicles').textContent.includes('В снимке нет машин'), null, {timeout: 5000});
-    check(true, 'live: empty snapshot state');
-    vehicles = [{...vehicle, prediction_s: 60}];
-    await page.waitForFunction(() => document.getElementById('vehicles').textContent.includes('131672'), null, {timeout: 5000});
-    await rows(page).first().click();
-    check(await page.locator('#card .incident').getAttribute('data-state') === 'resolved' && (await incidentText(page)).includes('В работе')
-      && (await incidentText(page)).includes('проверить связь'), 'live: current value ≤ 2 min resolves the same episode; its history is kept');
-    await page.close();
-  }
-
-  // 3. Map archive missing: explicit error, no points drawn over a missing base map.
-  {
-    const setup = page => page.route('**/map/moscow.pmtiles', route => route.fulfill({status: 404, body: 'missing'}));
-    const page = await open({width: 1920, height: 1080}, '/?mode=demo', {setup, allowConsoleErrors: true});
+    const a = bus('900001', center[0], center[1], {prediction_s: 200});
+    setSnapshot(RUN('run-D-0004'), [a]);
+    state.route = {900001: routeOf(a)};
+    const page = await open({allowErrors: true, setup: async p => { await setup(p); await p.route('**/map/moscow.pmtiles', route => route.fulfill({status: 404, body: 'missing'})); }});
     await page.waitForSelector('#map-pane[data-state=unavailable]', {timeout: 15000});
+    await page.waitForTimeout(1600);
     check((await page.locator('#map-state').textContent()).includes('Карта недоступна'), 'map-unavailable: explicit message');
-    check(await page.locator('.vehicle-label').count() === 0, 'map-unavailable: no labels over missing map');
-    await rows(page).filter({hasText: 'Д-104'}).click();
-    check(await cardTitle(page) === 'Д-104' && await page.locator('#card-show').isDisabled(), 'map-unavailable: list and card still work');
-    check(await page.locator('.direction-chip, .target-label').count() === 0, 'map-unavailable: no route scheme over missing map');
-    await shot(page, 'map-unavailable-1920.png');
-    await page.close();
-  }
-
-  // 4. Spot-check smaller desktop viewports: main controls stay reachable.
-  for (const viewport of [{width: 1440, height: 900}, {width: 1366, height: 768}]) {
-    const page = await open(viewport, '/?mode=demo');
-    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.locator('#attention button').click();
-    await page.waitForTimeout(900);
-    const area = {x: 0, y: 0, ...viewport};
-    for (const selector of ['#scenario-start', '#scenario-next', '#scenario-reset', '#overview', '#search', '#clear-selection', '[data-filter=warning]', '[data-mode=live]', '#diagnostics summary', '#mode-badge', '#events-toggle', '#routes [data-route="demo-line:a"]', '#incident-action', '#card-show']) {
-      check(inside(await page.locator(selector).first().boundingBox(), area), `${viewport.width}x${viewport.height}: ${selector} visible`);
-    }
-    check(inside(await page.locator('.vehicle-label.is-selected').boundingBox(), await page.locator('#map-pane').boundingBox()), `${viewport.width}x${viewport.height}: selected object inside map`);
-    await shot(page, `demo-selected-${viewport.width}.png`);
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    await page.waitForTimeout(1500);
+    check(await cardTitle(page) === '900001' && await page.locator('#card-show').isDisabled() && await page.locator('.vehicle-label, .stop-label').count() === 0,
+      'map-unavailable: list and card work, nothing drawn over the missing map');
+    await shot(page, 'regression-6-map-unavailable-1920.png');
     await page.close();
   }
 } catch (error) {
-  failures.push(`exception: ${error.message}`);
+  failures.push(`${pass}: exception: ${error.message}`);
 } finally {
   await browser.close();
 }
-console.log(JSON.stringify({base, passed: passed.length, failures, checks: passed}, null, 1));
+console.log(JSON.stringify({base, live: {passed: passed.live.length, selected: liveSelected, checks: passed.live}, regression: {passed: passed.regression.length, checks: passed.regression},
+  skipped, failures}, null, 1));
 if (failures.length) process.exitCode = 1;

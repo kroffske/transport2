@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {UNMAPPED, acknowledge, addNote, assess, countByFilter, countByRoute, createIncidentStore, groupKey, incidentCounts,
-  incidentForVehicle, markRead, newWarningIds, normalizeNote, observeSnapshot, orderedIncidents, reopen, routeKeyOf,
+import {LOST_AFTER_S, acknowledge, addNote, assess, countByFilter, createIncidentStore, incidentCounts,
+  incidentForVehicle, markRead, normalizeNote, observeSnapshot, orderedIncidents, reopen,
   visibleRows} from './incidents.js';
 
 const bus = (tr_id, prediction_s, status = 'normal') => ({tr_id, prediction_s, status});
@@ -37,41 +37,17 @@ test('visible rows are filtered, searched by displayed ID and sorted by urgency'
   assert.deepEqual(visibleRows(rows, {query: 'нет такого', fresh: true}), []);
 });
 
-test('a new warning is one that was not a warning in the previous rows', () => {
-  const before = [bus('1', 200), bus('2', 60), bus('3', null)];
-  const after = [bus('1', 250), bus('2', 400), bus('3', 150)];
-  assert.deepEqual([...newWarningIds(before, after)].sort(), ['2', '3']);
-  assert.deepEqual([...newWarningIds(after, after)], []);
-  assert.deepEqual([...newWarningIds(after, [bus('2', 90)])], []);
-});
-
-// ---- Route keys and incidents ----------------------------------------------------------------
-
-const onRoute = (tr_id, prediction_s, direction_id, status = 'normal') =>
-  ({tr_id, prediction_s, status, route_id: 'demo-line', direction_id, route_label: `Демо-линия · ${direction_id}`});
-
-test('the route key always includes the direction; rows without both stay unmapped', () => {
-  assert.equal(routeKeyOf(onRoute('1', 0, 'a')), 'demo-line:a');
-  assert.notEqual(routeKeyOf(onRoute('1', 0, 'a')), routeKeyOf(onRoute('2', 0, 'b')));
-  assert.equal(routeKeyOf({tr_id: '1', route_id: 'demo-line'}), null);
-  assert.equal(routeKeyOf({tr_id: '1', direction_id: 'a'}), null);
-  assert.equal(routeKeyOf(bus('1', 0)), null);
-  assert.equal(groupKey('live', bus('7', 0)), 'live|unmapped:7');
-  assert.deepEqual(countByRoute([onRoute('1', 0, 'b'), bus('9', 0), onRoute('2', 0, 'a'), onRoute('3', 0, 'a')]),
-    [['demo-line:a', 2], ['demo-line:b', 1], [UNMAPPED, 1]]);
-  assert.deepEqual(visibleRows([onRoute('1', 0, 'a'), onRoute('2', 0, 'b'), bus('3', 0)], {route: 'demo-line:b', fresh: true}).map(r => r.vehicle.tr_id), ['2']);
-  assert.deepEqual(visibleRows([onRoute('1', 0, 'a'), bus('3', 0)], {route: UNMAPPED, fresh: true}).map(r => r.vehicle.tr_id), ['3']);
-});
+// ---- Incidents: one episode per vehicle ------------------------------------------------------
 
 test('normal → >120 → repeated snapshot → ≤120 is one episode ending in a resolution', () => {
-  const store = createIncidentStore('demo');
-  assert.deepEqual(observeSnapshot(store, [onRoute('1', 60, 'a')], {fresh: true, clock: 't0'}), []);
-  const opened = observeSnapshot(store, [onRoute('1', 200, 'a')], {fresh: true, clock: 't1'});
+  const store = createIncidentStore('run-1');
+  assert.deepEqual(observeSnapshot(store, [bus('1', 60)], {fresh: true, clock: 't0', wallS: 0}), []);
+  const opened = observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't1', wallS: 20});
   assert.equal(opened.length, 1);
-  for (let i = 0; i < 5; i += 1) assert.deepEqual(observeSnapshot(store, [onRoute('1', 200, 'a')], {fresh: true, clock: 't1'}), []);
+  for (let i = 0; i < 5; i += 1) assert.deepEqual(observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't1', wallS: 20}), []);
   assert.equal(store.incidents.length, 1);
   assert.equal(store.incidents[0].history.length, 1, 'repeated polling adds no history');
-  observeSnapshot(store, [onRoute('1', 100, 'a')], {fresh: true, clock: 't2'});
+  observeSnapshot(store, [bus('1', 100)], {fresh: true, clock: 't2', wallS: 40});
   const [incident] = store.incidents;
   assert.equal(incident.id, opened[0]);
   assert.equal(incident.state, 'resolved');
@@ -79,56 +55,54 @@ test('normal → >120 → repeated snapshot → ≤120 is one episode ending in 
   assert.equal(incident.peak_s, 200);
   assert.match(incident.history.at(-1).text, /Задержка закончилась/);
   // A new warning after the resolution is a new episode with a new ID.
-  const again = observeSnapshot(store, [onRoute('1', 250, 'a')], {fresh: true, clock: 't3'});
+  const again = observeSnapshot(store, [bus('1', 250)], {fresh: true, clock: 't3', wallS: 60});
   assert.equal(again.length, 1);
   assert.notEqual(again[0], incident.id);
   assert.equal(store.incidents.length, 2);
 });
 
-test('two objects of one direction share an episode; the opposite direction is separate', () => {
-  const store = createIncidentStore('demo');
-  observeSnapshot(store, [onRoute('1', 200, 'a')], {fresh: true, clock: 't0'});
-  const opened = observeSnapshot(store, [onRoute('1', 200, 'a'), onRoute('2', 400, 'a'), onRoute('3', 150, 'b')], {fresh: true, clock: 't1'});
-  assert.equal(opened.length, 1, 'only the opposite direction opens a new episode');
-  const [a, b] = store.incidents;
-  assert.deepEqual(a.members.map(m => m.tr_id), ['1', '2']);
-  assert.equal(a.route_key, 'demo-line:a');
-  assert.deepEqual(b.members.map(m => m.tr_id), ['3']);
-  assert.equal(b.route_key, 'demo-line:b');
-  assert.equal(b.id, opened[0]);
-  // Unmapped objects are never grouped together.
-  const live = createIncidentStore('live');
-  assert.equal(observeSnapshot(live, [bus('x', 200), bus('y', 300)], {fresh: true, clock: 't'}).length, 2);
-  assert.equal(orderedIncidents(store)[0].id, b.id, 'newest open episode first');
+test('each vehicle is its own episode; there is no grouping by route or direction', () => {
+  const store = createIncidentStore('run-1');
+  observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't0', wallS: 0});
+  // Fields a scenario once used for grouping are ignored.
+  const opened = observeSnapshot(store, [bus('1', 200), {...bus('2', 400), route_id: 'x', direction_id: 'a'}, {...bus('3', 150), route_id: 'x', direction_id: 'a'}],
+    {fresh: true, clock: 't1', wallS: 20});
+  assert.equal(opened.length, 2, 'vehicles 2 and 3 open their own episodes');
+  assert.deepEqual(store.incidents.map(i => i.tr_id), ['1', '2', '3']);
+  assert.equal(new Set(store.incidents.map(i => i.id)).size, 3);
+  assert.equal(orderedIncidents(store)[0].tr_id, '3', 'newest open episode first');
+  assert.equal(incidentForVehicle(store, '2').id, opened[0]);
 });
 
-test('lost data or an offline source is monitoring_lost, never a resolution', () => {
-  const store = createIncidentStore('live');
-  observeSnapshot(store, [onRoute('1', 200, 'a')], {fresh: true, clock: 't0'});
-  observeSnapshot(store, [onRoute('1', 200, 'a')], {fresh: false, clock: 't0'});
+test('data lost for LOST_AFTER_S or an offline source is monitoring_lost, never a resolution', () => {
+  const store = createIncidentStore('run-1');
+  observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't0', wallS: 0});
+  observeSnapshot(store, [bus('1', 200)], {fresh: false, clock: 't0', wallS: 1});
   const [incident] = store.incidents;
+  assert.equal(incident.state, 'active', 'offline for 0 s is not yet a loss');
+  observeSnapshot(store, [bus('1', 200)], {fresh: false, clock: 't0', wallS: 1 + LOST_AFTER_S});
   assert.equal(incident.state, 'monitoring_lost');
-  observeSnapshot(store, [onRoute('1', 200, 'a', 'degraded')], {fresh: true, clock: 't1'});
-  observeSnapshot(store, [], {fresh: true, clock: 't1'});
+  observeSnapshot(store, [bus('1', 200, 'degraded')], {fresh: true, clock: 't1', wallS: 20});
+  observeSnapshot(store, [], {fresh: true, clock: 't1', wallS: 20});
   assert.equal(incident.state, 'monitoring_lost');
   assert.equal(incident.history.filter(h => /Мониторинг потерян/.test(h.text)).length, 1, 'logged once');
-  observeSnapshot(store, [onRoute('1', 220, 'a')], {fresh: true, clock: 't2'});
+  observeSnapshot(store, [bus('1', 220)], {fresh: true, clock: 't2', wallS: 40});
   assert.equal(incident.state, 'active', 'same episode continues');
   assert.equal(store.incidents.length, 1);
-  observeSnapshot(store, [onRoute('1', 60, 'a')], {fresh: true, clock: 't3'});
+  observeSnapshot(store, [bus('1', 60)], {fresh: true, clock: 't3', wallS: 60});
   assert.equal(incident.state, 'resolved');
   assert.deepEqual(incidentCounts(store), {active: 0, monitoring_lost: 0, resolved: 1, unread: 1});
 });
 
 test('acknowledge/reopen and notes live on the incident ID and survive polling', () => {
-  const store = createIncidentStore('live');
-  const [id] = observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't0'});
+  const store = createIncidentStore('run-1');
+  const [id] = observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't0', wallS: 0});
   assert.equal(incidentCounts(store).unread, 1);
   assert.equal(acknowledge(store, id, 't1'), true);
   assert.equal(acknowledge(store, id, 't1'), false, 'no duplicate action');
   assert.equal(addNote(store, id, '  <img src=x onerror="alert(1)">\n  позвонить  ', 't1'), true);
   assert.equal(addNote(store, id, '   ', 't1'), false, 'empty note rejected');
-  for (let i = 0; i < 3; i += 1) observeSnapshot(store, [bus('1', 210)], {fresh: true, clock: 't2'});
+  for (let i = 0; i < 3; i += 1) observeSnapshot(store, [bus('1', 210)], {fresh: true, clock: 't2', wallS: 40});
   const incident = incidentForVehicle(store, '1');
   assert.equal(incident.id, id);
   assert.equal(incident.workflow, 'in_work');
@@ -137,10 +111,49 @@ test('acknowledge/reopen and notes live on the incident ID and survive polling',
   assert.equal(reopen(store, id, 't3'), true);
   assert.equal(incident.workflow, 'new');
   assert.deepEqual(incident.history.map(h => h.kind), ['lifecycle', 'action', 'note', 'action']);
-  observeSnapshot(store, [bus('1', 30)], {fresh: true, clock: 't4'});
+  observeSnapshot(store, [bus('1', 30)], {fresh: true, clock: 't4', wallS: 80});
   assert.equal(acknowledge(store, id, 't4'), false, 'an ended delay cannot be taken into work');
   assert.equal(markRead(store, id).unread, false);
   assert.equal(normalizeNote('x'.repeat(500)).length, 280);
   // A new store (reset or mode change) carries nothing over.
-  assert.deepEqual(createIncidentStore('live').incidents, []);
+  assert.deepEqual(createIncidentStore('run-1').incidents, []);
+});
+
+// PR-019: the live stream changes target about every 12 s of wall time at ×5; the new target's
+// prediction is `pending` (no data) for a few seconds. That gap is neither a loss nor an end.
+test('a nodata gap shorter than LOST_AFTER_S is neither monitoring_lost nor resolved, and leaves no trace', () => {
+  const store = createIncidentStore('run-1');
+  const [id] = observeSnapshot(store, [bus('1', 200)], {fresh: true, clock: 't0', wallS: 100});
+  markRead(store, id);
+  const incident = incidentForVehicle(store, '1');
+  const history = incident.history.length;
+  const pending = {tr_id: '1', prediction_s: null, status: 'degraded', reason: 'prediction_pending'};
+  for (const wallS of [101.5, 103, 110, 100 + LOST_AFTER_S - 0.5]) {
+    observeSnapshot(store, [pending], {fresh: true, clock: 't1', wallS});
+    assert.equal(incident.state, 'active', `still active at +${wallS - 100} s`);
+  }
+  // Row missing from one snapshot, then the new target's prediction arrives: still one quiet episode.
+  observeSnapshot(store, [], {fresh: true, clock: 't1', wallS: 100 + LOST_AFTER_S - 0.2});
+  observeSnapshot(store, [bus('1', 180)], {fresh: true, clock: 't2', wallS: 100 + LOST_AFTER_S + 1});
+  assert.equal(incident.state, 'active');
+  assert.equal(incident.history.length, history, 'no history line for a short gap');
+  assert.equal(incident.unread, false, 'no unread mark for a short gap');
+  assert.equal(store.incidents.length, 1);
+  // A later short gap does not resolve the episode either.
+  observeSnapshot(store, [pending], {fresh: true, clock: 't3', wallS: 200});
+  observeSnapshot(store, [pending], {fresh: true, clock: 't3', wallS: 200 + LOST_AFTER_S - 1});
+  assert.equal(incident.state, 'active', 'a gap is not a resolution');
+  // The gap timer restarts after data returned: a second short gap is still short.
+  observeSnapshot(store, [bus('1', 190)], {fresh: true, clock: 't4', wallS: 220});
+  observeSnapshot(store, [pending], {fresh: true, clock: 't4', wallS: 221});
+  observeSnapshot(store, [pending], {fresh: true, clock: 't4', wallS: 221 + LOST_AFTER_S - 1});
+  assert.equal(incident.state, 'active');
+  // A continuous gap of LOST_AFTER_S is a loss, logged once.
+  observeSnapshot(store, [pending], {fresh: true, clock: 't5', wallS: 221 + LOST_AFTER_S});
+  assert.equal(incident.state, 'monitoring_lost');
+  assert.equal(incident.history.length, history + 1);
+});
+
+test('observeSnapshot requires the wall time', () => {
+  assert.throws(() => observeSnapshot(createIncidentStore('run-1'), [], {fresh: true, clock: 't0'}), /wallS/);
 });
