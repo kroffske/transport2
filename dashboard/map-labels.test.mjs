@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DOT_RADIUS, LABEL_GAP, LABEL_MARGIN, labelOffset, placeLabels} from './map-labels.js';
+import {DOT_RADIUS, LABEL_GAP, LABEL_MARGIN, labelOffset, nextLabelText, placeLabels, targetLabelText, vehicleLabelText} from './map-labels.js';
 
 const W = 103.3671875, H = 26; // a «Д-10x · 0.7 мин» label as measured in the browser at 1920×1080
 const label = (id, x, y, extra = {}) => ({id, x, y, width: W, height: H, ...extra});
@@ -92,4 +92,31 @@ test('priority places a label before others of lower priority; the selected labe
   const withSelected = placeLabels([...rows, label('S', 500 - W / 2, 400, {selected: true})]);
   assertNoOverlap(withSelected);
   assert.equal(withSelected.get('S').placement, 'top', 'the selected label is placed before any priority');
+});
+
+// ---- Label texts (C5) ----
+const MINUS = String.fromCharCode(0x2212);
+
+test('vehicle label: «опозд. +м:сс», never rounded to whole minutes; on time and no forecast said plainly', () => {
+  assert.equal(vehicleLabelText('134040', {level: 'warning', prediction_s: 200}), '134040 · опозд. +3:20');
+  assert.equal(vehicleLabelText('133300', {level: 'normal', prediction_s: 109}), '133300 · опозд. +1:49', '1:49 is not «+2 мин» (P2-2)');
+  assert.equal(vehicleLabelText('135081', {level: 'normal', prediction_s: -86.3}), `135081 · опереж. ${MINUS}1:26`);
+  assert.equal(vehicleLabelText('1', {level: 'normal', prediction_s: 12}), '1 · по графику');
+  assert.equal(vehicleLabelText('2', {level: 'nodata', prediction_s: 400}), '2', 'a stale value is not on the map');
+  assert.equal(vehicleLabelText('3', {level: 'severe', prediction_s: 725}), '3 · опозд. +12:05');
+});
+
+test('target label: «ЦЕЛЬ · ост. N · план → ожидается · +м:сс»; stale or missing values never shown as current', () => {
+  assert.equal(targetLabelText({no: 12, plan: '08:42', expected: '08:45', delay: 200}), 'ЦЕЛЬ · ост. 12 · 08:42 → 08:45 · +3:20');
+  assert.equal(targetLabelText({plan: '08:42', expected: '08:45', delay: 200}), 'ЦЕЛЬ · 08:42 → 08:45 · +3:20', 'route not loaded: no number');
+  assert.equal(targetLabelText({no: 12, plan: '08:42', expected: null, delay: 200, stale: true}), 'ЦЕЛЬ · ост. 12 · 08:42 · прогноз устарел');
+  assert.equal(targetLabelText({no: 12, plan: '08:42'}), 'ЦЕЛЬ · ост. 12 · 08:42 · прогноза нет');
+  assert.equal(targetLabelText({no: 9, plan: '08:41', late: true}), 'ЦЕЛЬ · ост. 9 · 08:41 · прогноза не будет');
+  assert.equal(targetLabelText({no: 12, plan: '08:42', expected: '08:42', delay: 10}), 'ЦЕЛЬ · ост. 12 · 08:42 → 08:42 · по графику');
+  assert.equal(targetLabelText({no: 12, plan: '08:42', expected: '08:45', delay: 180, held: true}), 'ПРОШЛАЯ ЦЕЛЬ · ост. 12 · 08:42 → 08:45 · +3:00');
+});
+
+test('next stop label: «след. ост. N · план → по факту»', () => {
+  assert.equal(nextLabelText({no: 5, plan: '08:32', expected: '08:33'}), 'след. ост. 5 · 08:32 → 08:33 · по факту');
+  assert.equal(nextLabelText({no: 5, plan: '08:32', expected: null}), 'след. ост. 5 · 08:32');
 });

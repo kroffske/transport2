@@ -74,3 +74,32 @@ export function placeLabels(labels, {obstacles = [], area = null} = {}) {
   }
   return result;
 }
+
+// ---- Label texts (UX spec C5) ----------------------------------------------------------------
+// One delay format with the card and the queue (route-context.js compactDelay): «+3:20», never
+// «+3 мин» rounded past the warning threshold. Stops have no names: «ост. N» is the position in
+// the route window, omitted while the route is not loaded.
+import {compactDelay} from './route-context.js';
+
+// «134040 · опозд. +3:20», «134040 · опереж. −1:26», «134040 · по графику»; without a current
+// forecast only the ID (the reason stays in the tooltip, the list and the card).
+export function vehicleLabelText(id, {level, prediction_s: seconds}) {
+  const value = level === 'nodata' ? null : compactDelay(seconds);
+  if (!value) return String(id);
+  if (value === 'по графику') return `${id} · по графику`;
+  return `${id} · ${Number(seconds) > 0 ? 'опозд.' : 'опереж.'} ${value}`;
+}
+
+// «ЦЕЛЬ · ост. 12 · 08:42 → 08:45 · +3:20». `delay` only when the model value is current; a held
+// forecast belongs to the previous target (drawn there) and says so; without a value the plan only.
+// `late`: the target is after the end of the run's data — no forecast will come.
+export function targetLabelText({no = null, plan, expected = null, delay = null, held = false, stale = false, late = false}) {
+  const value = expected ? compactDelay(delay) : null;
+  return [held ? 'ПРОШЛАЯ ЦЕЛЬ' : 'ЦЕЛЬ', no ? `ост. ${no}` : null, value ? `${plan ?? '?'} → ${expected}` : plan ?? '?',
+    value ?? (late ? 'прогноза не будет' : stale ? 'прогноз устарел' : 'прогноза нет')].filter(Boolean).join(' · ');
+}
+
+// «след. ост. 5 · 08:32 → 08:33 · по факту» (the current delay carried forward, not the model).
+export function nextLabelText({no, plan, expected = null}) {
+  return `след. ост. ${no} · ${plan ?? '?'}${expected ? ` → ${expected} · по факту` : ''}`;
+}

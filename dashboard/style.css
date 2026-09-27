@@ -175,6 +175,13 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .steps { margin: 12px 0 2px; padding: 10px 12px; border: 1px solid #efcf95; border-radius: 8px; background: #fffaf0; }
 .steps-head { display: flex; align-items: center; gap: 6px; }
 .steps-head b { margin-right: auto; }
+/* Collapsed card sections (C1): «▸ Шаги реакции 0/3», «▸ История события». */
+details.steps > summary, details.incident > summary { list-style: none; cursor: pointer; }
+details.steps > summary::-webkit-details-marker, details.incident > summary::-webkit-details-marker { display: none; }
+details.steps > summary b::before, details.incident > summary b::before { content: '▸ '; color: var(--muted); }
+details.steps[open] > summary b::before, details.incident[open] > summary b::before { content: '▾ '; }
+details.steps:not([open]), details.incident:not([open]) { padding-top: 7px; padding-bottom: 7px; }
+.incident-count { font-size: 12px; color: var(--muted); }
 .steps-head span { font-size: 12px; font-weight: 700; color: #7c4b00; }
 .step { display: grid; grid-template-columns: 18px 1fr; gap: 1px 8px; margin-top: 8px; cursor: pointer; }
 .step input { grid-row: 1 / span 2; margin: 2px 0 0; }
@@ -255,7 +262,36 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .card { flex: 1 1 0; min-height: 0; overflow: auto; padding: 0 16px 18px; border-top: 5px solid transparent; }
 /* Sticky top of the card (L-1): ID, level, the forecast and its target stay visible while scrolling. */
 .card-top { position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px 6px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.card-top .headline { margin: 6px 0 0; padding: 6px 10px; }
+/* Forecast block (C2–C3): target, plan, expected, the delay large, the fact and the age. `quiet`
+   states (stale, held, no forecast, …) keep every number grey — no alarm colour on old values. */
+.forecast { position: relative; margin: 8px 0 0; padding: 8px 10px; background: #f4f6f7; border-radius: 8px; }
+.forecast-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.forecast-head b { font-weight: 700; }
+.forecast-rows { display: grid; grid-template-columns: auto 1fr; gap: 0 12px; margin: 4px 0 0; font-size: 13px; }
+.card .forecast-rows dt { margin: 0; font-size: 13px; color: var(--muted); }
+.card .forecast-rows dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.forecast-big { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 12px; margin-top: 2px; }
+.forecast-big span { font-size: 13px; color: var(--muted); }
+.forecast-big strong { font-size: 26px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.forecast-big[data-size=medium] strong { font-size: 16px; line-height: 1.3; }
+.card[data-level=severe] .forecast[data-tone=live] .forecast-big strong { color: #9d2a1a; }
+.card[data-level=warning] .forecast[data-tone=live] .forecast-big strong { color: #7c4b00; }
+.card[data-level=normal] .forecast[data-tone=live] .forecast-big strong { color: #155c40; }
+.forecast[data-tone=quiet] .forecast-big strong { color: var(--nodata); }
+.forecast-line, .forecast-fact { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+.forecast-fact { color: var(--ink); }
+.forecast-line[data-kind=strong], .forecast-line[data-kind=updating] { font-size: 13px; color: var(--ink); font-weight: 600; }
+.forecast[data-tone=live] .forecast-line[data-kind=updating] { font-size: 12px; }
+.forecast-line.pulse { display: block; }
+.forecast-line.pulse::before { display: inline-block; margin: 0 6px 1px 0; vertical-align: middle; }
+.forecast-line[data-kind=muted] { color: #7a8791; }
+.forecast-line[data-kind=reason] { color: var(--ink); }
+/* «ⓘ» / «?» help: a click-to-open note over the card (keyboard and touch too, not only hover). */
+.help { display: inline-block; }
+.help summary { list-style: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border: 1px solid #b7c1c8; border-radius: 50%; font-size: 11px; font-weight: 700; color: var(--muted); cursor: pointer; background: #fff; }
+.help summary::-webkit-details-marker { display: none; }
+.help[open] summary { border-color: var(--focus); color: var(--focus); }
+.help p { position: absolute; z-index: 4; left: 8px; right: 8px; margin: 6px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 4px 14px rgba(10, 30, 45, .18); font-size: 12px; font-weight: 400; color: var(--ink); }
 .card-tech { margin: 12px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .card-tech summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted); }
 .pulse { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--ink); }
@@ -273,10 +309,6 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .level-chip[data-level=severe] { background: #fbe1dc; color: #9d2a1a; }
 .level-chip[data-level=warning] { background: #fdebc8; color: #7c4b00; }
 .level-chip[data-level=normal] { background: #d8efe4; color: #155c40; }
-.headline { display: grid; margin: 12px 0 4px; padding: 10px 12px; background: #f4f6f7; border-radius: 8px; }
-.headline span { font-size: 12px; color: var(--muted); }
-.headline strong { font-size: 24px; line-height: 1.15; }
-.headline small { color: var(--muted); }
 .updating { display: inline-block; margin-top: 2px; padding: 0 7px; border-radius: 999px; background: #e3eef5; color: #1f4f73; font-size: 11px; font-weight: 700; }
 .card dl { margin: 0; }
 .card dt { font-size: 12px; color: var(--muted); margin-top: 9px; }
@@ -325,21 +357,35 @@ textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .route-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink); cursor: pointer; }
 .route-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .route-note[data-kind=warn] { color: #9a5c00; font-weight: 600; }
+/* stop role tokens (shared with T-17): the map symbols and the card icons use the same colours. */
+:root { --stop-passed: #a9b3ba; --stop-ahead: #1b2a36; --stop-after: #6b7780; }
+/* C6: groups with headers that stick under the card's sticky top (--card-top-h, set by app.js);
+   the role is an icon (✓ ◉ ◆ ◌) as well as the group, the target row is inverted. */
+.route { position: relative; }
+.card.is-short .card-top { position: static; }
+.route-head { justify-content: flex-start; }
+.route-head .route-toggle { margin-left: auto; }
 .stops { margin: 6px 0 4px; padding: 0; list-style: none; display: grid; gap: 1px; font-size: 13px; font-variant-numeric: tabular-nums; }
-.stops li { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; padding: 2px 6px; border-left: 3px solid transparent; border-radius: 3px; }
-.stops li.stop-group { display: block; margin-top: 6px; padding: 0 2px; border: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+.stops li { display: grid; grid-template-columns: 16px 50px 1fr auto; align-items: baseline; gap: 6px; padding: 2px 6px; border-radius: 3px; }
+.stops li.stop-group { position: sticky; top: var(--card-top-h, 0); z-index: 1; display: block; margin: 6px -4px 0; padding: 3px 6px; border-radius: 0; background: #fafbfb; font-size: 12px; font-weight: 700; color: var(--muted); box-shadow: 0 1px 0 #e3e8eb; }
 .stops li.stop-group:first-child { margin-top: 0; }
-.stop-no { color: var(--muted); }
-.stop-delta { font-weight: 700; text-align: right; }
+.stop-caveat { display: block; font-weight: 400; font-style: italic; color: var(--stop-after); }
+.stops li.stop-more { display: block; padding: 0 6px 0 28px; }
+.stop-more button { border: 0; background: none; padding: 1px 0; font-size: 12px; font-weight: 600; color: var(--focus); }
+.stop-icon { font-size: 14px; text-align: center; line-height: 1; }
+.stop-no { color: var(--muted); white-space: nowrap; }
+.stop-delta { font-weight: 700; text-align: right; white-space: nowrap; }
 .stop-time { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-.stop-basis { color: var(--muted); }
+.stop-tag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--stop-ahead); border-radius: 3px; font-size: 11px; font-style: normal; font-weight: 700; }
 .stops li[data-role=passed] { color: #5f6b74; }
+.stops li[data-role=passed] .stop-icon { color: var(--stop-passed); font-weight: 700; }
 .stops li[data-role=passed] .stop-time { font-weight: 400; }
-.stops li[data-role=before_target] { border-left-color: #8795a0; }
-.stops li[data-role=target] { background: #1b2a36; color: #fff; border-left-color: #1b2a36; }
+.stops li[data-role=before_target] .stop-icon { color: var(--stop-ahead); }
+.stops li[data-role=target] { background: var(--stop-ahead); color: #fff; }
 .stops li[data-role=target] .stop-no { color: #d9e4ea; }
-.stops li[data-role=after_target] { border-left-color: #d3dade; border-left-style: dashed; }
-.stop-basis[data-basis=assumption] { font-style: italic; }
+.stops li[data-role=after_target] { color: var(--stop-after); }
+.stops li[data-role=after_target] .stop-icon { color: var(--stop-after); }
+.stops li[data-basis=assumption] .stop-time, .stops li[data-basis=assumption] .stop-delta { font-style: italic; font-weight: 500; }
 .route-caption { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 /* With a card open the list yields height to it. */
 .side:has(.card header) .list-panel { max-height: 36%; }

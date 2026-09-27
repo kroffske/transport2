@@ -69,8 +69,13 @@ const labelOverlaps = page => page.locator('.vehicle-label, .stop-label:not([hid
 });
 const rows = page => page.locator('#vehicles .vehicle');
 const cardTitle = page => page.locator('#card h2').textContent();
-const cardText = page => page.locator('#card').textContent();
+// Values keep non-breaking spaces inside («+1 мин 49 с», C4); texts are compared with plain spaces.
+const norm = text => String(text ?? '').replaceAll(' ', ' ');
+const cardText = page => page.locator('#card').textContent().then(norm);
 const incidentText = page => page.locator('#card .incident').textContent();
+const forecastText = page => page.locator('#card .forecast').textContent().then(norm);
+// Collapsed card sections (C1) are opened before their controls are used.
+const openSection = (page, id) => page.locator(`#${id}`).evaluate(d => { if (!d.open) d.querySelector('summary').click(); });
 const api = (page, url) => page.evaluate(async u => { const r = await fetch(u, {cache: 'no-store'}); return {status: r.status, body: await r.json().catch(() => null)}; }, url);
 // A control is usable when the element at its centre is the control itself (nothing drawn over it).
 const uncovered = (page, selector) => page.locator(selector).first().evaluate(el => {
@@ -141,7 +146,7 @@ async function headerFits(page, label) {
 // W13 acceptance (ui-review §5): card order, sticky head, no technical identifiers outside
 // «Технические подробности», one delay formatter, and the camera following the selection.
 const TECH_PATTERNS = [/[0-9a-f]{12,}/, /rev \d+/, /контекст №/, /кадр NDTP/, /canonical_/, /запись расписания/, /\d{4}-\d\d-\d\dT/];
-const LABEL_TEXT = /^\S+ · ([+−]\d+ (мин|с)|по графику)$/;
+const LABEL_TEXT = /^\S+ · ((опозд\.|опереж\.) [+−]\d+:\d\d|по графику)$/;
 async function w13Card(page, label, frameId) {
   const layout = await page.evaluate(() => {
     const box = s => document.querySelector(s)?.getBoundingClientRect();
@@ -168,7 +173,7 @@ async function w13Card(page, label, frameId) {
   const body = await page.locator('body').innerText();
   const labels = await page.locator('.vehicle-label').allInnerTexts();
   const badLabels = labels.map(t => t.trim()).filter(t => !(LABEL_TEXT.test(t) || /^\S+$/.test(t)));
-  check(!/\d+\.\d+ мин/.test(body) && badLabels.length === 0, `${label}: one delay formatter, no decimal minutes; map labels «ID · +N мин» or ID only (${badLabels.join(' | ') || 'ok'}, F-1)`);
+  check(!/\d+\.\d+ мин/.test(body) && badLabels.length === 0, `${label}: one delay formatter, no decimal minutes; map labels «ID · опозд. +м:сс» or ID only (C5) (${badLabels.join(' | ') || 'ok'}, F-1)`);
 }
 async function w13Follow(page, label) {
   await page.waitForTimeout(20000);
@@ -206,11 +211,16 @@ async function dispatcherPath(page, label) {
   await page.waitForTimeout(900);
   check(await page.locator(`.toast[data-id="${eventId}"]`).count() === 0, `${label}: opening the event hides its toast`);
   check(await page.locator('#card .incident').getAttribute('data-id') === eventId, `${label}: event → its vehicle's card with the same event`);
-  check((await page.locator('#incident-action').textContent()).startsWith('Взять в работу') && /на реакцию|просрочено/.test(await page.locator('#event-sla').textContent()),
-    `${label}: primary action «Взять в работу», SLA badge on the event`);
+  check((await page.locator('#incident-action').textContent()).startsWith('Взять в работу') && /на реакцию|просрочено/.test(await page.locator('#event-sla').textContent())
+    && await page.locator('#incident-action').getAttribute('class') === 'primary' && await page.locator('#card-show').getAttribute('class') === null
+    && !(await page.locator('#card .event-row').textContent()).includes(' с 0'),
+    `${label}: primary action «Взять в работу», «Показать на карте» secondary, SLA badge, «открыто …» not «с …» (C5, C7)`);
   await page.locator('#incident-action').click();
   check(await page.locator('#card .incident-flow').textContent() === 'В работе' && (await incidentText(page)).includes('Взято в работу')
     && await page.locator(`#events-list .event[data-id="${eventId}"]`).getAttribute('data-group') === 'work', `${label}: take moves the event to «В работе»`);
+  check(await page.locator('#close-open').getAttribute('class') === 'primary' && await page.locator('#steps').evaluate(d => d.open),
+    `${label}: in work — «Закрыть ▾» is the primary action, «Шаги реакции» opened by themselves (C1, C7)`);
+  await openSection(page, 'card-history');
   const hostile = '<img src=x onerror="window.__xss=1"><b>жирный</b> позвонить водителю';
   await page.locator('#note-input').fill(hostile);
   await page.locator('.note-form button').click();
@@ -293,7 +303,7 @@ try {
       check(routeStatus === 200 && Array.isArray(routeBody?.stops), `/api/route/${id} answers with stops`);
       check(await page.locator('#route').getAttribute('data-status') === 'ok', `route context of ${id} loaded`);
       const text = await cardText(page);
-      check(text.includes('Текущее опоздание') && text.includes('(факт)'), 'card: current delay labelled as fact');
+      check(/Сейчас: .*\(факт|Факт опоздания пока не определён/.test(text), 'card: the current delay is the fact, next to the forecast (C2)');
       const roles = (routeBody?.stops ?? []).map(s => s.role);
       const target = (routeBody?.stops ?? []).find(s => s.role === 'target');
       // Live rows change: if the vehicle lost its current forecast since the snapshot (e.g. its GPS
@@ -302,23 +312,23 @@ try {
       if (!modelNow) skipped.push(`live: ${id} lost its current forecast during the check — model-specific card checks not asserted`);
       if (target && modelNow) {
         const targetRow = page.locator('.stops li[data-role=target]');
-        const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s, {seconds: true}) : null;
+        const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s) : null;
         // Live forecasts move between two reads: the row is compared with the route read before and after.
         const shown = await targetRow.textContent();
         const again = (await api(page, `/api/route/${encodeURIComponent(id)}`)).body;
         const target2 = (again?.stops ?? []).find(s => s.role === 'target');
-        const expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s, {seconds: true}) : null;
+        const expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s) : null;
         check(await targetRow.count() === 1 && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели')
           && (!expected || shown.includes(expected) || (expected2 && shown.includes(expected2))), `card: target = plan + prediction_s «прогноз модели» (${expected}${expected2 && expected2 !== expected ? ` / ${expected2}` : ''}; shown «${shown.replace(/\s+/g, ' ')}» under «${(await page.locator('.stops li[data-group=target]').textContent()).replace(/\s+/g, ' ')}»)`);
         check(await page.locator('.stop-label[data-kind=target]').count() === 1
           && inside(await page.locator('.stop-label[data-kind=target]').boundingBox(), await page.locator('#map-pane').boundingBox()), 'map: target time label drawn inside the map (never at 0/0)');
       } else if (!target) skipped.push(`live: route of ${id} has no target stop at this moment`);
-      if (roles.includes('before_target') && routeBody.cur_dev_s != null) check((await page.locator('.stops li[data-group=before_target]').textContent()).includes('по факту, не прогноз'), 'card: stops before the target = plan + cur_dev_s, group «по факту, не прогноз»');
-      check((await page.locator('#route').textContent()).split('по факту, не прогноз').length - 1 <= 1 && await page.locator('.stops li:not(.stop-group)').evaluateAll(items => items.every(li => li.querySelector('.stop-no'))),
+      if (roles.includes('before_target') && routeBody.cur_dev_s != null) check((await page.locator('.stops li[data-group=before_target]').textContent()).includes('факт, не прогноз'), 'card: stops before the target = plan + cur_dev_s, group «(факт, не прогноз)»');
+      check((await page.locator('#route').textContent()).split('факт, не прогноз').length - 1 <= 1 && await page.locator('.stops li.stop-row').evaluateAll(items => items.every(li => li.querySelector('.stop-no'))),
         'card: the fact note once per group, every stop numbered (C-3)');
       if (roles.includes('passed')) check(!/→/.test(await page.locator('.stops li[data-role=passed]').first().textContent()), 'card: passed stops show the plan time only');
       if (roles.includes('after_target') && routeBody.prediction_s != null && modelNow) {
-        check(await page.locator('#shift-after-target').isChecked() && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('допущение: тот же сдвиг'), 'card: after the target «допущение: тот же сдвиг», toggle on by default');
+        check(await page.locator('#shift-after-target').isChecked() && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('После цели · допущение') && (await page.locator('.stops li[data-group=after_target]').textContent()).includes('Не прогноз модели'), 'card: after the target «допущение», «Не прогноз модели», toggle on by default (C6)');
         await page.locator('#shift-after-target').uncheck();
         check(!(await page.locator('.stops').textContent()).includes('допущение') && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели'), 'card: toggle off hides the assumption, keeps the model value');
         await page.locator('#shift-after-target').check();
@@ -365,7 +375,7 @@ try {
       const text = await cardText(page);
       const after = (await freshRows()).find(v => String(v.tr_id) === String(without.tr_id));
       if (!after || !noForecast(after) || after.reason !== without.reason) skipped.push(`live: ${without.tr_id} changed state during the check — no-prediction card not asserted`);
-      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел|Прогон завершён|нет наряда/.test(text)
+      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Цель прогноза не выбрана|Прогноза для цели пока нет|Прогноз устарел|Прогноза не будет|Прогон завершён|Прогноз не обновляется/.test(text)
         && (!without.reason || text.includes(reasonText(without.reason)) || run?.state === 'completed' || text.includes('Прогон завершён')), `no prediction (${without.reason}): «${reasonText(without.reason)}», not green`);
       await shot(page, 'live-4-no-prediction-1920.png');
     } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
@@ -531,7 +541,7 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
     check(await page.locator('#card .incident').getAttribute('data-state') === 'active' && await page.locator('.incident-history li').count() === historyBefore
       && await page.locator('#events-unread').isHidden(), `nodata shorter than ${LOST_AFTER_S} s: still «Активно», no history line, no unread`);
-    check((await page.locator('#card .headline').textContent()).includes('Обновляется') && (await cardText(page)).includes('Причина: прогноз обновляется для новой цели'), 'prediction_pending: quiet «Обновляется», reason in the card');
+    check((await forecastText(page)).includes('Прогноза для цели пока нет') && (await cardText(page)).includes('Причина: прогноз обновляется для новой цели'), 'prediction_pending: quiet «Прогноза для цели пока нет», reason in the card (C3)');
     await page.waitForTimeout((LOST_AFTER_S - 4) * 1000);
     check(await page.locator('#card .incident').getAttribute('data-state') === 'monitoring_lost', `nodata for ≥ ${LOST_AFTER_S} s: «Мониторинг потерян»`);
     setSnapshot(RUN('run-A-0001'), [a, b]);
@@ -544,19 +554,22 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900002"]').click();
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
     await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
-    const stops = page.locator('.stops li:not(.stop-group)');
+    const stops = page.locator('.stops li.stop-row');
     const group = role => page.locator(`.stops li[data-group=${role}]`).textContent();
     check((await stops.nth(0).textContent()).includes('06:44') && !(await stops.nth(0).textContent()).includes('→') && (await group('passed')).includes('Пройдено'), 'passed stop: plan time only');
-    check((await stops.nth(1).textContent()).includes('06:52 → 06:54') && (await group('before_target')).includes('по факту, не прогноз') && (await group('before_target')).includes('+1 мин 35 с'), 'before target: plan + cur_dev_s, group «+1 мин 35 с … по факту, не прогноз»');
-    check((await stops.nth(2).textContent()).includes('06:58 → 07:01:20') && (await group('target')).includes('прогноз модели') && (await stops.nth(2).textContent()).includes('+3 мин 20 с'), 'target: plan + prediction_s with seconds, «прогноз модели»');
-    check((await stops.nth(3).textContent()).includes('07:03 → 07:06') && (await group('after_target')).includes('допущение: тот же сдвиг'), 'after target: «допущение: тот же сдвиг»');
+    check((await stops.nth(1).textContent()).includes('06:52 → 06:54') && (await group('before_target')).includes('(факт, не прогноз)') && norm(await group('before_target')).includes('+1 мин 35 с') && (await stops.nth(1).textContent()).includes('+1:35'), 'before target: plan + cur_dev_s «+1:35», group «перенесено текущее опоздание +1 мин 35 с (факт, не прогноз)»');
+    check((await stops.nth(2).textContent()).includes('06:58 → 07:01') && (await group('target')).includes('прогноз модели') && (await stops.nth(2).textContent()).includes('+3:20') && !/\d\d:\d\d:\d\d/.test(await stops.nth(2).textContent()), 'target: plan + prediction_s «+3:20», no seconds in the card (C4), «прогноз модели»');
+    check((await stops.nth(3).textContent()).includes('07:03 → ≈07:06') && (await group('after_target')).includes('допущение') && (await group('after_target')).includes('Не прогноз модели. Показан тот же сдвиг, что у цели.'), 'after target: «≈» time, «допущение», the caveat line (C6)');
     check(!/~|\d+\.\d+ мин/.test(await page.locator('#card').innerText()), 'card: no tilde and no decimal minutes (F-1)');
+    check(await page.locator('.stops li[data-stop=ZN]').count() === 0 && (await page.locator('[data-action=stops-after]').textContent()).includes('Ещё 1'),
+      'after the target: two rows, then «Ещё N» (C6)');
+    await page.locator('[data-action=stops-after]').click();
     check(await page.locator('.stops li[data-stop=Z0]').getAttribute('title') === 'Координаты нет — на карте не показана'
       && await page.locator('.stops li[data-stop=ZN]').getAttribute('title') === 'Координаты нет — на карте не показана'
       && (await page.locator('#route').textContent()).includes('2 остановок без координат на карте не показаны')
       && (await page.locator('#route').textContent()).includes('2 остановок без координат исключены Backend'), 'stops at 0/0 or without coordinates are listed but not drawn, and counted');
-    check(await page.locator('.stop-label').count() === 2 && (await page.locator('.stop-label[data-kind=target]').textContent()).includes('07:01:20')
-      && (await page.locator('.stop-label[data-kind=next]').textContent()).includes('06:54'), 'map labels: target and nearest future stop only');
+    check(await page.locator('.stop-label').count() === 2 && (await page.locator('.stop-label[data-kind=target]').textContent()).includes('ЦЕЛЬ · ост. 3 · 06:58 → 07:01 · +3:20')
+      && (await page.locator('.stop-label[data-kind=next]').textContent()).includes('след. ост. 2 · 06:52 → 06:54 · по факту'), 'map labels: target and nearest future stop only, C5 texts');
     const pane = await page.locator('#map-pane').boundingBox();
     for (const kind of ['target', 'next']) check(inside(await page.locator(`.stop-label[data-kind=${kind}]`).boundingBox(), pane), `map label ${kind} inside the map`);
     await page.locator('#shift-after-target').uncheck();
@@ -664,7 +677,7 @@ try {
     setSnapshot(RUN('run-W13-0001'), [{...w, prediction_s: 400}, {...x, prediction_s: 420}, {...calm, prediction_s: 260}, late]);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     const toastTexts = await page.locator('.toast').allInnerTexts();
-    check(toastTexts.length <= 2 && toastTexts.every(t => !t.includes(first) && !t.includes('в норме')) && toastTexts.every(t => /\+\d+ мин( \d+ с)?|по графику/.test(t)),
+    check(toastTexts.length <= 2 && toastTexts.every(t => !t.includes(first) && !t.includes('в норме')) && toastTexts.every(t => /\+\d+ мин( \d+ с)?|по графику/.test(norm(t))),
       `toasts: ≤ 2, none for the open card ${first}, no «в норме», delay as «+N мин M с» (${toastTexts.map(t => t.replace(/\s+/g, ' ')).join(' | ') || 'none'}, E-1)`);
     // L-4: one panel at a time, and an open panel hides the toasts under it.
     await page.locator('#diagnostics summary').click();
@@ -682,7 +695,7 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900005"]').click();
     await page.waitForTimeout(700);
     const lateText = await cardText(page);
-    check(lateText.includes('Цель за пределами окна данных прогона') && !lateText.includes('план 08:51'), 'target after dataset_end: «Цель за пределами окна данных прогона» (C-5)');
+    check(lateText.includes('Прогноза не будет: цель по расписанию позже конца данных прогона.') && !lateText.includes('прогноза нет'), 'target after dataset_end: «Прогноза не будет: цель по расписанию позже конца данных прогона.» (C3)');
     await shot(page, 'regression-w13-target-outside-run-1920.png');
     // H-2: the run completed; every vehicle has lost its prediction (the device is disconnected).
     const ended = [w, x, calm, late].map(v => ({...v, status: 'nodata', reason: 'disconnected', prediction_s: null, connected: false}));
@@ -831,7 +844,7 @@ try {
     // The assignment has not started yet.
     await page.locator('#vehicles .vehicle[data-id="900007"]').click();
     await page.waitForTimeout(800);
-    check((await page.locator('#card .headline').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут') && (await page.locator('#card .headline').textContent()).includes('Наряд ещё не начался')
+    check((await forecastText(page)).includes('Цель прогноза не выбрана') && (await forecastText(page)).includes('наряд ещё не начался. Прогноз появится, когда ТС выйдет на маршрут')
       && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут'), 'route_not_started: «прогноз появится, когда ТС выйдет на маршрут» in card and list');
     await page.close();
   }
@@ -908,7 +921,7 @@ try {
     await shot(page, 'regression-w14-out-and-back-z15-1920.png');
     // Stops from the route's stops: 3 stops (1 is the target symbol), not 201 line vertices.
     const stops = await page.evaluate(() => new Set(window.__map.queryRenderedFeatures({layers: ['route-stops']}).map(f => f.geometry.coordinates.join(','))).size);
-    check(stops === 2 && (await page.locator('.stops li:not(.stop-group)').count()) === 3,
+    check(stops === 2 && (await page.locator('.stops li.stop-row').count()) === 3,
       `dense road-following line: stops drawn from the route's stops (${stops} on the map + target, 3 in the card), not from its vertices`);
     await page.close();
   }
@@ -938,18 +951,18 @@ try {
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     const rowW = await page.locator('#vehicles .vehicle[data-id="900021"]').textContent();
     const rowN = await page.locator('#vehicles .vehicle[data-id="900022"]').textContent();
-    check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется')
-      && await page.locator('#vehicles .vehicle[data-id="900022"]').getAttribute('data-level') === 'normal' && rowN.includes('+40 с')
+    check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'warning' && rowW.includes('+3:20') && rowW.includes('обновляется')
+      && await page.locator('#vehicles .vehicle[data-id="900022"]').getAttribute('data-level') === 'normal' && rowN.includes('+0:40')
       && !/нет прогноза|устарел/i.test(rowW + rowN), `held forecast: same level and value, «обновляется», no «нет прогноза» (${rowW.replace(/\s+/g, ' ')} | ${rowN.replace(/\s+/g, ' ')})`);
     check(await page.locator('.toast').count() === 0 && (await bannerText()) === before.attention && await nodataCount() === before.nodata,
     'held forecast: no toast, banner and «Нет прогноза» count unchanged');
     check((await order()).split(',').filter(id => id !== '900022').join(',') === before.order.split(',').filter(id => id !== '900022').join(','), 'held forecast: the list does not re-sort');
-    const headline = await page.locator('#card .headline').innerText();
-    check(await page.locator('#card').getAttribute('data-level') === 'normal' && headline.includes('+40 с') && headline.includes('новая цель считается')
+    const headline = norm(await page.locator('#card .forecast').innerText());
+    check(await page.locator('#card').getAttribute('data-level') === 'normal' && headline.includes('+40 с') && headline.includes('Прогноз для неё считается') && headline.includes('К новой цели не относится')
       && await page.locator('#prediction-updating').isVisible() && !/устарел|Нет прогноза/.test(headline)
-      && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели'),
-    `held forecast card: value, target, quiet «обновляется», stops «прогноз модели» (${headline.replace(/\s+/g, ' ')})`);
-    check((await page.locator('.vehicle-label[data-id="900021"]').textContent()) === '900021 · +3 мин', 'held forecast: map label keeps the value');
+      && (await page.locator('.stops li[data-group=target]').textContent()).includes('прошлый результат модели'),
+    `held forecast card: new target «считается», the previous result apart «к новой цели не относится» (C3) (${headline.replace(/\s+/g, ' ')})`);
+    check((await page.locator('.vehicle-label[data-id="900021"]').textContent()) === '900021 · опозд. +3:20', 'held forecast: map label keeps the value (C5)');
     await shot(page, 'regression-w14-held-forecast-1920.png');
     // 'none' (the hold expired, no forecast for the new target yet): only then «нет прогноза».
     setSnapshot(RUN('run-W14H-0001'), [{...held(w), prediction_state: 'none', prediction_s: null, status: 'degraded', reason: 'prediction_pending',
@@ -1020,6 +1033,7 @@ try {
     await page.locator(`#events-list .event[data-group=needs]`).first().click();
     await page.waitForTimeout(500);
     check(await cardTitle(page) === other && (await page.locator('#steps-progress').textContent()) === '0/3', `the event card has «Шаги реакции 0/3» (${other})`);
+    await openSection(page, 'steps');
     await page.locator('#steps .step[data-step=driver] input').check();
     await page.waitForTimeout(200);
     check((await page.locator('#steps-progress').textContent()) === '1/3' && (await incidentText(page)).includes('Шаг: Связаться с водителем'), 'a step ticks and goes to the history');
@@ -1082,9 +1096,10 @@ try {
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForSelector('#attention button', {timeout: 8000});
     await page.locator('#attention button').first().click();
+    await openSection(page, 'card-history');
     await page.locator('#contact-open').click();
     const draft = await page.locator('#contact-text').inputValue();
-    check(draft.includes('900001') && draft.includes('+3 мин 20 с') && await page.locator('#contact-text').getAttribute('readonly') !== null
+    check(draft.includes('900001') && norm(draft).includes('+3 мин 20 с') && await page.locator('#contact-text').getAttribute('readonly') !== null
       && (await page.locator('.contact').textContent()).includes('Прототип · отправка не подключена'), `prototype (${label}): marked preview with a prepared text`);
     await page.locator('#contact-copy').click();
     await page.waitForSelector('#contact-result:not([data-result=none])', {timeout: 3000});

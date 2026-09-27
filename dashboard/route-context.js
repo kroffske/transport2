@@ -39,19 +39,53 @@ export function durationText(seconds) {
   return s ? `${m} мин ${s} с` : `${m} мин`;
 }
 
-// The one delay format of the screen (UI review F-1): «по графику» under 30 s, «+45 с»,
-// «+5 мин 35 с», early «−1 мин 10 с» (U+2212). `short` (map labels): whole minutes, «+6 мин».
-// Never decimal minutes.
-export function delayText(seconds, {short = false} = {}) {
+// ---- The one delay format of the screen (UX spec C4) --------------------------------------
+// |d| < 30 s is «по графику» everywhere. Early is U+2212, never a hyphen. Inside one value the
+// spaces are non-breaking, so «+1 мин 49 с» never wraps between a number and its unit.
+//   compact (map labels, queue rows, stop rows): «+1:49», «−0:40», «+12:05». Never rounded to
+//     whole minutes: «+2 мин» at 1:49 would contradict the «> 2 мин» warning threshold;
+//   full (the card's large value, sentences): «+1 мин 49 с», «+45 с», from 10 min «+12 мин»
+//     (minutes cut down, so they always agree with the compact form). Never decimal minutes.
+export const ON_TIME_S = 30;
+export const NBSP = ' ';
+const MINUS = '−';
+
+function sizeText(size) {
+  const m = Math.floor(size / 60), s = size % 60;
+  if (!m) return `${s}${NBSP}с`;
+  if (m >= 10 || !s) return `${m}${NBSP}мин`;
+  return `${m}${NBSP}мин${NBSP}${s}${NBSP}с`;
+}
+
+export function delayText(seconds) {
   if (!finite(seconds)) return null;
   const value = Math.round(Number(seconds));
   const size = Math.abs(value);
-  if (size < 30) return 'по графику';
-  const sign = value > 0 ? '+' : '\u2212';
-  if (size < 60) return `${sign}${size} с`;
-  if (short) return `${sign}${Math.round(size / 60)} мин`;
-  const m = Math.floor(size / 60), s = size % 60;
-  return `${sign}${m} мин${s ? ` ${s} с` : ''}`;
+  if (size < ON_TIME_S) return 'по графику';
+  return `${value > 0 ? '+' : MINUS}${sizeText(size)}`;
+}
+
+export function compactDelay(seconds) {
+  if (!finite(seconds)) return null;
+  const value = Math.round(Number(seconds));
+  const size = Math.abs(value);
+  if (size < ON_TIME_S) return 'по графику';
+  return `${value > 0 ? '+' : MINUS}${Math.floor(size / 60)}:${pad(size % 60)}`;
+}
+
+// The fact in words: «опаздывает на 1 мин 49 с», «опережает на 40 с», «идёт по графику».
+export function delayWords(seconds) {
+  if (!finite(seconds)) return null;
+  const value = Math.round(Number(seconds));
+  if (Math.abs(value) < ON_TIME_S) return 'идёт по графику';
+  return `${value > 0 ? 'опаздывает' : 'опережает'} на ${sizeText(Math.abs(value))}`;
+}
+
+// «18 с назад», «4 мин назад»: an age, in data time.
+export function agoText(seconds) {
+  if (!finite(seconds)) return null;
+  const size = Math.max(0, Math.round(Number(seconds)));
+  return size < 60 ? `${size}${NBSP}с назад` : `${Math.floor(size / 60)}${NBSP}мин назад`;
 }
 
 // «+2 мин 20 с», «−30 с», «0 с».
@@ -74,13 +108,14 @@ function clock(seconds, withSeconds) {
   return withSeconds || day % 60 ? `${text}:${pad(day % 60)}` : text;
 }
 
-// Plan time as written in the timetable: «06:52», or «06:52:30» when it has seconds.
+// A clock time as the screen writes it (C4): «06:52», hours and minutes, seconds cut off. Plan
+// times, the data time and «открыто 06:58» all use it; the card never shows seconds.
 export function planText(time) {
   const seconds = daySeconds(time);
-  return seconds === null ? null : clock(seconds, false);
+  return seconds === null ? null : clock(Math.floor(seconds / 60) * 60, false);
 }
 
-// Plan time shifted by a delay: «06:54», or «06:53:35» with `seconds` (only the target shows them).
+// Plan time shifted by a delay, to the nearest minute: «06:54»; «06:53:35» with `seconds`.
 export function shiftedText(time, delay, {seconds: withSeconds = false} = {}) {
   const seconds = daySeconds(time);
   if (seconds === null || !finite(delay)) return null;
@@ -109,7 +144,7 @@ export function stopRows(route, {shiftAfterTarget = true, modelUsable, factUsabl
       lon: Number(stop.lon), lat: Number(stop.lat),
       onMap: coordOk(stop.lon, stop.lat),
       plan: planText(stop.time),
-      expected: basis ? shiftedText(stop.time, delay, {seconds: role === 'target'}) : null,
+      expected: basis ? shiftedText(stop.time, delay) : null,
       delay: basis ? delay : null,
       basis,
     };
@@ -125,6 +160,17 @@ export function labelledStops(rows) {
     ? drawable.find(r => r.role === 'before_target') ?? null
     : drawable.find(r => r.role === 'planned') ?? null;
   return {target, next};
+}
+
+// The stop numbers the card and the labels name (stops have no names; «ост. N» is the position in
+// the route window): the target, the plan's next target while a forecast is held for the previous
+// one (the first later row with that stop ID), and the last passed stop, where the fact was taken.
+export function stopNumbers(rows, {plannedTargetId = null} = {}) {
+  const target = rows.find(r => r.role === 'target') ?? null;
+  const later = target ? rows.slice(rows.indexOf(target) + 1) : rows;
+  const next = plannedTargetId == null ? null : later.find(r => r.stop_id === String(plannedTargetId)) ?? null;
+  const passed = rows.filter(r => r.role === 'passed').at(-1) ?? null;
+  return {target: target?.no ?? null, newTarget: next ? {no: next.no, plan: next.plan, stop_id: next.stop_id} : null, fact: passed?.no ?? null};
 }
 
 // A GPS line as drawable pieces: invalid points split the line instead of joining through them.
