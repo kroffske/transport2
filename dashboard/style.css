@@ -37,7 +37,15 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .run-source { font-weight: 700; color: #fff; }
 .run-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d8e2; }
 .run-speed { font-weight: 700; color: #ffe6ad; }
-.run-clock { color: #fff; font-variant-numeric: tabular-nums; }
+/* Q7: the data clock, large, with its clock named under it; the full time once the run is over. */
+.data-clock { flex: none; display: grid; grid-template-columns: auto; justify-items: start; line-height: 1; padding: 0 12px; border-left: 1px solid #3f5a70; border-right: 1px solid #3f5a70; cursor: default; }
+.data-clock b { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.data-clock small { font-size: 11px; color: #9fb8c7; margin-top: 2px; }
+.data-clock-prefix[hidden] { display: none; }
+.data-clock[data-over=true] { grid-template-columns: auto auto; column-gap: 6px; align-items: baseline; }
+.data-clock[data-over=true] .data-clock-prefix { font-size: 12px; margin: 0; color: #c9d8e2; }
+.data-clock[data-over=true] b { font-size: 18px; color: #c9d8e2; }
+.data-clock[data-over=true] #data-clock-label { grid-column: 1 / -1; }
 .run-state { display: inline-flex; align-items: center; gap: 7px; color: #c9ecdf; }
 .run-progress { display: inline-block; width: 54px; height: 6px; border-radius: 3px; background: #3f5a70; overflow: hidden; }
 .run-progress b { display: block; height: 100%; width: 0; background: #45c28d; }
@@ -66,9 +74,32 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .events-toggle[data-active]:not([data-active="0"]) { border-color: #e39a2d; color: #fff; }
 .events-toggle[aria-expanded=true] { background: #2c4a63; color: #fff; }
 .events-unread { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--severe); color: #fff; font-size: 12px; line-height: 18px; text-align: center; }
-.events-unread[hidden] { display: none; }
+.events-unread[data-count="0"] { background: #3f5a70; color: #c9d8e2; }
 .events-toggle[data-tab-open=true] { background: #2c4a63; color: #fff; }
 /* v2 side panel: «События» (the reaction queue) and «Транспорт» (the vehicle list) tabs. */
+/* Q5/Q8: the right column's header — «Поиск ТС по номеру (/)» with a dropdown, and the «?» hotkeys popover. */
+.side-head { flex: none; position: relative; z-index: 4; display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; }
+.vehicle-search { position: relative; flex: 1; min-width: 0; }
+.vehicle-search input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: #f8fafa; }
+.vehicle-search input:focus { background: #fff; }
+.search-results { position: absolute; left: 0; right: 0; top: calc(100% + 4px); display: grid; max-height: 320px; overflow: auto; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 26px rgba(10, 30, 45, .2); }
+.search-results[hidden] { display: none; }
+.search-results button { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 0; border-left: 4px solid var(--nodata); border-radius: 4px; background: transparent; text-align: left; }
+.search-results button[data-level=warning] { border-left-color: var(--warning); }
+.search-results button[data-level=severe] { border-left-color: var(--severe); }
+.search-results button[data-level=normal] { border-left-color: var(--normal); }
+.search-results button[aria-selected=true], .search-results button:hover { background: #eef3f6; }
+.search-id { font-weight: 700; font-variant-numeric: tabular-nums; }
+.search-value { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.search-empty { margin: 0; padding: 8px 10px; color: var(--muted); font-size: 12px; }
+.hotkeys-help { position: relative; flex: none; }
+.hotkeys-help summary { list-style: none; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 50%; background: #f5f7f8; font-weight: 700; color: var(--muted); cursor: pointer; }
+.hotkeys-help summary::-webkit-details-marker { display: none; }
+.hotkeys-help[open] summary { background: var(--navy); border-color: var(--navy); color: #fff; }
+.hotkeys-help dl { position: absolute; right: 0; top: 38px; width: 300px; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin: 0; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(10, 30, 45, .22); font-size: 13px; }
+.hotkeys-help dt { white-space: nowrap; }
+.hotkeys-help dd { margin: 0; color: var(--ink); }
+.hotkeys-help kbd { margin: 0; font-size: 11px; }
 .side-tabs { flex: none; display: flex; padding: 0 14px; border-bottom: 1px solid var(--line); }
 .side-tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 0 9px; border: 0; border-bottom: 3px solid transparent; background: transparent; font-weight: 700; color: var(--muted); }
 .side-tabs button[aria-selected=true] { border-bottom-color: var(--navy); color: var(--ink); }
@@ -79,6 +110,11 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .side[data-tab=events]:has(.card header) .events-panel { max-height: 36%; }
 .side[data-tab=events]:not(:has(.card header)) .events-panel { flex: 1 1 auto; max-height: none; }
 .events-list { overflow: auto; display: grid; gap: 6px; align-content: start; padding: 10px 14px; }
+/* Q6: queue filter chips «Все · Новые · В работе · Отложены». */
+.queue-filters { flex: none; display: flex; gap: 4px; padding: 10px 14px 0; }
+.queue-filters button { flex: 1 1 auto; padding: 4px 6px; border: 1px solid var(--line); background: #f5f7f8; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.queue-filters button b { margin-left: 2px; font-variant-numeric: tabular-nums; }
+.queue-filters button[aria-pressed=true] { background: var(--navy); border-color: var(--navy); color: #fff; }
 .events-empty { margin: 0 0 2px; color: var(--muted); font-size: 12px; }
 .queue-group { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .queue-group::after { content: ''; order: 1; flex: 1; height: 1px; background: #e3e8eb; }
@@ -91,6 +127,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .event[data-group=needs] { background: #fffaf0; border-color: #efcf95; }
 .event[data-group=ended] { opacity: .8; }
 .event.is-current { outline: 2px solid var(--navy); outline-offset: -1px; }
+/* Q6: the open event after an action keeps its row; its own group's look, a dashed frame says «moved». */
+.event.is-pinned { border-style: dashed; border-left-style: solid; }
 .event-check { grid-row: 1 / span 2; align-self: start; margin: 2px 0 0; width: 16px; height: 16px; }
 .event-title { font-weight: 700; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .event[data-unread=true] .event-title::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--severe); }
@@ -103,6 +141,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .sla[data-tone=snoozed], .sla[data-tone=closed] { background: #e7ebee; color: var(--nodata); }
 .sla[data-tone=ended] { background: #d8efe4; color: #155c40; }
 .event .sla { grid-column: 3; }
+.sla[data-clock]:not([data-clock=""]) { cursor: help; }
+.sla-stack { display: inline-grid; justify-items: end; gap: 1px; }
+.sla-clock { color: var(--muted); font-size: 11px; line-height: 1.1; white-space: nowrap; }
 .sla-bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--focus); transition: width 1s linear; }
 .sla-bar[data-tone=sla_low] { background: var(--warning); }
 .sla-bar[data-tone=overdue] { background: var(--severe); }
@@ -121,17 +162,18 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .toasts { position: absolute; z-index: 4; right: 56px; bottom: 30px; display: grid; gap: 8px; width: 380px; pointer-events: none; }
 /* An open «События» or «Диагностика» panel hides the toasts under it (L-4); the event centre keeps them. */
 body:has(.diagnostics[open]) .toasts { visibility: hidden; }
-.toast { position: relative; overflow: hidden; pointer-events: auto; display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 2px 8px; padding: 10px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--warning); border-radius: 8px; box-shadow: 0 8px 22px rgba(10, 30, 45, .2); animation: toast-in .25s ease-out; }
+.toast { position: relative; overflow: hidden; pointer-events: auto; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 2px 8px; padding: 10px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--warning); border-radius: 8px; box-shadow: 0 8px 22px rgba(10, 30, 45, .2); animation: toast-in .25s ease-out; }
 .toast[data-level=severe] { border-left-color: var(--severe); }
 .toast[data-kind=remind] { border-left-color: var(--focus); }
+.toast[data-kind=lost] { border-left-color: var(--nodata); }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
 .toast b { grid-column: 1; color: #9a5c00; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .toast[data-level=severe] b { color: var(--severe); }
 .toast[data-kind=remind] b { color: var(--focus); }
+.toast[data-kind=lost] b { color: var(--nodata); }
 .toast span { grid-column: 1; grid-row: 2; font-weight: 600; }
 .toast-open { grid-column: 2; grid-row: 1 / span 2; border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; padding: 6px 10px; }
-.toast-take { grid-column: 3; grid-row: 1 / span 2; border: 1px solid var(--navy); background: var(--navy); color: #fff; border-radius: 6px; padding: 6px 10px; font-weight: 600; }
-.toast-close { grid-column: 4; grid-row: 1 / span 2; border: 0; background: transparent; font-size: 18px; color: var(--muted); padding: 0 2px; }
+.toast-close { grid-column: 3; grid-row: 1 / span 2; border: 0; background: transparent; font-size: 18px; color: var(--muted); padding: 0 2px; }
 
 /* Map-first layout: the map takes everything except a 360 px panel. */
 .layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 0; }
@@ -152,10 +194,14 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .attention button, .card-actions button, .search-row button { border: 1px solid var(--line); background: #f5f7f8; border-radius: 6px; padding: 6px 12px; }
 .attention button { white-space: nowrap; }
 .attention button.primary { background: var(--navy); color: #fff; border-color: var(--navy); font-weight: 600; }
-.attention button.more { border: 0; background: transparent; color: var(--focus); font-size: 13px; font-weight: 600; padding: 0; }
 .attention-text { display: grid; gap: 1px; min-width: 0; }
 .attention-text > span:last-child { font-weight: 600; white-space: nowrap; }
-.attention-actions { display: flex; gap: 6px; }
+/* Q1: a one-line summary — «Требуют реакции: 2 · ближайший срок 0:37 · [Следующее J]». */
+.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; white-space: nowrap; font-weight: 600; }
+.attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { font-size: 14px; text-transform: none; letter-spacing: 0; }
+.attention[data-kind=open] .attention-title { color: var(--ink); }
+.attention-detail { font-variant-numeric: tabular-nums; }
+
 kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 0 4px; border: 1px solid #b7c1c8; border-radius: 3px; color: var(--muted); }
 .primary kbd { border-color: rgba(255, 255, 255, .45); color: #fff; }
 /* v2 card: the event row, its actions and menus, and the reaction steps. */
@@ -170,6 +216,10 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .card-buttons #card-show { margin-left: auto; }
 .card-menu { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #f6f8f8; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .card-menu button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 12px; font-size: 12px; font-weight: 600; color: var(--ink); }
+/* Q7: snooze options name both clocks, one per line. */
+.snooze-menu { display: grid; justify-items: start; gap: 4px; }
+.snooze-menu button { border-radius: 6px; font-weight: 500; }
+.snooze-blocked { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .card-menu.reasons { display: grid; gap: 4px; }
 .card-menu.reasons button { text-align: left; border-radius: 6px; padding: 5px 10px; font-size: 13px; font-weight: 400; }
 .steps { margin: 12px 0 2px; padding: 10px 12px; border: 1px solid #efcf95; border-radius: 8px; background: #fffaf0; }
@@ -196,8 +246,6 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .switch i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .2s; }
 .dim-toggle[aria-pressed=true] .switch { background: var(--navy); }
 .dim-toggle[aria-pressed=true] .switch i { left: 14px; }
-/* v2: keyboard hints under the legend. */
-.hotkeys { position: absolute; z-index: 2; left: 220px; bottom: 6px; display: flex; gap: 10px; font-size: 11px; color: var(--muted); pointer-events: none; }
 
 .legend { position: absolute; z-index: 2; left: 14px; bottom: 30px; display: grid; gap: 4px; max-width: 720px; padding: 6px 10px; background: rgba(255, 255, 255, .95); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }

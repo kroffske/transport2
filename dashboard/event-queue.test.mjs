@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {CLOSE_REASONS, RESOLVED_CLOSE_REASON, SLA_S, addNote, attention, clearSelection, close, createQueue,
-  dataSeconds, deserialize, dismissToast, eventForVehicle, eventView, groupIds, groups, markEndedRead, markRead,
-  navOrder, nextEvent, observe, selectGroup, serialize, snooze, take, toastViews, toggleSelected, toggleStep,
+import {CLOSE_REASONS, RESOLVED_CLOSE_REASON, SLA_S, addNote, attentionSummary, clearSelection, close, createQueue,
+  dataSeconds, deserialize, dismissToast, dismissToasts, eventForVehicle, eventView, groupIds, groups, markEndedRead, markOpened, markRead,
+  navOrder, nextEvent, nextQueueEvent, observe, pinFor, queueLayout, selectGroup, serialize, snooze, take, toastPlan, toastViews, toggleSelected, toggleStep,
   unsnooze, untake} from './event-queue.js';
 
 const bus = (tr_id, prediction_s, status = 'normal') => ({tr_id, prediction_s, status});
@@ -29,26 +29,27 @@ test('a new warning enters «Требует реакции» with an SLA badge c
   const g = groups(q, 10);
   assert.deepEqual(g.needs.map(v => v.tr_id), ['A']);
   assert.equal(g.needs[0].unread, true);
-  assert.equal(badge(q, 'A', 10), 'на реакцию 1:30');
+  assert.equal(badge(q, 'A', 10), 'реакция 1:30');
   assert.equal(eventView(q, only(q, 'A'), 10).badge.tone, 'sla');
-  assert.equal(badge(q, 'A', 80), 'на реакцию 0:20');
+  assert.equal(eventView(q, only(q, 'A'), 10).badge.clock_text, 'реальное время', 'the SLA says it counts real time');
+  assert.equal(badge(q, 'A', 80), 'реакция 0:20');
   assert.equal(eventView(q, only(q, 'A'), 80).badge.tone, 'sla_low');
-  assert.equal(badge(q, 'A', 100), 'на реакцию 0:00');
+  assert.equal(badge(q, 'A', 100), 'реакция 0:00');
   assert.equal(badge(q, 'A', 130), 'просрочено 0:30');
   assert.equal(eventView(q, only(q, 'A'), 130).badge.tone, 'overdue');
   assert.equal(groups(q, 130).counts.overdue, 1);
   // Without wallS the selectors use the last polled wall time.
-  assert.equal(eventView(q, only(q, 'A')).badge.text, 'на реакцию 1:30');
+  assert.equal(eventView(q, only(q, 'A')).badge.text, 'реакция 1:30');
   // ×5 data does not speed the SLA up: 30 wall s later (150 data s) 1:00 is left, not overdue.
   const later = poll(q, [bus('A', 200)], 40);
   assert.equal(later.now_s - q.now_s, 150);
-  assert.equal(badge(later, 'A', 40), 'на реакцию 1:00');
+  assert.equal(badge(later, 'A', 40), 'реакция 1:00');
   // A wall clock that went backwards (reload with performance.now()) never adds time.
-  assert.equal(badge(q, 'A', 3), 'на реакцию 1:30');
+  assert.equal(badge(q, 'A', 3), 'реакция 1:30');
   // A configurable SLA.
   let q2 = createQueue('run-1', {slaS: 120});
   q2 = poll(q2, [bus('A', 200)], 0);
-  assert.equal(badge(q2, 'A', 0), 'на реакцию 2:00');
+  assert.equal(badge(q2, 'A', 0), 'реакция 2:00');
 });
 
 test('functions are pure: the argument is never mutated', () => {
@@ -73,17 +74,19 @@ test('take / untake / snooze / unsnooze move the event between groups with v2 ba
   assert.equal(badge(q, 'A', 20), 'в работе');
   assert.equal(eventView(q, id).unread, false);
   assert.equal(q.store.incidents[0].workflow, 'in_work');
-  assert.equal(badge(untake(q, id, at(40)), 'A', 40), 'на реакцию 0:50', 'without wallS: the last polled wall time');
+  assert.equal(badge(untake(q, id, at(40)), 'A', 40), 'реакция 0:50', 'without wallS: the last polled wall time');
   q = untake(q, id, at(40), 40);
   assert.equal(eventView(q, id).group, 'needs');
-  assert.equal(badge(q, 'A', 40), 'на реакцию 1:30', 'SLA restarts on return to new');
+  assert.equal(badge(q, 'A', 40), 'реакция 1:30', 'SLA restarts on return to new');
   q = snooze(q, id, 5, at(60)); // data 07:03:52 + 5 data min
   assert.equal(eventView(q, id).group, 'snoozed');
-  assert.equal(badge(q, 'A', 60), 'напомнить 07:08:52');
+  assert.equal(badge(q, 'A', 60), 'напомнить в 07:08');
+  assert.equal(eventView(q, id).badge.clock_text, 'время данных');
+  assert.equal(eventView(q, id).snooze_note, 'напомнить в 07:08 (время данных)');
   q = unsnooze(q, id, at(70));
   assert.equal(eventView(q, id).group, 'work');
   assert.deepEqual(q.store.incidents[0].history.filter(h => h.kind === 'action').map(h => h.text), [
-    'Взято в работу', 'Возвращено в новые', 'Отложено на 5 мин: напомнить в 07:08:52', 'Напоминание снято, взято в работу']);
+    'Взято в работу', 'Возвращено в новые', 'Отложено на 5 мин данных: напомнить в 07:08 (время данных)', 'Напоминание снято, взято в работу']);
   assert.equal(q.store.incidents[0].history.at(-1).at, at(70));
 });
 
@@ -92,7 +95,7 @@ test('snooze runs on data time: 5 data min = 60 wall s at ×5, then back to «Т
   const id = only(q, 'A');
   q = dismissToast(q, `new|${id}`);
   q = snooze(q, id, 5, at(10)); // data 06:59:42 → remind at 07:04:42
-  assert.equal(badge(q, 'A', 10), 'напомнить 07:04:42');
+  assert.equal(badge(q, 'A', 10), 'напомнить в 07:04');
   q = poll(q, [bus('A', 210)], 69);
   assert.equal(eventView(q, id).group, 'snoozed');
   assert.equal(toastViews(q).length, 0);
@@ -100,7 +103,7 @@ test('snooze runs on data time: 5 data min = 60 wall s at ×5, then back to «Т
   const view = eventView(q, id, 70);
   assert.equal(view.group, 'needs');
   assert.equal(view.unread, true);
-  assert.equal(view.badge.text, 'на реакцию 1:30');
+  assert.equal(view.badge.text, 'реакция 1:30');
   assert.equal(q.store.incidents[0].history.at(-1).text, 'Напоминание: событие вернулось в новые');
   const toasts = toastViews(q);
   assert.deepEqual(toasts.map(t => t.kind), ['remind']);
@@ -174,21 +177,83 @@ test('J/K order: overdue first, then by SLA left, then «В работе», then
   assert.equal(nextEvent(createQueue('x'), null, 1), null);
 });
 
-test('attention bar shows the top «Требует реакции» event plus «ещё N», else a calm summary', () => {
+test('attention bar is a summary: count and nearest deadline, or the open event and how many more (Q1)', () => {
   let q = poll(createQueue('run-1'), [bus('A', 200)], 0);
-  q = poll(q, [bus('A', 200), bus('B', 300)], 30);
-  const bar = attention(q, 40);
-  assert.equal(bar.top.tr_id, 'A');
-  assert.equal(bar.top.badge.text, 'на реакцию 0:50');
-  assert.equal(bar.more, 1);
-  assert.equal(bar.more_text, 'ещё 1');
-  assert.equal(bar.calm, null);
-  q = take(q, only(q, 'A'), at(40));
-  q = snooze(q, only(q, 'B'), 10, at(40));
-  const calm = attention(q, 41);
-  assert.equal(calm.top, null);
-  assert.equal(calm.more_text, '');
-  assert.deepEqual(calm.calm, {work: 1, snoozed: 1, next_reminder_text: '07:12:12'}); // data 07:02:12 + 10 min
+  q = poll(q, [bus('A', 200), bus('B', 250)], 30);
+  const a = only(q, 'A');
+  assert.deepEqual(attentionSummary(q, 53), {kind: 'needs', level: 'warning', title: 'Требуют реакции: 2', detail: 'ближайший срок 0:37', next: true});
+  assert.equal(attentionSummary(q, 102).detail, 'просрочено 0:12', 'an overdue deadline is said in words');
+  assert.equal(attentionSummary(q, 102).level, 'severe');
+  assert.deepEqual(attentionSummary(q, 53, a), {kind: 'open', level: 'warning', title: 'Открыто: ТС A', detail: 'ещё 1 требует реакции', next: true});
+  q = poll(q, [bus('A', 200), bus('B', 250), bus('C', 200), bus('D', 200)], 31);
+  assert.equal(attentionSummary(q, 53, a).detail, 'ещё 3 требуют реакции');
+  q = take(q, only(q, 'B'), at(40));
+  q = close(q, [only(q, 'C'), only(q, 'D')], CLOSE_REASONS[0], at(40));
+  assert.deepEqual(attentionSummary(q, 53, a), {kind: 'open', level: 'normal', title: 'Открыто: ТС A', detail: 'других событий, требующих реакции, нет', next: false});
+  q = snooze(q, a, 10, at(40));
+  assert.deepEqual(attentionSummary(q, 41), {kind: 'calm', level: 'normal', title: 'Предупреждений нет',
+    detail: 'в работе 1 · отложено 1 · напоминание в 07:12 (время данных)', next: false}); // data 07:02:12 + 10 min
+  assert.equal(attentionSummary(createQueue('x'), 0).detail, '', 'no events: «Предупреждений нет» alone');
+  // A vehicle that lost its forecast is calm in the bar; the queue still lists its event.
+  let n = poll(createQueue('run-2'), [bus('N', 200)], 0);
+  n = poll(n, [bus('N', 200, 'degraded')], 1);
+  assert.equal(groups(n).counts.needs, 1);
+  assert.deepEqual([attentionSummary(n, 1).kind, attentionSummary(n, 1).title], ['calm', 'Предупреждений нет']);
+});
+
+test('stable queue: the open event keeps its row after an action and regroups when the pin goes (Q6)', () => {
+  let q = poll(createQueue('run-1'), [bus('A', 200)], 0);
+  q = poll(q, [bus('A', 200), bus('B', 200)], 10);
+  q = poll(q, [bus('A', 200), bus('B', 200), bus('C', 200), bus('W', 200)], 20);
+  q = take(q, only(q, 'W'), at(20));
+  const tr = list => list.map(v => v.tr_id);
+  const b = only(q, 'B');
+  const pin = pinFor(q, b, 30);
+  assert.deepEqual(pin, {id: b, group: 'needs', index: 1});
+  q = take(q, b, at(30));
+  const held = queueLayout(q, 30, {pin});
+  assert.deepEqual(tr(held.needs), ['A', 'B', 'C'], 'B keeps its place in «Требуют реакции»');
+  assert.deepEqual(tr(held.work), ['W']);
+  assert.equal(held.needs[1].badge.text, 'в работе', 'its badge shows the new state');
+  assert.equal(held.needs[1].pinned, true);
+  assert.equal(held.counts.needs, 2, 'counts stay real');
+  assert.deepEqual(held.order.map(id => eventView(q, id).tr_id), ['A', 'B', 'C', 'W']);
+  const free = queueLayout(q, 30);
+  assert.deepEqual([tr(free.needs), tr(free.work)], [['A', 'C'], ['B', 'W']], 'without the pin B regroups');
+  assert.equal(queueLayout(q, 30, {pin: pinFor(q, b, 30)}).work.find(v => v.tr_id === 'B').pinned, false);
+  // Filter chips: one group; «Завершены» under «Все» only.
+  q = close(q, only(q, 'W'), CLOSE_REASONS[0], at(31));
+  assert.deepEqual(tr(queueLayout(q, 30, {filter: 'work'}).work), ['B']);
+  assert.deepEqual(tr(queueLayout(q, 30, {filter: 'work'}).needs), []);
+  assert.deepEqual(tr(queueLayout(q, 30, {filter: 'needs', pin}).needs), ['A', 'B', 'C'], 'the pinned row stays under its chip');
+  assert.deepEqual(tr(queueLayout(q, 30, {filter: 'needs'}).ended), []);
+  assert.deepEqual(tr(queueLayout(q, 30).ended), ['W']);
+  assert.equal(pinFor(q, 'nope', 30), null);
+});
+
+test('J after an action goes to the next «Требует реакции»; otherwise J/K walk the displayed rows (Q6)', () => {
+  let q = poll(createQueue('run-1'), [bus('A', 200)], 0);
+  q = poll(q, [bus('A', 200), bus('B', 200)], 10);
+  q = poll(q, [bus('A', 200), bus('B', 200), bus('C', 200), bus('W', 200)], 20);
+  q = take(q, only(q, 'W'), at(20));
+  const [a, b, c, w] = ['A', 'B', 'C', 'W'].map(tr => only(q, tr));
+  // Not acted: the displayed order A, B, C, W, wrapping.
+  assert.equal(nextQueueEvent(q, c, +1, 30, {pin: pinFor(q, c, 30)}), w);
+  assert.equal(nextQueueEvent(q, a, -1, 30, {pin: pinFor(q, a, 30)}), w);
+  assert.equal(nextQueueEvent(q, null, +1, 30), a);
+  assert.equal(nextQueueEvent(q, null, -1, 30), w);
+  // C taken while open: J skips «В работе» and wraps to the first «Требует реакции».
+  const pin = pinFor(q, c, 30);
+  q = take(q, c, at(30));
+  assert.equal(nextQueueEvent(q, c, +1, 30, {pin}), a);
+  assert.equal(nextQueueEvent(q, c, -1, 30, {pin}), b, 'K: the previous «Требует реакции»');
+  // Nothing else needs a reaction: the next row.
+  q = take(q, [a, b], at(31));
+  assert.deepEqual(queueLayout(q, 30, {pin}).order, [c, a, b, w], 'the pinned row stays first of its group');
+  assert.equal(nextQueueEvent(q, c, +1, 30, {pin}), a);
+  // The filter limits J/K to what is displayed.
+  assert.equal(nextQueueEvent(q, null, +1, 30, {filter: 'snoozed'}), null);
+  assert.equal(nextQueueEvent(createQueue('x'), null, 1), null);
 });
 
 test('toasts: once per new event, newest first, at most three, cleared by an action or dismiss', () => {
@@ -203,9 +268,43 @@ test('toasts: once per new event, newest first, at most three, cleared by an act
   assert.deepEqual(toastViews(q).map(t => t.event.tr_id), ['C', 'B']);
   q = dismissToast(q, `new|${only(q, 'C')}`);
   assert.deepEqual(toastViews(q).map(t => t.kind), ['new']);
+  // Opening the event reads it and hides its toast.
+  const opened = markOpened(q, only(q, 'B'));
+  assert.equal(toastViews(opened).length, 0);
+  assert.equal(eventView(opened, only(q, 'B')).unread, false);
+  assert.equal(markOpened(opened, only(q, 'B')), opened, 'nothing to do: the same state');
+  assert.equal(dismissToasts(q, ['nope']), q);
   // The delay ends: its toast goes.
   q = poll(q, [bus('A', 200), bus('B', 60), bus('C', 200), bus('D', 200)], 5);
   assert.equal(toastViews(q).length, 0);
+});
+
+test('toast plan: state transitions only, never for an event the dispatcher already sees (Q2)', () => {
+  let q = poll(createQueue('run-1'), [bus('A', 200), bus('B', 200), bus('C', 200)], 0);
+  const [a, b, c] = ['A', 'B', 'C'].map(tr => only(q, tr));
+  const keys = plan => plan.show.map(t => t.event.tr_id);
+  assert.deepEqual(keys(toastPlan(q, 0)), ['C', 'B', 'A']);
+  assert.deepEqual(keys(toastPlan(q, 0, {max: 2})), ['C', 'B']);
+  // Row visible in the queue, or the card open: dropped for good.
+  const plan = toastPlan(q, 0, {visibleIds: [a], openTrId: 'B'});
+  assert.deepEqual(keys(plan), ['C']);
+  assert.deepEqual(plan.drop.sort(), [`new|${a}`, `new|${b}`].sort());
+  // Not live (Backend offline, run over): nothing shows, nothing is lost.
+  assert.deepEqual(toastPlan(q, 0, {live: false}), {show: [], drop: []});
+  // A vehicle without a current warning (short gap) waits; an ended event drops its toast.
+  q = poll(q, [bus('A', 200), bus('B', 200, 'degraded'), bus('C', 200)], 1);
+  assert.deepEqual(keys(toastPlan(q, 1)), ['C', 'A']);
+  q = close(q, c, CLOSE_REASONS[0], at(1));
+  assert.equal(toastPlan(q, 1).drop.length, 0, 'close already removed the toast');
+  // Monitoring lost on an open event: one «lost» toast; it goes when data is back.
+  q = dismissToasts(q, q.toasts.map(t => t.key));
+  q = poll(q, [bus('A', 200, 'degraded'), bus('C', 200)], 2);
+  q = poll(q, [bus('A', 200, 'degraded'), bus('C', 200)], 20);
+  assert.deepEqual(toastPlan(q, 20).show.map(t => [t.kind, t.event.tr_id]), [['lost', 'B'], ['lost', 'A']]);
+  q = poll(q, [bus('A', 200, 'degraded'), bus('C', 200)], 21);
+  assert.equal(toastViews(q).length, 2, 'polling does not re-toast «lost»');
+  q = poll(q, [bus('A', 200), bus('C', 200)], 22);
+  assert.deepEqual(toastPlan(q, 22).drop, [q.toasts.find(t => t.id === a).key]);
 });
 
 test('group actions: select all in a group, then take / snooze / close the selection', () => {

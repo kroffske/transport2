@@ -13,8 +13,9 @@ import {SEVERE_S, createIncidentStore, normalizeNote, observeSnapshot} from './i
 //   sessionStorage; performance.now() restarts at 0 after a reload. Selectors take `wallS` (default:
 //   the last polled one); pass the current wall time for a smooth per-second countdown.
 // - Snooze runs on DATA time — the run clock of the snapshot (`snapshot.clock_time`, naive ISO, or
-//   seconds): «отложить 5 мин» is 5 min of the bus's world, shown as the data clock «напомнить
-//   07:04:52», and it expires on the first poll whose data time reaches it (a paused run pauses it).
+//   seconds): «отложить 5 мин» is 5 min of the bus's world, shown as the data clock «напомнить в
+//   07:04 (время данных)», and it expires on the first poll whose data time reaches it (a paused run
+//   pauses it). Every badge says which clock it counts (`badge.clock_text`).
 // Actions take `dataNow` (history time, snooze deadline) and optional `wallS` (SLA restart).
 //
 // Episode lifecycle (active / monitoring_lost / resolved, one episode per vehicle) is owned by
@@ -31,6 +32,10 @@ export const CLOSE_REASONS = ['Водитель уведомлён — наго�
 export const RESOLVED_CLOSE_REASON = 'Задержка закончилась — вмешательство не нужно';
 export const GROUPS = ['needs', 'work', 'snoozed', 'ended'];
 export const GROUP_TITLES = {needs: 'Требуют реакции', work: 'В работе', snoozed: 'Отложены', ended: 'Завершены'};
+// Queue filter chips «Все · Новые · В работе · Отложены»; «Завершены» shows under «Все» only.
+export const QUEUE_FILTERS = [{key: 'all', title: 'Все'}, {key: 'needs', title: 'Новые'}, {key: 'work', title: 'В работе'}, {key: 'snoozed', title: 'Отложены'}];
+// The clock a badge counts in: the reaction SLA in real (screen) seconds, the snooze in data time.
+export const CLOCK_TEXT = {wall: 'реальное время', data: 'время данных'};
 // «Шаги реакции». The last step is shown only for a severe episode (peak ≥ 5 min), as in v2.
 export const STEPS = [
   {key: 'gps', title: 'Проверить позицию и GPS', hint: 'Позиция и GPS обновляются, ТС на маршруте'},
@@ -59,6 +64,8 @@ export const hms = seconds => {
   const s = Math.floor(seconds);
   return `${pad(Math.floor(s / 3600) % 24)}:${pad(Math.floor(s / 60) % 60)}:${pad(((s % 60) + 60) % 60)}`;
 };
+// «07:08»: the data clock to the minute, as the header shows it.
+export const hm = seconds => hms(seconds).slice(0, 5);
 // «1:30»: minutes without padding, seconds padded; never negative.
 export const dur = seconds => {
   const s = Math.max(0, Math.round(seconds));
@@ -120,6 +127,9 @@ export function observe(state, rows, {dataNow, fresh = true, wallS}) {
     if (opened.has(incident.id) && !ev.toasted) {
       ev.toasted = true;
       pushToast(next, {key: `new|${incident.id}`, kind: 'new', id: incident.id, at_s: now});
+    }
+    if (incident.state === 'monitoring_lost' && before.get(incident.id) !== 'monitoring_lost' && isOpen(incident, ev)) {
+      pushToast(next, {key: `lost|${incident.id}|${now}`, kind: 'lost', id: incident.id, at_s: now});
     }
     if (incident.state === 'resolved') {
       if (before.get(incident.id) !== undefined && before.get(incident.id) !== 'resolved') {
@@ -193,9 +203,12 @@ export const snooze = (state, ids, minutes, dataNow) => act(state, ids, dataNow,
   ev.snooze_until_s = now + minutes * 60;
   incident.unread = false;
   mirror(incident, ev);
-  log(incident, at, `Отложено на ${minutes} мин: напомнить в ${hms(ev.snooze_until_s)}`);
+  log(incident, at, `Отложено на ${minutes} мин данных: ${snoozeNote(ev.snooze_until_s)}`);
   return true;
 });
+
+// «напомнить в 07:08 (время данных)»: the card line and the history entry of a snooze.
+const snoozeNote = until => `напомнить в ${hm(until)} (${CLOCK_TEXT.data})`;
 
 // «Снять напоминание»: a snoozed event goes to «В работе».
 export const unsnooze = (state, ids, dataNow) => act(state, ids, dataNow, (incident, ev, at) => {
@@ -258,8 +271,19 @@ export function markRead(state, ids) {
 export const markEndedRead = state => markRead(state, groupIds(state, 'ended'));
 
 export function dismissToast(state, key) {
-  if (!state.toasts.some(t => t.key === key)) return state;
-  return {...clone(state), toasts: state.toasts.filter(t => t.key !== key).map(t => ({...t}))};
+  return dismissToasts(state, [key]);
+}
+
+export function dismissToasts(state, keys) {
+  if (!state.toasts.some(t => keys.includes(t.key))) return state;
+  return {...clone(state), toasts: state.toasts.filter(t => !keys.includes(t.key)).map(t => ({...t}))};
+}
+
+// Opening an event (row, toast, J/K, map, search) reads it and hides its toasts (Q2).
+export function markOpened(state, id) {
+  const read = markRead(state, id);
+  const keys = read.toasts.filter(t => t.id === id).map(t => t.key);
+  return keys.length ? dismissToasts(read, keys) : read;
 }
 
 // ---- Selection (group actions) -------------------------------------------------------------
@@ -299,13 +323,16 @@ function slaOf(state, ev, wall) {
   return {left_s: left, over: left < 0, pct: left < 0 ? 100 : Math.max(0, Math.min(100, (100 * left) / state.sla_s))};
 }
 
+// `clock_text` names the clock of a timed badge («реальное время» / «время данных»): shown next to
+// the badge in the card and as its tooltip in the queue (Q7).
 function badgeOf(incident, ev, sla) {
-  if (ev.wf === 'closed') return {text: 'Закрыто', tone: 'closed'};
-  if (incident.state === 'resolved') return {text: 'Задержка закончилась', tone: 'ended'};
-  if (ev.wf === 'work') return {text: 'в работе', tone: 'work'};
-  if (ev.wf === 'snoozed') return {text: `напомнить ${hms(ev.snooze_until_s)}`, tone: 'snoozed'};
-  if (sla.over) return {text: `просрочено ${dur(-sla.left_s)}`, tone: 'overdue'};
-  return {text: `на реакцию ${dur(sla.left_s)}`, tone: sla.left_s < SLA_LOW_S ? 'sla_low' : 'sla'};
+  const timed = (text, tone, clock) => ({text, tone, clock, clock_text: CLOCK_TEXT[clock]});
+  if (ev.wf === 'closed') return {text: 'Закрыто', tone: 'closed', clock: null, clock_text: null};
+  if (incident.state === 'resolved') return {text: 'Задержка закончилась', tone: 'ended', clock: null, clock_text: null};
+  if (ev.wf === 'work') return {text: 'в работе', tone: 'work', clock: null, clock_text: null};
+  if (ev.wf === 'snoozed') return timed(`напомнить в ${hm(ev.snooze_until_s)}`, 'snoozed', 'data');
+  if (sla.over) return timed(`просрочено ${dur(-sla.left_s)}`, 'overdue', 'wall');
+  return timed(`реакция ${dur(sla.left_s)}`, sla.left_s < SLA_LOW_S ? 'sla_low' : 'sla', 'wall');
 }
 
 // Everything the list row, card, attention bar and toast need for one event.
@@ -324,6 +351,7 @@ export function eventView(state, id, wallS) {
     wf: ev.wf, // new | work | snoozed | closed
     lifecycle: incident.state, // active | monitoring_lost | resolved (incidents.js)
     lost: incident.state === 'monitoring_lost',
+    vehicle_state: incident.vehicle_state, // warning | normal | nodata: the vehicle as last seen
     unread: incident.unread,
     selected: state.selection.includes(id),
     badge: badgeOf(incident, ev, sla),
@@ -334,7 +362,8 @@ export function eventView(state, id, wallS) {
     opened_at: incident.opened_at,
     resolved_at: incident.resolved_at,
     snooze_until_s: ev.snooze_until_s,
-    snooze_until_text: ev.snooze_until_s === null ? null : hms(ev.snooze_until_s),
+    snooze_until_text: ev.snooze_until_s === null ? null : hm(ev.snooze_until_s),
+    snooze_note: ev.snooze_until_s === null ? null : snoozeNote(ev.snooze_until_s),
     close_reason: ev.close_reason,
     steps,
     steps_progress: `${steps.filter(s => s.done).length}/${steps.length}`,
@@ -398,23 +427,111 @@ export function eventForVehicle(state, trId) {
   return (open ?? mine.at(-1))?.id ?? null;
 }
 
-// Attention bar: the most urgent «Требует реакции» event and how many more; else a calm summary.
-export function attention(state, wallS) {
+// ---- Stable queue (Q6): the open event keeps its row -----------------------------------------
+
+// Where event `id` sits now: its group and index in it. The caller takes it once, when the event is
+// opened, and passes it to queueLayout as `pin` while the event stays open.
+export function pinFor(state, id, wallS) {
   const g = groups(state, wallS);
-  const [top] = g.needs;
-  const more = Math.max(0, g.needs.length - 1);
-  const next = g.snoozed[0] ?? null;
-  return {
-    top: top ?? null,
-    more,
-    more_text: more ? `ещё ${more}` : '',
-    calm: top ? null : {work: g.counts.work, snoozed: g.counts.snoozed, next_reminder_text: next ? next.snooze_until_text : null},
-  };
+  for (const group of GROUPS) {
+    const index = g[group].findIndex(v => v.id === id);
+    if (index >= 0) return {id, group, index};
+  }
+  return null;
+}
+
+// The queue as displayed. `pin` ({id, group, index} from pinFor) keeps the open event at the place
+// it was opened, even after an action moved it to another group: its badge shows the new state and
+// `pinned` is true while it is displaced; it regroups when the caller drops the pin (the event is
+// no longer open, or J/K opened another). `filter` is a QUEUE_FILTERS key: other groups are
+// emptied, and «Завершены» shows under «Все» only. `order` is the J/K order of the displayed open
+// rows. Counts stay the real ones.
+export function queueLayout(state, wallS, {pin = null, filter = 'all'} = {}) {
+  const g = groups(state, wallS);
+  const out = {needs: [...g.needs], work: [...g.work], snoozed: [...g.snoozed], ended: [...g.ended]};
+  const view = pin && GROUPS.includes(pin.group) ? GROUPS.map(k => out[k].find(v => v.id === pin.id)).find(Boolean) : null;
+  if (view) {
+    out[view.group] = out[view.group].filter(v => v !== view);
+    const list = out[pin.group];
+    list.splice(Math.min(Math.max(0, pin.index), list.length), 0, {...view, pinned: view.group !== pin.group});
+  }
+  if (filter !== 'all') for (const key of GROUPS) if (key !== filter) out[key] = [];
+  const order = [...out.needs, ...out.work, ...out.snoozed].map(v => v.id);
+  return {...out, counts: g.counts, order};
+}
+
+// J (+1) / K (−1) over the displayed queue, wrapping. After an action moved the open event out of
+// its pinned group (e.g. «Взять в работу»), J/K go to the next «Требует реакции» event; when there
+// is none, to the next row. From nothing J opens the first row, K the last.
+export function nextQueueEvent(state, currentId, step, wallS, view = {}) {
+  const {order} = queueLayout(state, wallS, view);
+  if (!order.length) return null;
+  const dir = step < 0 ? -1 : 1;
+  const idx = order.indexOf(currentId);
+  if (idx < 0) return dir < 0 ? order.at(-1) : order[0];
+  const current = eventView(state, currentId, wallS);
+  const acted = view.pin?.id === currentId && current?.group !== view.pin.group;
+  const needs = acted ? new Set(order.filter(id => id !== currentId && eventView(state, id, wallS).group === 'needs')) : new Set();
+  for (let k = 1; k < order.length; k += 1) {
+    const id = order[(((idx + dir * k) % order.length) + order.length) % order.length];
+    if (!needs.size || needs.has(id)) return id;
+  }
+  return currentId;
+}
+
+// ---- Attention bar (Q1): a summary, never a copy of the queue's actions ---------------------
+
+// «ещё 1 требует реакции», «ещё 2 требуют реакции».
+const needVerb = n => (n % 10 === 1 && n % 100 !== 11 ? 'требует' : 'требуют');
+const deadlineText = left => (left < 0 ? `просрочено ${dur(-left)}` : `ближайший срок ${dur(left)}`);
+
+// `openId`: the event whose card is open (null when none). Returns {kind, level, title, detail,
+// next}: kind «needs» — «Требуют реакции: 2 · ближайший срок 0:37»; «open» — «Открыто: ТС 134040 ·
+// ещё 1 требует реакции»; «calm» — «Предупреждений нет · в работе 1 · …». `next` offers
+// «Следующее J» (another event needs a reaction). The deadline counts real (screen) seconds.
+// Only events whose vehicle is a current warning count: a vehicle that lost its forecast is calm
+// here (user decision, T-7 W14); the queue still lists its event.
+export function attentionSummary(state, wallS, openId = null) {
+  const g = groups(state, wallS);
+  const open = openId ? eventView(state, openId, wallS) : null;
+  const needs = g.needs.filter(v => v.vehicle_state === 'warning');
+  const others = needs.filter(v => v.id !== openId);
+  const level = others.some(v => v.sla.over || v.severe) ? 'severe' : others.length ? 'warning' : 'normal';
+  if (open) {
+    return {kind: 'open', level, title: `Открыто: ТС ${open.tr_id}`,
+      detail: others.length ? `ещё ${others.length} ${needVerb(others.length)} реакции` : 'других событий, требующих реакции, нет',
+      next: others.length > 0};
+  }
+  if (needs.length) {
+    return {kind: 'needs', level, title: `${GROUP_TITLES.needs}: ${needs.length}`, detail: deadlineText(needs[0].sla.left_s), next: true};
+  }
+  const reminder = g.snoozed[0]?.snooze_until_text ?? null;
+  const calm = [g.counts.work ? `в работе ${g.counts.work}` : null, g.counts.snoozed ? `отложено ${g.counts.snoozed}` : null,
+    reminder ? `напоминание в ${reminder} (${CLOCK_TEXT.data})` : null].filter(Boolean);
+  return {kind: 'calm', level: 'normal', title: 'Предупреждений нет', detail: calm.join(' · '), next: false};
 }
 
 // Pending toasts, newest first, with their event views; the caller dismisses them by key.
 export function toastViews(state, wallS) {
   return state.toasts.map(t => ({...t, event: eventView(state, t.id, wallS)})).filter(t => t.event);
+}
+
+// Toasts report state transitions only — new event, back from snooze, monitoring lost (Q2) — and
+// never an event the dispatcher already sees. Returns {show, drop}: `drop` are keys the caller
+// dismisses for good (the event ended, its card is open, or its row is visible in the queue — seen
+// once is seen), `show` the toasts to draw, newest first, at most `max`. A new/remind toast waits
+// while the vehicle has no current warning; a «lost» one goes once data is back. Nothing shows
+// while `live` is false (Backend offline, run over).
+export function toastPlan(state, wallS, {live = true, openTrId = null, visibleIds = [], max = TOASTS_MAX} = {}) {
+  const show = [];
+  const drop = [];
+  for (const toast of toastViews(state, wallS)) {
+    const {event} = toast;
+    if (event.group === 'ended' || event.tr_id === openTrId || visibleIds.includes(event.id)
+      || (toast.kind === 'lost' && !event.lost)) drop.push(toast.key);
+    else if (live && (toast.kind === 'lost' || event.vehicle_state === 'warning')) show.push(toast);
+  }
+  return {show: show.slice(0, max), drop};
 }
 
 // ---- Persistence (the caller wraps sessionStorage in try/catch) -----------------------------

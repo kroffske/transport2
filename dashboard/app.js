@@ -9,7 +9,7 @@ import {reasonText} from './reasons.js';
 import {BASIS, coordOk, delayText, durationText, labelledStops, offsetText, planText, shiftedText,
   stopRows, undrawnCount} from './route-context.js';
 import {createRouteLayers} from './route-layers.js';
-import {createRunTracker, dataTimeText, runStateText, shortRunId, sourceText, speedupText} from './run.js';
+import {createRunTracker, dataClockView, runStateText, shortRunId, snoozeBlockedText, snoozeOptionText, sourceText, speedupText} from './run.js';
 import {createTransportLayer} from './transport-layer.js';
 import './style.css';
 
@@ -111,6 +111,14 @@ const loadPref = (key, fallback) => { try { return sessionStorage.getItem(key) ?
 const savePref = (key, value) => { try { sessionStorage.setItem(key, value); } catch { /* private mode */ } };
 let sideTab = loadPref('t7-side-tab', 'events') === 'vehicles' ? 'vehicles' : 'events';
 let endedOpen = false; // «Завершены» expanded
+// Queue filter chip (Q6), a per-viewer convenience like the tab.
+let queueFilter = Q.QUEUE_FILTERS.some(f => f.key === loadPref('t7-queue-filter', 'all')) ? loadPref('t7-queue-filter', 'all') : 'all';
+// The open event keeps its row while it stays open (Q6): {id, group, index} from Q.pinFor, taken
+// when the event is opened and dropped when another event opens or the selection is cleared.
+let queuePin = null;
+// «Поиск ТС по номеру (/)» in the right column's header (Q5): what is typed and the highlighted match.
+let searchText = '';
+let searchActive = 0;
 let cardMenu = null; // null | 'snooze' | 'close'
 let bulkMenu = null; // null | 'snooze' | 'close'
 let dimNoData = true; // «Приглушить без прогноза»
@@ -546,14 +554,15 @@ function choose(id, focus) {
   const next = id == null ? null : String(id);
   const changed = next !== selected;
   selected = next;
-  // Choosing an object is reading its event; it is not taking it into work.
+  // Choosing an object is reading its event (and hiding its toast); it is not taking it into work.
   const incident = selected ? incidentForVehicle(store(), selected) : null;
-  if (incident?.unread) { setQueue(Q.markRead(queue, incident.id)); }
+  if (incident) setQueue(Q.markOpened(queue, incident.id));
   if (changed) { clearRoute(); if (selected) loadRoute(); follow = Boolean(selected); cardMenu = null; }
   renderEvents(); renderAttention(); renderToasts();
   renderList();
   renderCard();
   renderMapObjects();
+  if (changed) revealCurrentRow();
   if (focus) focusSelected();
 }
 
@@ -921,21 +930,26 @@ function eventControls(view, v) {
     const wf = view.group === 'ended' && view.wf !== 'closed' ? 'ended' : view.wf;
     out.push(el('div', {className: 'event-row', 'data-key': `ev:${view.id}`},
       el('span', {className: 'incident-flow', dataset: {workflow: wf}}, WF_TEXT[wf] ?? wf),
-      el('span', {}, eventMeta(view)), view.group === 'ended' ? null : slaBadge(view.badge, {id: 'event-sla'})));
+      el('span', {}, eventMeta(view)), view.group === 'ended' ? null : el('span', {className: 'sla-stack'}, slaBadge(view.badge, {id: 'event-sla'}),
+        view.badge.clock_text ? el('small', {className: 'sla-clock', id: 'event-sla-clock'}, view.badge.clock_text) : null)));
   }
   const can = view?.can ?? {};
   const buttons = el('div', {className: 'card-buttons', 'data-key': `buttons:${view?.id ?? 'none'}`});
   if (can.take) buttons.append(el('button', {type: 'button', id: 'incident-action', className: 'primary', dataset: {action: 'take-event', id: view.id}}, 'Взять в работу', el('kbd', {}, 'W')));
   if (can.untake) buttons.append(el('button', {type: 'button', id: 'incident-action', dataset: {action: 'untake-event', id: view.id}}, 'Вернуть в новые'));
-  if (can.snooze) buttons.append(el('button', {type: 'button', id: 'snooze-open', 'aria-expanded': String(cardMenu === 'snooze'), dataset: {action: 'card-menu', menu: 'snooze'}}, 'Отложить ▾', el('kbd', {}, 'S')));
+  // Q7: a snooze counts data time; once data time stops (run over) it is offered disabled, with why.
+  const snoozeBlocked = snoozeBlockedText(currentRun());
+  if (can.snooze) buttons.append(el('button', {type: 'button', id: 'snooze-open', disabled: Boolean(snoozeBlocked), title: snoozeBlocked,
+    'aria-expanded': String(cardMenu === 'snooze'), dataset: {action: 'card-menu', menu: 'snooze'}}, 'Отложить ▾', el('kbd', {}, 'S')));
   if (can.unsnooze) buttons.append(el('button', {type: 'button', id: 'unsnooze', dataset: {action: 'unsnooze-event', id: view.id}}, 'Снять напоминание'));
   if (can.close) buttons.append(el('button', {type: 'button', id: 'close-open', 'aria-expanded': String(cardMenu === 'close'), dataset: {action: 'card-menu', menu: 'close'}}, 'Закрыть ▾', el('kbd', {}, 'C')));
   buttons.append(el('button', {type: 'button', id: 'card-show', className: can.take ? null : 'primary',
     disabled: !(locationOk(v) && mapStatus === 'ready'), dataset: {action: 'focus'}}, 'Показать на карте'));
   out.push(buttons);
-  if (view && cardMenu === 'snooze' && can.snooze) {
-    out.push(el('div', {className: 'card-menu', id: 'snooze-menu', 'data-key': 'menu:snooze'}, 'Напомнить через (время данных)',
-      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', dataset: {action: 'snooze-event', id: view.id, minutes: String(m)}}, `${m} мин`))));
+  if (view && can.snooze && snoozeBlocked) out.push(el('p', {className: 'snooze-blocked', id: 'snooze-blocked', 'data-key': 'snooze-blocked'}, snoozeBlocked));
+  if (view && cardMenu === 'snooze' && can.snooze && !snoozeBlocked) {
+    out.push(el('div', {className: 'card-menu snooze-menu', id: 'snooze-menu', 'data-key': 'menu:snooze'}, el('span', {}, 'Напомнить через'),
+      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', dataset: {action: 'snooze-event', id: view.id, minutes: String(m)}}, snoozeOptionText(m, currentRun()?.speedup)))));
   }
   if (view && cardMenu === 'close' && can.close) {
     out.push(el('div', {className: 'card-menu reasons', id: 'close-menu', 'data-key': 'menu:close'}, el('span', {}, 'Причина закрытия — попадёт в историю события'),
@@ -1062,12 +1076,13 @@ function contactBlock(incident, vehicle) {
   return box;
 }
 
-// One line over the map (L-5, H-2): the end of the run, else the first delay the dispatcher has not
-// opened and not taken into work; never a repeat of the card that is already open.
+// One line over the map (L-5, H-2, Q1): Backend or run state when it matters, else a summary of
+// the reaction queue; the queue stays the only owner of the events and their actions.
 function renderAttention() {
   const box = $('attention');
   if (!feed?.snapshot || !snapshotRows().length) { box.hidden = true; return; }
   box.hidden = false;
+  box.dataset.kind = 'status';
   if (!isFresh()) {
     box.dataset.level = 'nodata';
     patchText(box, 'Backend недоступен: показан последний снимок, предупреждения не оцениваются.');
@@ -1086,48 +1101,34 @@ function renderAttention() {
     patchText(box, `Прогон ${runStateText(run)}. Прогнозы не обновляются — перезапустите прогон (README).`);
     return;
   }
-  // v2 attention bar: the event that most needs a reaction (overdue first), except the one whose
-  // card is open (L-5); otherwise a calm line. Vehicles without a forecast are never counted here.
-  const {needs, work, snoozed} = Q.groups(queue, wallNow());
-  const open = needs.filter(view => view.tr_id !== selected && findIncident(store(), view.id)?.vehicle_state === 'warning')
-    .sort((a, b) => (b.sla?.over ?? false) - (a.sla?.over ?? false) || (a.sla?.left_s ?? 0) - (b.sla?.left_s ?? 0) || a.number - b.number);
-  if (!open.length && needs.some(view => view.tr_id === selected)) {
-    // The only events waiting are open in the card: said without repeating the ID (L-5).
-    box.dataset.level = 'warning';
-    patchText(box, 'Требует реакции: событие открыто в карточке справа');
-    return;
-  }
-  if (!open.length) {
-    box.dataset.level = 'normal';
-    const next = snoozed.map(v => v.snooze_until_text).filter(Boolean).sort()[0];
-    const calm = [work.length ? `в работе ${work.length}` : null, snoozed.length ? `отложено ${snoozed.length}` : null,
-      next ? `напоминание в ${next}` : null].filter(Boolean);
-    patchText(box, calm.length ? `Предупреждений нет · ${calm.join(' · ')}` : 'Предупреждений нет');
-    return;
-  }
-  const [top] = open;
-  box.dataset.level = eventLevel(top);
+  // Q1: a summary of the queue, never a copy of its actions — how many need a reaction and the
+  // nearest deadline, or which event is open and how many more wait; «Следующее J» walks them.
+  const summary = Q.attentionSummary(queue, wallNow(), currentEventId());
+  box.dataset.level = summary.level;
+  box.dataset.kind = summary.kind;
+  if (summary.kind === 'calm') { patchText(box, summary.detail ? `${summary.title} · ${summary.detail}` : summary.title); return; }
   const text = el('div', {className: 'attention-text', 'data-key': 'text'},
-    el('span', {className: 'attention-title'}, 'Требует реакции'),
-    el('span', {}, `ТС ${top.tr_id} · ${delayText(top.last_s)} · с ${(planText(top.opened_at) ?? clockText(top.opened_at) ?? '').slice(0, 5)}`));
-  const actions = el('div', {className: 'attention-actions', 'data-key': 'actions'},
-    el('button', {type: 'button', 'data-key': 'attention-open', dataset: {action: 'choose', id: String(top.tr_id)}}, 'Показать'),
-    el('button', {type: 'button', className: 'primary', 'data-key': 'attention-take', dataset: {action: 'take-event', id: top.id}}, 'Взять в работу', el('kbd', {}, 'W')));
-  const parts = [text, slaBadge(top.badge, {'data-key': 'sla'}), actions];
-  if (open.length > 1) parts.push(el('button', {type: 'button', className: 'more', 'data-key': 'more', dataset: {action: 'tab', tab: 'events'}}, `ещё ${open.length - 1} →`));
-  patchChildren(box, parts);
+    el('span', {className: 'attention-title'}, summary.title), ' · ',
+    el('span', {className: 'attention-detail', title: summary.kind === 'needs' ? `Срок реакции — ${Q.CLOCK_TEXT.wall}` : null}, summary.detail));
+  patchChildren(box, [text, summary.next ? el('button', {type: 'button', className: 'primary', 'data-key': 'next', id: 'attention-next',
+    title: 'Открыть следующее событие, требующее реакции', dataset: {action: 'next-event'}}, 'Следующее', el('kbd', {}, 'J')) : null].filter(Boolean));
 }
 
 // ---- Reaction queue (v2), toasts --------------------------------------------------------------
 const eventLevel = view => (view.severe || view.last_s >= 300 ? 'severe' : 'warning');
-const slaBadge = (badge, extra = {}) => el('span', {className: 'sla', dataset: {tone: badge.tone}, ...extra}, badge.text);
+// A timed badge names its clock in the tooltip (Q7): the reaction SLA real time, the snooze data time.
+const slaBadge = (badge, extra = {}) => el('span', {className: 'sla', dataset: {tone: badge.tone, clock: badge.clock ?? ''},
+  title: badge.clock_text ? `${badge.text} · ${badge.clock_text}` : null, ...extra}, badge.text);
 const eventMeta = view => [`№${view.number}`, `с ${planText(view.opened_at) ?? clockText(view.opened_at)}`, `пик ${delayText(view.peak_s)}`,
   view.lost ? 'нет данных' : null, view.close_reason ? `закрыто: ${view.close_reason}` : null].filter(Boolean).join(' · ');
 const eventValue = view => (view.group === 'ended' ? `пик ${delayText(view.peak_s)}` : delayText(view.last_s));
 
 function queueItem(view) {
   const current = findIncident(store(), view.id)?.tr_id === selected;
-  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+  // A pinned row (Q6) stays where it was opened; its badge already shows the new state.
+  const item = el('div', {className: `event${current ? ' is-current' : ''}${view.pinned ? ' is-pinned' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+    'aria-current': current ? 'true' : null,
+    title: view.pinned ? `Строка остаётся на месте, пока событие открыто; в «${Q.GROUP_TITLES[view.group]}» перейдёт после снятия выбора или J/K` : null,
     dataset: {id: view.id, action: 'open-event', group: view.group, state: view.lifecycle, unread: String(view.unread), level: eventLevel(view)}});
   const check = el('input', {type: 'checkbox', className: 'event-check', 'aria-label': `Выбрать событие ТС ${view.tr_id}`,
     dataset: {action: 'check-event', id: view.id}});
@@ -1140,7 +1141,11 @@ function queueItem(view) {
 }
 
 function renderEvents() {
-  const all = Q.groups(queue, wallNow());
+  // Q6: the open event keeps the place it was opened at; another event or no selection drops the pin.
+  const current = currentEventId();
+  if (!current) queuePin = null;
+  else if (queuePin?.id !== current) queuePin = Q.pinFor(queue, current, wallNow());
+  const all = Q.queueLayout(queue, wallNow(), {pin: queuePin, filter: queueFilter});
   const {counts} = all;
   const side = document.querySelector('.side');
   side.dataset.tab = sideTab;
@@ -1148,27 +1153,33 @@ function renderEvents() {
   $('events-count').textContent = String(counts.open);
   $('events-count').dataset.open = String(counts.needs);
   $('vehicles-count').textContent = String(snapshotRows().length);
+  // Q4: the header button counts unread events (the tab counts open ones) and opens the queue tab.
   const toggle = $('events-toggle');
   toggle.dataset.tabOpen = String(sideTab === 'events');
-  toggle.dataset.active = String(counts.open);
+  toggle.dataset.active = String(counts.unread);
   $('events-unread').textContent = String(counts.unread);
-  $('events-unread').hidden = counts.unread === 0;
-  toggle.title = `Требуют реакции ${counts.needs} · в работе ${counts.work} · отложены ${counts.snoozed} · завершены ${counts.ended}`;
+  $('events-unread').dataset.count = String(counts.unread);
+  toggle.title = `Непрочитано ${counts.unread} — открыть очередь. Требуют реакции ${counts.needs} · в работе ${counts.work} · отложены ${counts.snoozed} · завершены ${counts.ended}`;
+  renderQueueFilters(counts);
   const parts = [];
   const group = (key, title, extra) => el('div', {className: 'queue-group', 'data-key': `g:${key}`, dataset: {group: key, count: String(counts[key])}},
     el('span', {}, `${title} · ${counts[key]}`), extra);
   const all2 = key => el('button', {type: 'button', dataset: {action: 'select-group', group: key}},
-    all[key].length && all[key].every(v => v.selected) ? 'снять выбор' : 'выбрать все');
-  parts.push(group('needs', Q.GROUP_TITLES.needs, all.needs.length > 1 ? all2('needs') : null));
-  if (!all.needs.length) {
-    parts.push(el('p', {className: 'events-empty', 'data-key': 'needs-empty'}, isFresh()
-      ? 'Новых событий нет. Событие открывается, когда прогноз задержки у цели больше 2 мин.'
-      : 'Backend недоступен — предупреждения сейчас не оцениваются.'));
+    all[key].length && all[key].every(v => v.selected || v.group !== key) ? 'снять выбор' : 'выбрать все');
+  const shown = key => queueFilter === 'all' || queueFilter === key;
+  if (shown('needs')) {
+    parts.push(group('needs', Q.GROUP_TITLES.needs, counts.needs > 1 ? all2('needs') : null));
+    if (!all.needs.length) {
+      parts.push(el('p', {className: 'events-empty', 'data-key': 'needs-empty'}, isFresh()
+        ? 'Новых событий нет. Событие открывается, когда прогноз задержки у цели больше 2 мин.'
+        : 'Backend недоступен — предупреждения сейчас не оцениваются.'));
+    }
+    parts.push(...all.needs.map(queueItem));
   }
-  parts.push(...all.needs.map(queueItem));
   for (const key of ['work', 'snoozed']) {
-    if (!all[key].length) continue;
-    parts.push(group(key, Q.GROUP_TITLES[key], all[key].length > 1 ? all2(key) : null), ...all[key].map(queueItem));
+    if (!all[key].length && queueFilter !== key) continue;
+    parts.push(group(key, Q.GROUP_TITLES[key], counts[key] > 1 ? all2(key) : null), ...all[key].map(queueItem));
+    if (!all[key].length) parts.push(el('p', {className: 'events-empty', 'data-key': `${key}-empty`}, `В группе «${Q.GROUP_TITLES[key]}» событий нет.`));
   }
   if (all.ended.length) {
     const head = group('ended', `${endedOpen ? '▾' : '▸'} ${Q.GROUP_TITLES.ended}${counts.ended_unread ? ` (непрочитано ${counts.ended_unread})` : ''}`,
@@ -1181,19 +1192,56 @@ function renderEvents() {
   renderBulk(counts.selected);
 }
 
+// «Все · Новые · В работе · Отложены» over the queue (Q6); «Все» counts the open events.
+function renderQueueFilters(counts) {
+  const count = {all: counts.open, needs: counts.needs, work: counts.work, snoozed: counts.snoozed};
+  patchChildren($('queue-filters'), Q.QUEUE_FILTERS.map(f => el('button', {type: 'button', 'data-key': f.key, 'aria-pressed': String(f.key === queueFilter),
+    dataset: {action: 'queue-filter', queueFilter: f.key}}, `${f.title} `, el('b', {}, String(count[f.key])))));
+}
+
+function setQueueFilter(key) {
+  queueFilter = Q.QUEUE_FILTERS.some(f => f.key === key) ? key : 'all';
+  savePref('t7-queue-filter', queueFilter);
+  renderEvents();
+  revealCurrentRow();
+}
+
+// Q6: the queue keeps its scroll when an event opens; only a selected row out of view is brought
+// into view, by the smallest scroll.
+function revealCurrentRow() {
+  const list = $('events-list');
+  const row = list.querySelector('.event.is-current');
+  if (!row || !list.getClientRects().length) return;
+  const area = list.getBoundingClientRect();
+  const box = row.getBoundingClientRect();
+  if (box.top < area.top || box.bottom > area.bottom) row.scrollIntoView({block: 'nearest'});
+}
+
+// Event rows the dispatcher can see now: the queue tab is shown, the page is visible, the row is
+// inside the list's scroll area. A toast is never shown for them (Q2).
+function visibleQueueIds() {
+  const list = $('events-list');
+  if (document.hidden || !list.getClientRects().length) return [];
+  const area = list.getBoundingClientRect();
+  return [...list.querySelectorAll('.event')].filter(row => {
+    const box = row.getBoundingClientRect();
+    return box.bottom > area.top + 4 && box.top < area.bottom - 4;
+  }).map(row => row.dataset.id);
+}
+
 function renderBulk(count) {
   const box = $('events-bulk');
   box.hidden = !count;
   if (!count) { bulkMenu = null; patchChildren(box, []); return; }
   const row = el('div', {className: 'bulk-row', 'data-key': 'row'}, el('b', {}, `Выбрано ${count}`),
     el('button', {type: 'button', className: 'primary', dataset: {action: 'bulk-take'}}, 'Взять в работу'),
-    el('button', {type: 'button', dataset: {action: 'bulk-menu', menu: 'snooze'}}, 'Отложить ▾'),
+    el('button', {type: 'button', disabled: Boolean(snoozeBlockedText(currentRun())), title: snoozeBlockedText(currentRun()), dataset: {action: 'bulk-menu', menu: 'snooze'}}, 'Отложить ▾'),
     el('button', {type: 'button', dataset: {action: 'bulk-menu', menu: 'close'}}, 'Закрыть ▾'),
     el('button', {type: 'button', 'aria-label': 'Снять выбор', dataset: {action: 'bulk-clear'}}, '×'));
   const parts = [row];
-  if (bulkMenu === 'snooze') {
+  if (bulkMenu === 'snooze' && !snoozeBlockedText(currentRun())) {
     parts.push(el('div', {className: 'bulk-row', 'data-key': 'snooze'}, 'Напомнить через',
-      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-snooze', minutes: String(m)}}, `${m} мин`))));
+      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-snooze', minutes: String(m)}}, snoozeOptionText(m, currentRun()?.speedup)))));
   } else if (bulkMenu === 'close') {
     parts.push(el('div', {className: 'bulk-row', 'data-key': 'close'},
       ...Q.CLOSE_REASONS.map(r => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-close', reason: r}}, r))));
@@ -1227,7 +1275,7 @@ function setGpsMark(id, on) {
 function openEvent(id) {
   const incident = findIncident(store(), id);
   if (!incident) return;
-  setQueue(Q.markRead(queue, id));
+  setQueue(Q.markOpened(queue, id));
   filter = 'all'; query = ''; $('search').value = '';
   choose(findRow(incident.tr_id) ? incident.tr_id : null, true);
   render();
@@ -1248,24 +1296,25 @@ function queueAction(fn) {
 }
 const takeEvent = id => queueAction(q => Q.take(q, id, dataNow()));
 const untakeEvent = id => queueAction(q => Q.untake(q, id, dataNow(), wallNow()));
-const snoozeEvent = (id, minutes) => queueAction(q => Q.snooze(q, id, minutes, dataNow()));
+const snoozeEvent = (id, minutes) => !snoozeBlockedText(currentRun()) && queueAction(q => Q.snooze(q, id, minutes, dataNow()));
 const unsnoozeEvent = id => queueAction(q => Q.unsnooze(q, id, dataNow()));
 const closeEvent = (id, reason) => queueAction(q => Q.close(q, id, reason, dataNow()));
 
 function dismissToast(key) { queueAction(q => Q.dismissToast(q, key)); }
 
+// Q2: toasts report state transitions only (new event, back from snooze, monitoring lost), with one
+// action «Открыть». Never after the run or while Backend is offline, never for the open card or a
+// row visible in the queue (those are dropped for good); the queue keeps every event.
+const TOAST_TITLE = {new: 'Новое событие', remind: 'Вернулось из отсрочки', lost: 'Нет данных от ТС'};
 function renderToasts() {
-  // Only for a current delay the dispatcher is not looking at, and none after the run (E-1, H-2);
-  // the queue keeps every event.
   const live = !runOver(currentRun()) && isFresh();
-  const views = live ? Q.toastViews(queue, wallNow()) : [];
-  patchChildren($('toasts'), views.filter(({event}) => event && event.tr_id !== selected && event.group !== 'ended'
-    && ['warning', 'severe'].includes(findIncident(store(), event.id)?.vehicle_state)).slice(0, TOAST_MAX).map(({key, kind, event}) => {
+  const plan = Q.toastPlan(queue, wallNow(), {live, openTrId: selected, visibleIds: visibleQueueIds(), max: TOAST_MAX});
+  if (plan.drop.length) setQueue(Q.dismissToasts(queue, plan.drop));
+  patchChildren($('toasts'), plan.show.map(({key, kind, event}) => {
     const box = el('div', {className: 'toast', role: 'status', 'data-key': key, dataset: {id: event.id, key, kind, level: eventLevel(event)}});
-    box.append(el('b', {}, kind === 'remind' ? 'Напоминание' : 'Новое событие'),
-      el('span', {}, `ТС ${event.tr_id} · ${delayText(event.last_s)} · ${event.badge.text}`),
+    box.append(el('b', {}, TOAST_TITLE[kind] ?? kind),
+      el('span', {}, `ТС ${event.tr_id} · ${kind === 'lost' ? 'мониторинг потерян' : delayText(event.last_s)} · ${event.badge.text}`),
       el('button', {type: 'button', className: 'toast-open', dataset: {action: 'open-event', id: event.id}}, 'Открыть'),
-      el('button', {type: 'button', className: 'toast-take', dataset: {action: 'take-event', id: event.id}}, 'Взять'),
       el('button', {type: 'button', className: 'toast-close', 'aria-label': 'Скрыть уведомление', dataset: {action: 'dismiss-toast', key}}, '×'));
     if (event.sla) box.append(el('span', {className: 'sla-bar', dataset: {tone: event.badge.tone}, style: `width:${Math.round(event.sla.pct)}%`}));
     return box;
@@ -1299,9 +1348,17 @@ function renderStatus() {
   speed.textContent = speedupText(run?.speedup);
   speed.dataset.speedup = run?.speedup ?? '';
   speed.dataset.short = Number(run?.speedup) > 0 ? `×${run.speedup}` : '×?';
-  speed.title = `${speed.textContent}. Время данных идёт в N раз быстрее времени показа (значение прогона Backend).`;
-  const clock = dataTimeText(run?.dataset_time);
-  $('run-clock').textContent = clock ? `время данных ${clock}` : 'время данных неизвестно';
+  speed.title = `${speed.textContent}. Время данных идёт в N раз быстрее реального времени (значение прогона Backend). Таймер реакции идёт в реальном времени, отсрочка — во времени данных.`;
+  // Q7: the data clock, large, labelled with its clock; the speed-up says what a screen minute is.
+  const clock = dataClockView(run);
+  const clockBox = $('data-clock');
+  clockBox.title = clock.title;
+  clockBox.dataset.over = String(clock.over);
+  clockBox.dataset.time = run?.dataset_time ?? '';
+  $('data-clock-prefix').hidden = !clock.prefix;
+  $('data-clock-prefix').textContent = clock.prefix ?? '';
+  $('data-clock-time').textContent = clock.time;
+  $('data-clock-label').textContent = clock.label;
   $('run-state').textContent = feed?.snapshot ? runStateText(run) : '—';
   box.title = run?.driver?.reason ? `Драйвер: ${run.driver.state ?? ''} · ${run.driver.reason}` : '';
   const progress = Number(run?.progress);
@@ -1379,6 +1436,7 @@ function render() {
   renderAttention();
   renderEvents();
   renderToasts();
+  renderSearch();
   renderDiagnostics();
   renderRouteLayers(); // the leader and the overview follow the vehicles
   renderMapObjects();
@@ -1470,6 +1528,9 @@ function onPanelClick(event) {
   else if (action === 'card-menu') { cardMenu = cardMenu === control.dataset.menu ? null : control.dataset.menu; renderCard(); }
   else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
   else if (action === 'tab') setTab(control.dataset.tab);
+  else if (action === 'next-event') goNext(+1);
+  else if (action === 'queue-filter') setQueueFilter(control.dataset.queueFilter);
+  else if (action === 'search-pick') pickSearch(id);
   else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, wallNow()));
   else if (action === 'toggle-ended') { endedOpen = !endedOpen; renderEvents(); }
   else if (action === 'read-ended') queueAction(q => Q.markEndedRead(q));
@@ -1485,7 +1546,7 @@ function onPanelClick(event) {
     contact = {id: null, result: null}; renderCard(); $('contact-open')?.focus();
   } else if (action === 'contact-copy') copyContactText(id);
 }
-for (const panel of ['vehicles', 'card', 'attention', 'events-list', 'events-bulk', 'toasts']) $(panel).addEventListener('click', onPanelClick);
+for (const panel of ['vehicles', 'card', 'attention', 'events-list', 'events-bulk', 'toasts', 'queue-filters', 'vehicle-search-results']) $(panel).addEventListener('click', onPanelClick);
 for (const tab of document.querySelectorAll('.side-tabs [data-tab]')) tab.addEventListener('click', () => setTab(tab.dataset.tab));
 $('events-list').addEventListener('change', event => {
   if (event.target.dataset.action === 'check-event') queueAction(q => Q.toggleSelected(q, event.target.dataset.id));
@@ -1529,19 +1590,94 @@ $('overview').addEventListener('click', () => { follow = false; overview(true); 
 $('follow').addEventListener('click', () => { follow = true; lastFollowAt = 0; focusSelected(); followSelected(); });
 // The header «События» opens the queue tab (v2: the queue replaces the dropdown).
 $('events-toggle').addEventListener('click', () => { $('diagnostics').open = false; setTab('events'); });
-// Hotkeys (v2): J/K next/previous event, W take, S snooze 5 min, C close (reason menu), Esc.
+// J / K and «Следующее J» (Q6): over the displayed queue; after an action, the next event that needs a reaction.
+function goNext(step) {
+  const next = Q.nextQueueEvent(queue, currentEventId(), step, wallNow(), {pin: queuePin, filter: queueFilter});
+  if (!next || !findIncident(store(), next)) return false;
+  openEvent(next);
+  return true;
+}
+
+// ---- «Поиск ТС по номеру (/)» (Q5): a dropdown of matches; choosing opens the card, the queue stays.
+const SEARCH_MAX = 8;
+function searchMatches() {
+  const needle = searchText.trim().toLowerCase();
+  if (!needle) return [];
+  const starts = row => String(row.vehicle.tr_id).toLowerCase().startsWith(needle);
+  // IDs that start with the typed digits first; otherwise the list order (warnings by size).
+  return visibleRows(snapshotRows(), {filter: 'all', query: needle, fresh: isFresh()}).sort((a, b) => starts(b) - starts(a)).slice(0, SEARCH_MAX);
+}
+
+function renderSearch() {
+  const input = $('vehicle-search');
+  const box = $('vehicle-search-results');
+  const open = document.activeElement === input && searchText.trim() !== '';
+  input.setAttribute('aria-expanded', String(open));
+  box.hidden = !open;
+  if (!open) { input.removeAttribute('aria-activedescendant'); patchChildren(box, []); return; }
+  const matches = searchMatches();
+  searchActive = Math.min(searchActive, Math.max(0, matches.length - 1));
+  if (!matches.length) {
+    input.removeAttribute('aria-activedescendant');
+    patchChildren(box, [el('p', {className: 'search-empty', 'data-key': 'empty'}, `Нет ТС с номером «${searchText.trim()}»`)]);
+    return;
+  }
+  patchChildren(box, matches.map(({vehicle, assessment}, index) => {
+    const id = String(vehicle.tr_id);
+    return el('button', {type: 'button', role: 'option', id: `search-option-${index}`, tabindex: '-1', 'data-key': id,
+      'aria-selected': String(index === searchActive), dataset: {action: 'search-pick', id, level: assessment.level}},
+    el('span', {className: 'search-id'}, id), el('span', {className: 'search-value'}, shortValue(vehicle, assessment)));
+  }));
+  input.setAttribute('aria-activedescendant', `search-option-${searchActive}`);
+}
+
+function pickSearch(id) {
+  searchText = '';
+  searchActive = 0;
+  $('vehicle-search').value = '';
+  $('vehicle-search').blur();
+  renderSearch();
+  if (id && findRow(id)) choose(id, true);
+}
+
+$('vehicle-search').addEventListener('input', event => { searchText = event.target.value; searchActive = 0; renderSearch(); });
+$('vehicle-search').addEventListener('focus', renderSearch);
+$('vehicle-search').addEventListener('blur', renderSearch);
+$('vehicle-search').addEventListener('keydown', event => {
+  const count = searchMatches().length;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    if (count) searchActive = (searchActive + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+    renderSearch();
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    const match = searchMatches()[searchActive];
+    if (match) pickSearch(String(match.vehicle.tr_id));
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    if (searchText) { searchText = ''; event.target.value = ''; renderSearch(); } else event.target.blur();
+  }
+});
+// A click on a match must not blur the field first (the dropdown would close under the pointer).
+$('vehicle-search-results').addEventListener('mousedown', event => event.preventDefault());
+
+// Q8: the hotkeys live in the «?» popover of the right column; `?` toggles it, Esc or a click outside closes it.
+const help = $('hotkeys-help');
+document.addEventListener('click', event => { if (help.open && !help.contains(event.target)) help.open = false; });
+
+// Hotkeys (v2): J/K next/previous event, W take, S snooze 5 data min, C close (reason menu), / search, ? help, Esc.
 document.addEventListener('keydown', event => {
   const typing = event.target.closest?.('textarea, select, input:not([type=checkbox]):not([type=radio])');
   if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
   const current = currentEventId();
   const view = current ? Q.eventView(queue, current, wallNow()) : null;
-  if (event.code === 'KeyJ' || event.code === 'KeyK') {
-    const next = Q.nextEvent(queue, current, event.code === 'KeyJ' ? 1 : -1, wallNow());
-    const incident = next ? findIncident(store(), next) : null;
-    if (incident) { event.preventDefault(); openEvent(next); }
-  } else if (event.code === 'KeyW' && view?.can.take) { event.preventDefault(); takeEvent(current); }
+  if (event.key === '/') { event.preventDefault(); $('vehicle-search').focus(); }
+  else if (event.key === '?') { event.preventDefault(); help.open = !help.open; }
+  else if (event.code === 'KeyJ' || event.code === 'KeyK') { if (goNext(event.code === 'KeyJ' ? 1 : -1)) event.preventDefault(); }
+  else if (event.code === 'KeyW' && view?.can.take) { event.preventDefault(); takeEvent(current); }
   else if (event.code === 'KeyS' && view?.can.snooze) { event.preventDefault(); snoozeEvent(current, Q.SNOOZE_DEFAULT_MIN); }
   else if (event.code === 'KeyC' && view?.can.close) { event.preventDefault(); cardMenu = 'close'; renderCard(); }
+  else if (event.key === 'Escape' && help.open) help.open = false;
   else if (event.key === 'Escape') {
     if (cardMenu || bulkMenu) { cardMenu = null; bulkMenu = null; renderCard(); renderEvents(); } else if (selected) choose(null, false);
   }
