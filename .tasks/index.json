@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T18:31:09.671Z",
+  "generated_at": "2026-09-27T18:55:37.734Z",
   "tasks": [
     {
       "id": "T-10",
@@ -175,23 +175,28 @@
     {
       "id": "T-16",
       "title": "UX: карточка автобуса — блок прогноза, состояния, тексты и формат",
-      "status": "doing",
+      "status": "review",
       "type": "feature",
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T17:42:56.765Z",
-      "updated_at": "2026-09-27T17:42:56.765Z",
+      "updated_at": "2026-09-27T18:31:58.642Z",
       "stream": "T",
       "path": "T-16-2026-09-27-ux",
       "work_items_total": 2,
-      "work_items_done": 0,
-      "work_items_remaining": [
-        "Реализация §C.",
-        "Доказательства."
-      ],
+      "work_items_done": 2,
+      "work_items_remaining": [],
       "subtask_count": 0,
-      "last_event": "2026-09-27T17:42:56.853Z",
-      "latest_status_note": null,
+      "last_event": "2026-09-27T18:31:58.654Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T18:31:58.472Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Готово в ветке worktree-agent-a9bf76eca474cad1d @3bb6e23: C1–C7, forecast.js (FORECAST_STATES, добавить 'warming'), формат +м:сс; npm 75/75, browser-check regression 124/124 (live не запускался). 1366-скриншоты на старой раскладке — перепроверить в T-19.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
       "parent_id": "",
       "subtasks": []
     },
@@ -254,12 +259,12 @@
     {
       "id": "T-19",
       "title": "UX: интеграция, проверка и выпуск правок диспетчерского экрана",
-      "status": "planned",
+      "status": "doing",
       "type": "feature",
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T17:43:15.943Z",
-      "updated_at": "2026-09-27T18:22:56.009Z",
+      "updated_at": "2026-09-27T18:38:54.279Z",
       "stream": "T",
       "path": "T-19-2026-09-27-ux",
       "work_items_total": 3,
@@ -270,16 +275,41 @@
         "QA и ship."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T18:22:56.021Z",
+      "last_event": "2026-09-27T18:38:54.295Z",
       "latest_status_note": {
-        "ts": "2026-09-27T18:22:56.021Z",
+        "ts": "2026-09-27T18:38:54.295Z",
         "event": "note",
         "actor": "manager",
-        "text": "Из T-15 для интеграции: конфликтные места с T-18 — ветка Escape в keydown, aria-current строки очереди, max-width полосы внимания (сохранить '- var(--card-overlay)'); с T-16 — первые строки renderCard (ветка пустого состояния); layoutLabels использует общий список оверлеев. Оба трогают browser-check.mjs и package.json (строка test). Остаток: фокус не возвращается в строку очереди после ×; README-описание раскладки.",
+        "text": "ЦЕЛЬ (пользователь 21:40 МСК): всё объединено в main, работает и удовлетворяет требованиям. Критерии: (1) до 23:00 — ux/dispatcher-layout влит в main и dev, npm test + pytest + build зелёные, browser-check live+regression 0 fail, QA ACCEPTED без P1; (2) до 23:50 — разрешены мелкие проверенные улучшения отдельными коммитами/merge (каждый: npm test, build, browser-check regression, скриншот), без риска для UI; кандидаты — остаток T-15…T-18 и T-20 W1/W2 если малы; (3) после 23:50 — только фиксация состояния задач.",
         "from": null,
         "to": null,
         "source": "status_note"
       },
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-20",
+      "title": "Демо: явный горизонт прогноза 10–15 мин и полное окно телеметрии",
+      "status": "planned",
+      "type": "feature",
+      "priority": "p1",
+      "owner": "claude",
+      "created_at": "2026-09-27T18:37:38.879Z",
+      "updated_at": "2026-09-27T18:37:38.879Z",
+      "stream": "T",
+      "path": "T-20-2026-09-27-10-15",
+      "work_items_total": 4,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "Горизонт прогноза на экране.",
+        "Доказательство требования 10–15 мин.",
+        "Полное окно демо и скорость.",
+        "Прогоны вне утра."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T18:37:38.900Z",
+      "latest_status_note": null,
       "parent_id": "",
       "subtasks": []
     },

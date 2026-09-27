@@ -1,1 +1,5 @@
 {"ts":"2026-09-27T17:42:56.853Z","event":"created","actor":"claude","data":{"status":"doing"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:31:58.124Z","event":"work_item_done","actor":"manager","data":{"item":1},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:31:58.288Z","event":"work_item_done","actor":"manager","data":{"item":2},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:31:58.472Z","event":"note","actor":"manager","data":{"kind":"status_note","text":"Готово в ветке worktree-agent-a9bf76eca474cad1d @3bb6e23: C1–C7, forecast.js (FORECAST_STATES, добавить 'warming'), формат +м:сс; npm 75/75, browser-check regression 124/124 (live не запускался). 1366-скриншоты на старой раскладке — перепроверить в T-19."},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}
+{"ts":"2026-09-27T18:31:58.654Z","event":"status_changed","actor":"manager","data":{"from":"doing","to":"review"},"session_id":"027cbf05-c979-436f-bd31-6e2a354bd3bf"}

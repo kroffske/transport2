@@ -2,7 +2,7 @@
 schema: task.v3
 id: T-19
 title: "UX: интеграция, проверка и выпуск правок диспетчерского экрана"
-status: planned
+status: doing
 review_required: qa
 plan_review_profile: none
 plan_review_gate: none
@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T17:43:15.943Z"
-updated_at: "2026-09-27T18:22:56.009Z"
+updated_at: "2026-09-27T18:38:54.279Z"
 parent: null
 depends_on: []
 gstack_refs: {}

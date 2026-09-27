@@ -2,7 +2,7 @@
 schema: task.v3
 id: T-16
 title: "UX: карточка автобуса — блок прогноза, состояния, тексты и формат"
-status: doing
+status: review
 review_required: qa
 plan_review_profile: none
 plan_review_gate: none
@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T17:42:56.765Z"
-updated_at: "2026-09-27T17:42:56.765Z"
+updated_at: "2026-09-27T18:31:58.642Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -39,11 +39,11 @@ Comment: Часть объединённого UX-ревью (T-12 GPT + T-13 Cl
 
 ## Work items
 
-- [ ] W1: Реализация §C.
+- [x] W1: Реализация §C.
   - Deliverable: коммит в ветке worktree; тесты `npm --prefix dashboard test` зелёные.
   - Contribution: закрывает свою часть единого ревью.
   - Proxy result: изменения без обновлённых тестов или без скриншотов.
-- [ ] W2: Доказательства.
+- [x] W2: Доказательства.
   - Deliverable: скриншоты до/после 1920×1080 и 1366×768 в `artifacts/` этой задачи + handoff.md (что сделано, отклонения, остаток, затронутые функции).
   - Contribution: T-19 интегрирует без повторного выяснения.
   - Proxy result: «сделано» без скриншотов.

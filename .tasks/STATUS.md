@@ -1,7 +1,7 @@
-# Tasks — 9 active, 3 waiting, 3 backlog, 4 archived
+# Tasks — 9 active, 4 waiting, 3 backlog, 4 archived
 
 ```text
-NEXT:    T-16 · T-16-2026-09-27-ux/task.md → Реализация §C.
+NEXT:    T-19 · T-19-2026-09-27-ux/task.md → Слияние T-15…T-18 и сборка.
 RULES:   .locus/soul.md (## How we work, ## Decision principles) + task.md Boundary/Verification
 WHY:     .locus/soul.md (## Strategic outcome)
 REFRESH: locus task sync-index
@@ -11,19 +11,20 @@ REFRESH: locus task sync-index
 |----|------|-------|--------|-----|-------|----------|------|
 | T-13 | research | [UX/UI-ревью диспетчерского дашборда (Claude, парал](T-13-2026-09-27-ux-ui-claude-t-12/task.md) | doing | p1 | claude | █████ 5/5 | Ревью готово: artifacts/ux-review.md, screens/ (живые 0x/1x, подмена снимка 2x–… |
 | T-14 | feature | [Настройки оператора: выбор своих маршрутов в демо](T-14-2026-09-27-/task.md) | doing | p1 | claude | ████ 4/4 | Готово в рабочем дереве (не закоммичено): pytest 106 passed; npm test 63 pass; … |
-| T-16 | feature | [UX: карточка автобуса — блок прогноза, состояния, ](T-16-2026-09-27-ux/task.md) | doing | p1 | claude | ░░ 0/2<br>☐ Реализация §C.<br>☐ Доказательства. |  |
+| T-19 | feature | [UX: интеграция, проверка и выпуск правок диспетчер](T-19-2026-09-27-ux/task.md) | doing | p1 | claude | ░░░ 0/3<br>☐ Слияние T-15…T-18 и сборка.<br>☐ Проверка §V.<br>☐ QA и ship. | ЦЕЛЬ (пользователь 21:40 МСК): всё объединено в main, работает и удовлетворяет … |
 | T-5 | research | [Оптимизировать ML для score выше 0.70](T-5-2026-09-25-ml-score-0-70/task.md) | doing |  | codex | █░ 1/2<br>☐ Проверенный кандидат submission и вывод… | Локальная оптимизация завершена: выбран residual depth4/800 по CV (78.03 -> 76.… |
 | T-6 | feature | [Длительный поток NDTP и интерактивная карта задерж](T-6-2026-09-26-ndtp/task.md) | doing | p1 | codex | ░░░░░░░░ 0/8<br>☐ D01 — основной экран и проверенный base…<br>☐ D02A — повторяемый интерфейсный сценари…<br>+6 more… | Запущен native Pi workflow transport-live, run 20260926-163549-febd; task artif… |
 | T-7 | feature | [Единое демо: официальный эмулятор → ML → карта с м](T-7-2026-09-27-ml/task.md) | doing | p1 | claude | █████░░░░░ 7/13<br>☐ Road-first карта и символы (agent B, по…<br>☐ Документация и финальная matrix (agent …<br>+4 more… | 21:30 MSK: W14–W16 + UI v2 done and in main (last product commit 5e07f00). Fina… |
 | T-12 | research | [UX/UI-ревью диспетчерского дашборда: карточка авто](T-12-2026-09-27-ux-ui/task.md) | planned | p1 | claude | ░░░░░ 0/5<br>☐ Живой проход и скриншоты.<br>☐ Сверка сборки и реализации прогноза.<br>+3 more… |  |
-| T-19 | feature | [UX: интеграция, проверка и выпуск правок диспетчер](T-19-2026-09-27-ux/task.md) | planned | p1 | claude | ░░░ 0/3<br>☐ Слияние T-15…T-18 и сборка.<br>☐ Проверка §V.<br>☐ QA и ship. | Из T-15 для интеграции: конфликтные места с T-18 — ветка Escape в keydown, aria… |
+| T-20 | feature | [Демо: явный горизонт прогноза 10–15 мин и полное о](T-20-2026-09-27-10-15/task.md) | planned | p1 | claude | ░░░░ 0/4<br>☐ Горизонт прогноза на экране.<br>☐ Доказательство требования 10–15 мин.<br>+2 more… |  |
 | T-8 | feature | [Пакет сдачи формы и долговечные доказательства C1/](T-8-2026-09-27-c1-c3/task.md) | planned | p0 | claude | ░░░░░ 0/5<br>☐ C1 в форме (сейчас, до 18:30).<br>☐ Внешние файлы в README (сейчас, передат…<br>+3 more… | 21:30 MSK: form text final (docs/submission-form.md, links to main), clean clon… |
 
-### Waiting / inactive (3)
+### Waiting / inactive (4)
 
 | ID | Type | Title | Status | Pri | Owner | Progress | Note |
 |----|------|-------|--------|-----|-------|----------|------|
 | T-15 | feature | [UX: три колонки, панель карточки и кадр карты](T-15-2026-09-27-ux/task.md) | review | p1 | claude | ██ 2/2 | Готово в ветке worktree-agent-ace16e6ecc34c2b85 @57443b6: L1–L7 (L6 базово), ca… |
+| T-16 | feature | [UX: карточка автобуса — блок прогноза, состояния, ](T-16-2026-09-27-ux/task.md) | review | p1 | claude | ██ 2/2 | Готово в ветке worktree-agent-a9bf76eca474cad1d @3bb6e23: C1–C7, forecast.js (F… |
 | T-17 | feature | [UX: обозначения ролей остановок на карте и легенда](T-17-2026-09-27-ux/task.md) | review | p1 | claude | ██ 2/2 | Готово в ветке worktree-agent-ad7e68a81680f2a75 @8944d1a: 4 роли остановок форм… |
 | T-18 | feature | [UX: очередь, полоса внимания, поиск ТС и подписи в](T-18-2026-09-27-ux/task.md) | review | p1 | claude | ██ 2/2 | Готово в ветке worktree-agent-aa0e096f52742f19a @a48472b: Q1–Q8; npm 64/64, bro… |
 
@@ -46,4 +47,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 4 closed tasks total_
 
-_Generated: 2026-09-27T18:31:09.671Z_
+_Generated: 2026-09-27T18:55:37.734Z_
