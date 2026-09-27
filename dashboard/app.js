@@ -1331,7 +1331,7 @@ function eventTarget(view) {
   if (!v?.target_stop_id || a.level === 'nodata' || a.warming) return null;
   const no = String(v.tr_id) === selected ? numbersFor(v, routeRows(shownRoute())).target : null;
   const where = heldForNewTarget(v) ? 'у прошлой цели' : no ? `у ост. ${no}` : 'у цели';
-  return `${where} · ${planText(v.target_time_begin) ?? '?'} → ${shiftedText(v.target_time_begin, v.prediction_s) ?? '?'}`;
+  return `${where} · ${planText(v.target_time_begin) ?? '?'}\u00a0→\u00a0${shiftedText(v.target_time_begin, v.prediction_s) ?? '?'}`; // the range never breaks
 }
 
 function queueItem(view) {
@@ -1346,7 +1346,7 @@ function queueItem(view) {
     dataset: {action: 'check-event', id: view.id}});
   check.checked = view.selected;
   check.disabled = view.group === 'ended';
-  item.append(check, el('span', {className: 'event-title'}, `ТС ${view.tr_id}`), el('span', {className: 'event-value'}, eventValue(view)),
+  item.append(check, el('span', {className: 'event-title'}, `ТС\u00a0${view.tr_id}`), el('span', {className: 'event-value'}, eventValue(view)),
     el('span', {className: 'event-meta'}, eventTarget(view) ?? meta), slaBadge(view.badge));
   if (view.sla) item.append(el('span', {className: 'sla-bar', dataset: {tone: view.badge.tone}, style: `width:${Math.round(view.sla.pct)}%`}));
   return item;

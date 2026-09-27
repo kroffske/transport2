@@ -237,7 +237,9 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .attention-text { display: grid; gap: 1px; min-width: 0; }
 .attention-text > span:last-child { font-weight: 600; white-space: nowrap; }
 /* Q1: a one-line summary — «Требуют реакции: 2 · ближайший срок 0:37 · [Следующее J]». */
-.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; white-space: nowrap; font-weight: 600; }
+.attention[data-kind=needs] .attention-text, .attention[data-kind=open] .attention-text { display: block; font-weight: 600; }
+/* A narrow bar (card panel open at 1366) wraps between words onto a second line, never mid-word or clipped. */
+.attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { white-space: nowrap; }
 .attention[data-kind=needs] .attention-title, .attention[data-kind=open] .attention-title { font-size: 14px; text-transform: none; letter-spacing: 0; }
 .attention[data-kind=open] .attention-title { color: var(--ink); }
 .attention-detail { font-variant-numeric: tabular-nums; }
