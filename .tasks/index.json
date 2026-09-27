@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-26T03:37:06.865Z",
+  "generated_at": "2026-09-27T02:31:46.831Z",
   "tasks": [
     {
       "id": "T-5",
@@ -25,6 +25,43 @@
         "event": "note",
         "actor": "manager",
         "text": "Локальная оптимизация завершена: выбран residual depth4/800 по CV (78.03 -> 76.21), test 62.35 -> 56.39, audit same-fit 63.97 -> 65.93. 21 тест; fresh CSV byte-identical, API parity. submission.csv обновлён, T-3 backup сохранён. W2 остаётся открытым до значения MAE_TARGET/platform score: официальный >0.70 не подтверждён. Без commit/push/upload.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-6",
+      "title": "Длительный поток NDTP и интерактивная карта задержек Москвы",
+      "status": "doing",
+      "type": "feature",
+      "priority": "p1",
+      "owner": "codex",
+      "created_at": "2026-09-26T16:29:38.759Z",
+      "updated_at": "2026-09-26T16:42:01.848Z",
+      "stream": "T",
+      "path": "T-6-2026-09-26-ndtp",
+      "work_items_total": 8,
+      "work_items_done": 0,
+      "work_items_remaining": [
+        "D01 — основной экран и проверенный baseline.",
+        "D02A — повторяемый интерфейсный сценарий.",
+        "D02B — отдельный сквозной ML-фрагмент.",
+        "D03 — остановки, два направления и честная подсветка.",
+        "D04 — центр событий и жизненный цикл инцидента.",
+        "D05 — минимальное рабочее действие диспетчера.",
+        "D06 — реальная сборка, полировка и репетиция M2.",
+        "D07 — локальный пакет сдачи и честный pitch."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T02:31:46.804Z",
+      "latest_status_note": {
+        "ts": "2026-09-26T16:38:04.745Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Запущен native Pi workflow transport-live, run 20260926-163549-febd; task artifacts/launch/supervisor.json содержит argv/cwd и retained tmux transport2-t6:pi. Оба исходника прошли node --check и orchestration-only source checker; task lint без findings. Heartbeat transport2-supervisor-ndtp наблюдает каждые 10 минут. Текущий этап plan, runtime начал call-0001 с requested openai-codex/gpt-6-sol.",
         "from": null,
         "to": null,
         "source": "status_note"

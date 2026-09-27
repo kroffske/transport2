@@ -15,6 +15,7 @@ __pycache__/
 /.tasks/**/artifacts/
 /notebooks/.tasks/
 /.locus/settings.json
+/.locus/runtime/
 /.locus-pi/runs/
 /.locus-pi/logs/
 /.locus-pi/workspaces/
