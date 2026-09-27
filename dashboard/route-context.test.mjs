@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BASIS, MIN_STOP_GAP_PX, delayText, offsetText, routeLayersFor, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
+import {BASIS, MIN_STOP_GAP_PX, NBSP, agoText, compactDelay, delayText, delayWords, stopNumbers, offsetText, routeLayersFor, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
   thinStops, undrawnCount} from './route-context.js';
 
 const usable = {modelUsable: true, factUsable: true};
@@ -22,7 +22,7 @@ test('stops before the target carry the current delay as a fact, the target the 
     ['1', '06:41', null, null],
     ['2', '06:52', '06:54', 'fact'],
     ['3', '06:55', '06:57', 'fact'],
-    ['4', '06:58', '07:00:20', 'model'],
+    ['4', '06:58', '07:00', 'model'],
     ['5', '07:03', '07:05', 'assumption'],
   ]);
   assert.equal(BASIS.fact, 'по факту, не прогноз');
@@ -43,7 +43,7 @@ test('no model value or no fact: only plan times, nothing borrowed from the othe
   const noFact = stopRows(route({cur_dev_s: null}), usable);
   assert.deepEqual(noFact.map(r => r.basis), [null, null, null, 'model', 'assumption']);
   const planned = stopRows(route({stops: [{stop_id: 9, time: '07:00:30', lon: 37.6, lat: 55.7, role: 'planned'}]}), usable);
-  assert.deepEqual([planned[0].plan, planned[0].expected], ['07:00:30', null]);
+  assert.deepEqual([planned[0].plan, planned[0].expected], ['07:00', null], 'plan times are ЧЧ:ММ (C4)');
 });
 
 test('a negative delay moves the time earlier; the day wraps at midnight', () => {
@@ -132,14 +132,58 @@ test('route_line decides the selected-route layers; the UI never splits the line
   assert.equal(offsetText(null), null);
 });
 
-test('one delay format: no decimal minutes, U+2212 for early, «по графику» under 30 s', () => {
+// Written with a visible «_» for the non-breaking space inside a value.
+const nb = text => text.replaceAll('_', NBSP);
+const MINUS = String.fromCharCode(0x2212);
+
+test('full delay format (C4): no decimal minutes, U+2212 for early, «по графику» under 30 s, whole minutes from 10 min', () => {
   assert.equal(delayText(10), 'по графику');
   assert.equal(delayText(-29), 'по графику');
-  assert.equal(delayText(45), '+45 с');
-  assert.equal(delayText(335), '+5 мин 35 с');
-  assert.equal(delayText(300), '+5 мин');
-  assert.equal(delayText(-70), '\u22121 мин 10 с');
-  assert.equal(delayText(335, {short: true}), '+6 мин');
-  assert.equal(delayText(45, {short: true}), '+45 с');
+  assert.equal(delayText(29.6), nb('+30_с'), '29.6 s rounds to 30 s: past the on-time band');
+  assert.equal(delayText(45), nb('+45_с'));
+  assert.equal(delayText(109), nb('+1_мин_49_с'), '1:49 is never «+2 мин» (the warning threshold is > 2 мин)');
+  assert.equal(delayText(335), nb('+5_мин_35_с'));
+  assert.equal(delayText(300), nb('+5_мин'));
+  assert.equal(delayText(-70), nb(`${MINUS}1_мин_10_с`));
+  assert.equal(delayText(599), nb('+9_мин_59_с'));
+  assert.equal(delayText(600), nb('+10_мин'));
+  assert.equal(delayText(725), nb('+12_мин'), 'from 10 min whole minutes, cut down like the compact form');
+  assert.equal(delayText(779), nb('+12_мин'));
+  assert.equal(delayText(-725), nb(`${MINUS}12_мин`));
+  assert.ok(!delayText(109).includes(' '), 'no breakable space inside a value');
   assert.equal(delayText(null), null);
+  assert.equal(delayText('abc'), null);
+});
+
+test('compact delay format (C4): «+м:сс», U+2212, never rounded to whole minutes', () => {
+  assert.equal(compactDelay(109), '+1:49');
+  assert.equal(compactDelay(200), '+3:20');
+  assert.equal(compactDelay(-40), `${MINUS}0:40`);
+  assert.equal(compactDelay(725), '+12:05');
+  assert.equal(compactDelay(-86.34), `${MINUS}1:26`);
+  assert.equal(compactDelay(30), '+0:30');
+  assert.equal(compactDelay(29), 'по графику');
+  assert.equal(compactDelay(-29.4), 'по графику');
+  assert.equal(compactDelay(null), null);
+  // The same value in both forms agrees on the minutes.
+  for (const s of [95, 109, 599, 600, 725, 3599]) assert.ok(delayText(s).startsWith(compactDelay(s).split(':')[0]), `${s}`);
+});
+
+test('the fact and the age in words', () => {
+  assert.equal(delayWords(60), nb('опаздывает на 1_мин'));
+  assert.equal(delayWords(-40), nb('опережает на 40_с'));
+  assert.equal(delayWords(15), 'идёт по графику');
+  assert.equal(delayWords(null), null);
+  assert.equal(agoText(18.4), nb('18_с назад'));
+  assert.equal(agoText(240), nb('4_мин назад'));
+  assert.equal(agoText(-3), nb('0_с назад'));
+  assert.equal(agoText(null), null);
+});
+
+test('stop numbers: the target, the plan\'s new target while a forecast is held, the last passed stop', () => {
+  const rows = stopRows(route(), usable);
+  assert.deepEqual(stopNumbers(rows), {target: 4, newTarget: null, fact: 1});
+  assert.deepEqual(stopNumbers(rows, {plannedTargetId: 5}).newTarget, {no: 5, plan: '07:03', stop_id: '5'});
+  assert.equal(stopNumbers(rows, {plannedTargetId: 2}).newTarget, null, 'the new target is after the held one');
+  assert.deepEqual(stopNumbers([]), {target: null, newTarget: null, fact: null});
 });

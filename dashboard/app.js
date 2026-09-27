@@ -3,11 +3,12 @@ import {PMTiles, Protocol} from 'pmtiles';
 import {NOTE_MAX, assess, countByFilter, findIncident, incidentCounts, incidentForVehicle, isHeld, visibleRows} from './incidents.js';
 import * as Q from './event-queue.js';
 import {patchChildren, patchText} from './dom.js';
-import {placeLabels} from './map-labels.js';
+import {forecastView, heldForNewTarget} from './forecast.js';
+import {nextLabelText, placeLabels, targetLabelText, vehicleLabelText} from './map-labels.js';
 import {drawSymbol, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
 import {reasonText} from './reasons.js';
-import {BASIS, coordOk, delayText, durationText, labelledStops, offsetText, planText, shiftedText,
-  stopRows, undrawnCount} from './route-context.js';
+import {BASIS, ON_TIME_S, compactDelay, coordOk, delayText, durationText, labelledStops, offsetText, planText, shiftedText,
+  stopNumbers, stopRows, undrawnCount} from './route-context.js';
 import {createRouteLayers} from './route-layers.js';
 import {NO_ROUTE, defaultSettings, inScope, parseSettings, routeChoices, routeOf, scopeSummary, setAll, toggleRoute,
   watches} from './route-scope.js';
@@ -180,7 +181,19 @@ const shownRoute = () => (route.data && route.id === selected && selected
 // value only while the row is a current `normal` prediction (the same rule as the headline), the
 // fact only while Backend answers.
 const usability = v => ({modelUsable: Boolean(v) && assess(v, isFresh()).level !== 'nodata' && !assess(v, isFresh()).warming, factUsable: Boolean(v) && isFresh()});
-const routeRows = data => (data ? stopRows(data, {shiftAfterTarget, ...usability(findRow(selected))}) : []);
+// While a forecast is held for the previous target, nothing after it is shifted by that value: the
+// plan's new target lies there, and the old result does not apply to it (C3).
+const routeRows = data => {
+  const v = findRow(selected);
+  return data ? stopRows(data, {shiftAfterTarget: shiftAfterTarget && !(v && heldForNewTarget(v)), ...usability(v)}) : [];
+};
+// «ост. N» of the selected vehicle's stops (route-context.js stopNumbers). The target number only
+// while the route's target is the row's target (the route may lag one snapshot behind).
+function numbersFor(v, rows) {
+  const numbers = stopNumbers(rows, {plannedTargetId: heldForNewTarget(v) ? v.planned_target_stop_id : null});
+  const target = rows.find(r => r.role === 'target');
+  return {...numbers, target: target && target.stop_id === String(v.target_stop_id) ? numbers.target : null};
+}
 
 // ---- Map: MapLibre base, locked top-down view, local PMTiles ------------------------------
 maplibregl.setWorkerUrl('/static/map-worker.js');
@@ -412,15 +425,18 @@ function stopLabel(kind, lngLat, content) {
 // Without a target the nearest planned stop still gets its plan time (labelledStops).
 function renderStopLabels(vehicle, target) {
   if (!vehicle) { stopLabel('target', null); stopLabel('next', null); return; }
+  const rows = routeRows(shownRoute());
   if (target) {
     const assessment = assess(vehicle, isFresh());
-    const expected = shiftedText(vehicle.target_time_begin, assessment.level !== 'nodata' ? vehicle.prediction_s : null, {seconds: true});
-    stopLabel('target', target, `Цель · план ${planText(vehicle.target_time_begin) ?? '?'}${expected ? ` → ${expected} · ${BASIS.model}`
-      : assessment.warming ? ' · прогноз готовится' : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`);
+    const current = assessment.level !== 'nodata';
+    const end = currentRun()?.dataset_end;
+    stopLabel('target', target, targetLabelText({no: numbersFor(vehicle, rows).target, plan: planText(vehicle.target_time_begin),
+      expected: current ? shiftedText(vehicle.target_time_begin, vehicle.prediction_s) : null, delay: vehicle.prediction_s,
+      held: current && heldForNewTarget(vehicle), stale: assessment.hasPrediction, warming: assessment.warming,
+      late: Boolean(end && vehicle.target_time_begin && String(vehicle.target_time_begin) > String(end))}));
   } else stopLabel('target', null);
-  const next = labelledStops(routeRows(shownRoute())).next;
-  stopLabel('next', next ? [next.lon, next.lat] : null,
-    next ? `план ${next.plan}${next.expected ? ` → ${next.expected} · по факту` : ''}` : '');
+  const next = labelledStops(rows).next;
+  stopLabel('next', next ? [next.lon, next.lat] : null, next ? nextLabelText(next) : '');
 }
 
 // Editable DOM labels for the vehicles; the dot itself stays in the Three.js layer.
@@ -451,10 +467,10 @@ function renderLabels(rows) {
     // Without a current prediction the label is the ID only (M-3, H-2): a map full of «нет прогноза»
     // reads as a failure and hides the warnings. The reason stays in the tooltip, list and card.
     const nodata = assessment.level === 'nodata';
-    element.textContent = nodata ? id : `${id} · ${shortValue(vehicle, assessment, {short: true})}`;
+    element.textContent = vehicleLabelText(id, {level: assessment.level, prediction_s: vehicle.prediction_s, warming: assessment.warming});
     element.classList.toggle('is-dimmed', nodata && dimNoData && id !== selected && !gpsMarks.has(id));
     element.classList.toggle('is-gps-marked', gpsMarks.has(id));
-    element.title = nodata ? `${id} · ${runOver(currentRun()) ? 'прогон завершён' : shortValue(vehicle, assessment, {short: true})}` : '';
+    element.title = nodata ? `${id} · ${runOver(currentRun()) ? 'прогон завершён' : shortValue(vehicle, assessment)}` : '';
     marker.setLngLat([Number(vehicle.lon), Number(vehicle.lat)]);
   }
   for (const [id, marker] of labels) if (!keep.has(id)) { marker.remove(); labels.delete(id); }
@@ -640,12 +656,12 @@ function refreshRoute() {
 }
 
 // ---- Panels ------------------------------------------------------------------------------
-// The delay of a row: full in the list, whole minutes on map labels (F-1).
-function shortValue(vehicle, assessment, {short = false} = {}) {
+// The delay of a row in the compact form «+3:20» (C4), the same as the queue and the map labels.
+function shortValue(vehicle, assessment) {
   if (assessment.warming) return 'по графику'; // W16: on its route, the first forecast is being computed
-  if (assessment.level !== 'nodata') return delayText(vehicle.prediction_s, {short});
+  if (assessment.level !== 'nodata') return compactDelay(vehicle.prediction_s);
   if (runOver(currentRun())) return 'прогон завершён';
-  return assessment.hasPrediction ? `${delayText(vehicle.prediction_s, {short})} · устарел` : '—';
+  return assessment.hasPrediction ? `${compactDelay(vehicle.prediction_s)} · устарел` : '—';
 }
 
 const capital = value => value ? value[0].toUpperCase() + value.slice(1) : value;
@@ -740,18 +756,39 @@ function field(dl, label, value, hint) {
   return dd;
 }
 
-// «1 мин 35 с (факт)»; a negative value is running ahead of the timetable.
-function currentDelayText(seconds) {
-  if (seconds == null || !Number.isFinite(Number(seconds))) return 'неизвестно';
-  const value = Math.round(Number(seconds));
-  if (value === 0) return 'по графику (факт)';
-  return value > 0 ? `${durationText(value)} (факт)` : `опережение ${durationText(value)} (факт)`;
-}
-
 const runOver = run => run?.state === 'completed';
 
-// Card order (UI review L-1): a sticky top (ID, level, the forecast and its target), then the stops,
-// facts, the event, and «Технические подробности» collapsed. Only the card scrolls.
+// Card details the dispatcher opened or closed (by element id), kept across polls: the patch
+// copies attributes from the fresh node, so `open` must come from here. «Шаги реакции» per event:
+// open by default once the event is in work (C1), until the dispatcher closes it.
+const cardOpen = new Set();
+const stepsPref = new Map(); // event id → open
+let passedOpen = false; // «ещё N пройденных» expanded (C6), per card
+let afterOpen = false; // «Ещё N» after the target expanded, per card
+let revealedFor = null; // the vehicle whose target row was scrolled into view
+
+// The forecast block (C2–C3): texts from forecast.js, one state per row.
+function forecastBlock(v, rows) {
+  const run = currentRun();
+  const f = forecastView(v, {fresh: isFresh(), runOver: runOver(run), datasetEnd: run?.dataset_end ?? null,
+    dataTime: sourceClock() ?? run?.dataset_time ?? null, numbers: numbersFor(v, rows), targetOnMap: Boolean(targetPoint(v))});
+  const help = el('details', {className: 'help', id: 'forecast-help', open: cardOpen.has('forecast-help')},
+    el('summary', {'aria-label': 'Что такое цель прогноза', title: 'Что такое цель прогноза'}, 'ⓘ'), el('p', {}, f.help));
+  const box = el('section', {className: 'forecast', id: 'forecast', 'data-key': 'forecast', 'aria-label': 'Прогноз опоздания на целевой остановке',
+    dataset: {state: f.state, tone: f.tone}}, el('div', {className: 'forecast-head'}, el('b', {}, f.head), help));
+  if (f.rows.length) {
+    box.append(el('dl', {className: 'forecast-rows'}, ...f.rows.flatMap(([label, value]) => [el('dt', {}, label), el('dd', {}, value)])));
+  }
+  if (f.big) box.append(el('div', {className: 'forecast-big', dataset: {size: f.big.size}}, f.big.label ? el('span', {}, f.big.label) : null, el('strong', {}, f.big.value)));
+  const fact = el('p', {className: 'forecast-fact'}, f.fact);
+  const lines = f.lines.map(line => el('p', {className: `forecast-line${line.kind === 'updating' ? ' pulse' : ''}`, dataset: {kind: line.kind},
+    ...(line.kind === 'updating' ? {id: 'prediction-updating', title: f.updating} : {})}, line.text));
+  box.append(...(f.tone === 'live' ? [fact, ...lines] : [...lines, fact]));
+  return box;
+}
+
+// Card order (C1): a sticky top (header, the forecast block, the event status and the actions),
+// then warnings, the stops, and «Шаги реакции», «История», «Технические подробности» collapsed.
 function renderCard() {
   const card = $('card');
   const v = findRow(selected);
@@ -769,7 +806,6 @@ function renderCard() {
   }
   const fresh = isFresh();
   const assessment = assess(v, fresh);
-  const run = currentRun();
   const top = el('div', {className: 'card-top', 'data-key': 'top'});
   const close = el('button', {type: 'button', id: 'card-close', className: 'card-close', 'aria-label': 'Закрыть карточку', dataset: {action: 'close-card'}}, '×');
   const head = el('header', {},
@@ -778,66 +814,9 @@ function renderCard() {
     el('span', {className: 'level-chip', dataset: {level: assessment.level}, 'data-gps-marked': gpsMarks.has(String(v.tr_id)) ? 'true' : null},
       gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен' : assessment.warming ? 'По графику' : assessment.level === 'nodata' && assessment.hasPrediction ? 'Прогноз устарел' : LEVEL[assessment.level].label),
     close);
-
-  // Headline (C-2): the value, one line about the target, one line about the source.
-  const outsideRun = v.target_time_begin && run?.dataset_end && String(v.target_time_begin) > String(run.dataset_end);
-  const prediction = assessment.level !== 'nodata' ? v.prediction_s : null;
-  const expected = shiftedText(v.target_time_begin, prediction, {seconds: true});
-  const value = el('strong');
-  const targetLine = el('small', {id: 'headline-target'});
-  const source = el('small', {className: 'headline-source'});
-  if (assessment.warming) {
-    value.textContent = 'По графику · прогноз готовится';
-    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}`;
-    const eta = Number.isFinite(Number(v.warming_eta_s)) && v.warming_eta_s !== null ? durationText(v.warming_eta_s) : null;
-    source.textContent = `ТС вышло на маршрут; первый прогноз считается${eta ? ` — примерно через ${eta} (время данных)` : ''} и появится здесь сам.`;
-  } else if (assessment.level !== 'nodata') {
-    value.textContent = delayText(v.prediction_s);
-    const held = isHeld(v);
-    // W16: Backend says why it holds; only a target change means «новая цель считается».
-    const newTarget = held && (v.prediction_hold_reason === 'target_changed' || (v.prediction_hold_reason == null && v.reason === 'prediction_held_previous_target'));
-    targetLine.textContent = `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}, ожидаем ≈ ${expected ?? '?'}${newTarget ? ' · новая цель считается' : ''}`;
-    source.append(`${BASIS.model} · обновлён ${ageText(v.prediction_age_s)}`);
-    if (v.prediction_updating === true || held) {
-      source.append(' ', el('span', {id: 'prediction-updating', className: 'pulse',
-        title: held && !newTarget
-          ? `Нового прогноза пока нет; показан последний (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных). Backend держит его до 5 мин, пока не придёт новый.`
-          : held
-          ? `Цель сменилась по плану; прогноз для новой цели считается первым в очереди. Пока показан прогноз прошлой цели вместе с этой целью (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`
-          : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний прогноз для этой цели (возраст ${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных).`}, 'обновляется'));
-    }
-  } else if (assessment.hasPrediction) {
-    value.textContent = `${delayText(v.prediction_s)} · устарел`;
-    targetLine.textContent = outsideRun ? 'Цель за пределами окна данных прогона' : `Цель — плановая остановка ${planText(v.target_time_begin) ?? '?'}`;
-    source.textContent = !fresh ? 'Последний известный: Backend недоступен'
-      : runOver(run) ? 'Последний прогноз прогона — прогон завершён, новых не будет.'
-      : `Последний известный: ${reasonText(v.reason) || STATUS[v.status] || text(v.status)}`;
-  } else if (runOver(run)) {
-    value.textContent = 'Прогон завершён';
-    source.textContent = 'Данных прогона больше нет — прогнозов не будет до нового прогона.';
-  } else if (!fresh) {
-    value.textContent = 'Прогноза пока нет';
-    source.textContent = 'Backend недоступен — снимок не обновляется.';
-  } else {
-    value.textContent = capital(noForecastText(v));
-    if (outsideRun) targetLine.textContent = 'Цель за пределами окна данных прогона';
-    source.textContent = v.route_not_started === true ? 'Наряд ещё не начался: плановых остановок рядом с текущим временем нет.'
-      : `Причина: ${reasonText(v.reason) || 'источник не передал прогноз'}.`;
-  }
-  const headline = el('div', {className: 'headline'}, el('span', {}, 'Прогноз задержки у цели'), value,
-    targetLine.textContent ? targetLine : null, source);
-  top.append(head, headline);
+  top.append(head, forecastBlock(v, routeRows(shownRoute())));
   const off = v.off_route === true ? el('p', {id: 'off-route', className: 'off-route', 'data-key': 'off-route'},
     `Вне маршрута ${offsetText(v.route_offset_m) ?? ''} — координаты не совпадают с маршрутом наряда${assessment.level !== 'nodata' ? '; прогноз может быть неверен' : ''}.`) : null;
-
-  const facts = document.createElement('dl');
-  facts.dataset.key = 'facts';
-  field(facts, 'Текущее опоздание', currentDelayText(v.cur_dev_s),
-    v.cur_dev_s == null ? reasonText(v.reason) ?? 'факт не определён' : 'на последней пройденной остановке; это факт, не прогноз');
-  field(facts, 'Цель прогноза', !v.target_stop_id ? 'цель не определена'
-    : outsideRun ? 'Цель за пределами окна данных прогона'
-    : `план ${planText(v.target_time_begin) ?? '?'}${expected ? ` → ${expected} (${BASIS.model})` : assessment.warming ? ' · прогноз готовится' : assessment.hasPrediction ? ' · прогноз устарел' : ' · прогноза нет'}`,
-  v.target_stop_id ? `первая плановая остановка через 10–15 мин${targetPoint(v) ? '' : ' · координаты нет — на карте не показана'}` : null);
 
   // Technical details (C-1): identifiers and revisions for engineers, collapsed by default.
   const tech = el('details', {id: 'card-tech', className: 'card-tech', 'data-key': `tech:${v.tr_id}`}, el('summary', {}, 'Технические подробности'));
@@ -874,41 +853,91 @@ function renderCard() {
       : locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
       : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект на карте не показан.'));
   }
-  const parts = [top, off, ...notes, stepsBlock(view, v), routeBlock(v), incident ? incidentBlock(incident, v) : null, facts, tech].filter(Boolean);
+  const parts = [top, off, ...notes, routeBlock(v), stepsBlock(view, v), incident ? incidentBlock(incident, v) : null, tech].filter(Boolean);
   // Another vehicle gets a fresh card; the same vehicle is patched in place, so focus, typing, the
   // scroll and a button being pressed all survive the poll.
-  if (cardFor !== selected) { card.replaceChildren(...parts); cardFor = selected; card.scrollTop = 0; } else patchChildren(card, parts);
+  if (cardFor !== selected) {
+    card.replaceChildren(...parts); cardFor = selected; card.scrollTop = 0;
+    passedOpen = false; afterOpen = false; revealedFor = null;
+  } else patchChildren(card, parts);
   card.dataset.level = assessment.level;
+  // The stop group headers stick right under the sticky top, whatever its height. In a card too
+  // short for that (the top would cover most of it) nothing sticks and the whole card scrolls.
+  const topHeight = card.querySelector('.card-top')?.offsetHeight ?? 0;
+  card.classList.toggle('is-short', card.clientHeight > 0 && card.clientHeight < 1.8 * topHeight);
+  card.style.setProperty('--card-top-h', `${card.classList.contains('is-short') ? 0 : topHeight}px`);
+  revealTarget(card);
 }
 
-// The selected vehicle's stops (C-3), in groups instead of a label on every row: passed (plan
-// only, the last PASSED_SHOWN), before the target (the current delay carried forward — a fact),
-// the target (the model), after it (the same shift as an explicit assumption, behind a toggle).
-const PASSED_SHOWN = 2;
-function stopGroups(rows, {cur, modelUsable, staleModel, hasPrediction}) {
+// On opening, the target row is brought into view under the sticky top (C6), once per vehicle.
+function revealTarget(card) {
+  if (revealedFor === selected) return;
+  const row = card.querySelector('.stops li[data-role=target]');
+  if (!row) return;
+  if (card.classList.contains('is-short')) return; // the forecast block stays the first thing in view
+  revealedFor = selected;
+  const top = card.querySelector('.card-top')?.offsetHeight ?? 0;
+  const box = card.getBoundingClientRect(), r = row.getBoundingClientRect();
+  const from = box.top + top + 28; // the sticky group header above the row
+  if (r.top >= from && r.bottom <= box.bottom) return;
+  card.scrollTop += r.top - from - Math.max(0, (box.bottom - from - r.height) / 3);
+}
+
+// The selected vehicle's stops (C6), in groups with sticky headers instead of a label on every
+// row: passed (plan only; folded to the last one), before the target (the current delay carried
+// forward — a fact), the target (the model), after it (the same shift — an explicit assumption,
+// AFTER_SHOWN rows, behind a toggle). The role is also an icon, named for screen readers.
+const AFTER_SHOWN = 2;
+const ROLE_MARK = {passed: ['✓', 'пройдена'], before_target: ['◉', 'до цели'], target: ['◆', 'цель прогноза'],
+  after_target: ['◌', 'после цели, допущение'], planned: ['○', 'по расписанию']};
+const AFTER_CAVEAT = 'Не прогноз модели. Показан тот же сдвиг, что у цели.';
+
+function stopGroups(rows, {cur, modelUsable, staleModel, hasPrediction, held}) {
+  const assumed = rows.some(r => r.role === 'after_target' && r.basis === 'assumption');
+  const onTime = Math.abs(Number(cur)) < ON_TIME_S;
   const title = {
-    passed: 'Пройдено — только план',
-    before_target: rows.some(r => r.role === 'before_target' && r.basis === 'fact')
-      ? `До цели — текущее опоздание ${delayText(cur)} переносится вперёд (${BASIS.fact})` : 'До цели — план',
-    target: `Цель — ${modelUsable && hasPrediction ? BASIS.model : staleModel ? 'прогноз устарел' : 'прогноза нет'}`,
-    after_target: rows.some(r => r.role === 'after_target' && r.basis === 'assumption') ? `После цели — ${BASIS.assumption}`
-      : staleModel ? 'После цели — план · прогноз устарел' : modelUsable && hasPrediction && !shiftAfterTarget ? 'После цели — план · сдвиг скрыт' : 'После цели — план',
-    planned: 'По плану',
+    passed: 'Пройдено · только расписание',
+    before_target: !rows.some(r => r.role === 'before_target' && r.basis === 'fact') ? 'До цели · только расписание'
+      : onTime ? 'До цели · ТС идёт по графику (факт, не прогноз)'
+      : `До цели · перенесено текущее опоздание ${delayText(cur)} (факт, не прогноз)`,
+    target: held ? 'Прошлая цель · прошлый результат модели, новая цель считается'
+      : `Цель · ${modelUsable && hasPrediction ? BASIS.model : staleModel ? 'прогноз устарел' : 'прогноза нет'}`,
+    after_target: assumed ? 'После цели · допущение'
+      : staleModel ? 'После цели · только расписание · прогноз устарел' : 'После цели · только расписание',
+    planned: 'По расписанию · цели нет',
   };
+  const caveat = {after_target: assumed ? AFTER_CAVEAT : held ? 'Сдвиг не показан: прошлый результат к новой цели не относится.'
+    : modelUsable && hasPrediction && !shiftAfterTarget ? 'Сдвиг скрыт — показано только расписание.' : null};
   const groups = [];
   for (const row of rows) {
-    if (groups.at(-1)?.role !== row.role) groups.push({role: row.role, title: title[row.role] ?? row.role, rows: []});
+    if (groups.at(-1)?.role !== row.role) groups.push({role: row.role, title: title[row.role] ?? row.role, caveat: caveat[row.role] ?? null, rows: []});
     groups.at(-1).rows.push(row);
   }
   return groups;
 }
 
+function stopRow(row, {newTarget}) {
+  const [icon, name] = ROLE_MARK[row.role] ?? ['·', row.role];
+  const isNew = newTarget && row.stop_id === newTarget.stop_id && row.no === newTarget.no;
+  const time = row.expected ? `${row.plan} → ${row.basis === 'assumption' ? '≈' : ''}${row.expected}` : row.plan ?? '—';
+  return el('li', {className: 'stop-row', dataset: {role: row.role, stop: row.stop_id ?? '', ...(row.basis ? {basis: row.basis} : {}), ...(isNew ? {newTarget: 'true'} : {})},
+    title: row.onMap ? null : 'Координаты нет — на карте не показана'},
+  el('span', {className: 'stop-icon', role: 'img', 'aria-label': name, title: name}, icon),
+  el('span', {className: 'stop-no'}, `ост. ${row.no}`),
+  el('span', {className: 'stop-time'}, time, isNew ? el('em', {className: 'stop-tag'}, 'новая цель') : null),
+  el('span', {className: 'stop-delta'}, row.delay != null ? compactDelay(row.delay) : ''));
+}
+
 function routeBlock(vehicle) {
   const box = el('section', {className: 'route', id: 'route', 'data-key': 'route', dataset: {status: route.status}});
   const check = el('input', {type: 'checkbox', id: 'shift-after-target', checked: shiftAfterTarget, dataset: {action: 'shift-after-target'}});
-  box.append(el('div', {className: 'route-head'}, el('b', {}, 'Остановки'), el('label', {className: 'route-toggle'}, check, ' Сдвиг после цели')));
-  const note = (content, kind = 'info') => box.append(el('p', {className: 'route-note', dataset: {kind}}, content));
   const data = shownRoute();
+  const windowText = data?.window_start && data?.window_end ? `${planText(data.window_start)}–${planText(data.window_end)}` : '«сейчас − 5 мин … цель + 15 мин»';
+  const help = el('details', {className: 'help', id: 'route-help', open: cardOpen.has('route-help')},
+    el('summary', {'aria-label': 'Про остановки и линию на карте', title: 'Про остановки и линию на карте'}, '?'),
+    el('p', {className: 'route-caption'}, `Окно остановок ${windowText}. «ост. N» — номер остановки в этом окне; названий в данных нет. Линия на карте — плановый маршрут наряда, не GPS-трек; она сдвинута вправо по ходу движения, поэтому встречные направления идут рядом. Впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`));
+  box.append(el('div', {className: 'route-head'}, el('b', {}, 'Остановки'), help, el('label', {className: 'route-toggle'}, check, ' Сдвиг после цели')));
+  const note = (content, kind = 'info') => box.append(el('p', {className: 'route-note', dataset: {kind}}, content));
   if (!data) {
     if (route.status === 'loading') note('Загрузка маршрутного контекста…');
     else if (route.status === 'missing') note(`Маршрутного контекста нет: ${route.reason}.`, 'warn');
@@ -924,20 +953,26 @@ function routeBlock(vehicle) {
   const {modelUsable, factUsable} = usability(vehicle);
   const staleModel = !modelUsable && data.prediction_s != null;
   const rows = routeRows(data);
-  const windowText = data.window_start && data.window_end ? `${planText(data.window_start)}–${planText(data.window_end)}` : '«сейчас − 5 мин … цель + 15 мин»';
+  const held = modelUsable && heldForNewTarget(vehicle);
+  const {newTarget} = numbersFor(vehicle, rows);
   if (!rows.length) note(`В окне ${windowText} плановых остановок нет.`);
   const list = el('ol', {className: 'stops'});
-  const groups = stopGroups(rows, {cur: factUsable ? data.cur_dev_s : null, modelUsable, staleModel, hasPrediction: data.prediction_s != null});
+  const groups = stopGroups(rows, {cur: factUsable ? data.cur_dev_s : null, modelUsable, staleModel, hasPrediction: data.prediction_s != null, held});
   for (const group of groups) {
-    const shown = group.role === 'passed' ? group.rows.slice(-PASSED_SHOWN) : group.rows;
-    list.append(el('li', {className: 'stop-group', dataset: {group: group.role}}, group.role === 'passed' && group.rows.length > shown.length
-      ? `${group.title} · ещё ${group.rows.length - shown.length} выше не показаны` : group.title));
-    for (const row of shown) {
-      list.append(el('li', {dataset: {role: row.role, stop: row.stop_id ?? '', ...(row.basis ? {basis: row.basis} : {})},
-        title: row.onMap ? null : 'Координаты нет — на карте не показана'},
-      el('span', {className: 'stop-no'}, `ост. ${row.no}`),
-      el('span', {className: 'stop-time'}, row.expected ? `${row.plan} → ${row.expected}` : row.plan ?? '—'),
-      el('span', {className: 'stop-delta'}, row.delay != null ? delayText(row.delay) : '')));
+    list.append(el('li', {className: 'stop-group', dataset: {group: group.role}}, el('span', {}, group.title),
+      group.caveat ? el('small', {className: 'stop-caveat'}, group.caveat) : null));
+    let shown = group.rows;
+    if (group.role === 'passed' && group.rows.length > 1) {
+      if (!passedOpen) shown = group.rows.slice(-1);
+      list.append(el('li', {className: 'stop-more'}, el('button', {type: 'button', 'aria-expanded': String(passedOpen), dataset: {action: 'stops-passed'}},
+        passedOpen ? '▾ скрыть пройденные' : `▸ ещё ${group.rows.length - 1} пройденных`)));
+    }
+    const folded = group.role === 'after_target' && group.rows.length > AFTER_SHOWN;
+    if (folded && !afterOpen) shown = group.rows.slice(0, AFTER_SHOWN);
+    list.append(...shown.map(row => stopRow(row, {newTarget: held ? newTarget : null})));
+    if (folded) {
+      list.append(el('li', {className: 'stop-more'}, el('button', {type: 'button', 'aria-expanded': String(afterOpen), dataset: {action: 'stops-after'}},
+        afterOpen ? '▴ свернуть' : `Ещё ${group.rows.length - AFTER_SHOWN} ▾`)));
     }
   }
   box.append(list);
@@ -948,7 +983,6 @@ function routeBlock(vehicle) {
     truncated ? `${truncated} самых ранних остановок окна не показаны (не больше 40)` : null,
     bad.stops ? `${bad.stops} остановок без координат на карте не показаны` : null].filter(Boolean);
   if (missing.length) note(`${missing.join(' · ')}.`);
-  box.append(el('small', {className: 'route-caption'}, `Окно остановок ${windowText}. Линия на карте — плановый маршрут наряда, не GPS-трек; она сдвинута вправо по ходу движения, поэтому встречные направления идут рядом. Впереди ТС — ярко со стрелками, пройденное — тускло; если ТС не на маршруте, линия тусклая целиком.`));
   return box;
 }
 
@@ -962,20 +996,30 @@ const vehicleStateText = incident => (incident.vehicle_state === 'nodata' ? 'н�
 const WF_TEXT = {new: 'Новое', work: 'В работе', snoozed: 'Отложено', closed: 'Закрыто', ended: 'Завершено'};
 function eventControls(view, v) {
   const out = [];
+  const wf = !view ? null : view.group === 'ended' && view.wf !== 'closed' ? 'ended' : view.wf;
   if (view) {
-    const wf = view.group === 'ended' && view.wf !== 'closed' ? 'ended' : view.wf;
     out.push(el('div', {className: 'event-row', 'data-key': `ev:${view.id}`},
       el('span', {className: 'incident-flow', dataset: {workflow: wf}}, WF_TEXT[wf] ?? wf),
       el('span', {}, eventMeta(view)), view.group === 'ended' ? null : slaBadge(view.badge, {id: 'event-sla'})));
   }
+  // C7: the dark button is the next logical action — Новое → «Взять в работу», В работе →
+  // «Закрыть ▾», Завершено → «Закрыть» (one click, with the «delay ended» reason); «Показать на
+  // карте» is always secondary.
   const can = view?.can ?? {};
+  const primary = name => (name === (wf === 'new' ? 'take' : wf === 'work' ? 'close' : null) ? 'primary' : null);
   const buttons = el('div', {className: 'card-buttons', 'data-key': `buttons:${view?.id ?? 'none'}`});
-  if (can.take) buttons.append(el('button', {type: 'button', id: 'incident-action', className: 'primary', dataset: {action: 'take-event', id: view.id}}, 'Взять в работу', el('kbd', {}, 'W')));
+  if (can.take) buttons.append(el('button', {type: 'button', id: 'incident-action', className: primary('take'), dataset: {action: 'take-event', id: view.id}}, 'Взять в работу', el('kbd', {}, 'W')));
   if (can.untake) buttons.append(el('button', {type: 'button', id: 'incident-action', dataset: {action: 'untake-event', id: view.id}}, 'Вернуть в новые'));
   if (can.snooze) buttons.append(el('button', {type: 'button', id: 'snooze-open', 'aria-expanded': String(cardMenu === 'snooze'), dataset: {action: 'card-menu', menu: 'snooze'}}, 'Отложить ▾', el('kbd', {}, 'S')));
   if (can.unsnooze) buttons.append(el('button', {type: 'button', id: 'unsnooze', dataset: {action: 'unsnooze-event', id: view.id}}, 'Снять напоминание'));
-  if (can.close) buttons.append(el('button', {type: 'button', id: 'close-open', 'aria-expanded': String(cardMenu === 'close'), dataset: {action: 'card-menu', menu: 'close'}}, 'Закрыть ▾', el('kbd', {}, 'C')));
-  buttons.append(el('button', {type: 'button', id: 'card-show', className: can.take ? null : 'primary',
+  const endedReason = wf === 'ended' ? view.close_reasons?.[0] : null;
+  if (can.close && endedReason) {
+    buttons.append(el('button', {type: 'button', id: 'close-ended', className: 'primary', title: `Закрыть с причиной «${endedReason}»`,
+      dataset: {action: 'close-event', id: view.id, reason: endedReason}}, 'Закрыть', el('kbd', {}, 'C')));
+  } else if (can.close) {
+    buttons.append(el('button', {type: 'button', id: 'close-open', className: primary('close'), 'aria-expanded': String(cardMenu === 'close'), dataset: {action: 'card-menu', menu: 'close'}}, 'Закрыть ▾', el('kbd', {}, 'C')));
+  }
+  buttons.append(el('button', {type: 'button', id: 'card-show',
     disabled: !(locationOk(v) && mapStatus === 'ready'), dataset: {action: 'focus'}}, 'Показать на карте'));
   out.push(buttons);
   if (view && cardMenu === 'snooze' && can.snooze) {
@@ -1005,8 +1049,10 @@ function stepsBlock(view, v) {
     return el('div', {className: 'steps quiet', 'data-key': `steps:none:${v.tr_id}`},
       marked ? el('p', {className: 'gps-marked'}, 'GPS неисправен — отмечено диспетчером') : null, gpsMarkControls(v));
   }
-  const box = el('div', {className: 'steps', id: 'steps', 'data-key': `steps:${view.id}`},
-    el('div', {className: 'steps-head'}, el('b', {}, 'Шаги реакции'), el('span', {id: 'steps-progress'}, view.steps_progress)));
+  // Collapsed «▸ Шаги реакции 0/3»; opens by itself once the event is in work (C1).
+  const box = el('details', {className: 'steps', id: 'steps', 'data-key': `steps:${view.id}`, dataset: {id: view.id},
+    open: stepsPref.get(view.id) ?? view.wf === 'work'},
+  el('summary', {className: 'steps-head'}, el('b', {}, 'Шаги реакции'), el('span', {id: 'steps-progress'}, view.steps_progress)));
   for (const step of view.steps) {
     const input = el('input', {type: 'checkbox', dataset: {action: 'toggle-step', id: view.id, step: step.key}});
     input.checked = step.done;
@@ -1020,14 +1066,17 @@ function stepsBlock(view, v) {
   return box;
 }
 
-// «История события»: lifecycle and actions, a plain-text note, the driver-contact prototype.
+// «История события» (collapsed, C1): lifecycle and actions, a plain-text note, the driver-contact prototype.
 function incidentBlock(incident, vehicle) {
-  const box = document.createElement('section');
+  const box = document.createElement('details');
   box.className = 'incident';
+  box.id = 'card-history';
+  box.open = cardOpen.has('card-history');
   box.dataset.state = incident.state;
   box.dataset.id = incident.id;
   box.dataset.key = incident.id;
-  const head = el('div', {className: 'incident-head'}, el('b', {}, `История события №${incident.number}`));
+  const head = el('summary', {className: 'incident-head'}, el('b', {}, `История события №${incident.number}`),
+    el('span', {className: 'incident-count'}, `${incident.history.length}`));
   const form = document.createElement('form');
   form.className = 'note-form';
   const input = document.createElement('input');
@@ -1166,20 +1215,33 @@ function renderAttention() {
 // ---- Reaction queue (v2), toasts --------------------------------------------------------------
 const eventLevel = view => (view.severe || view.last_s >= 300 ? 'severe' : 'warning');
 const slaBadge = (badge, extra = {}) => el('span', {className: 'sla', dataset: {tone: badge.tone}, ...extra}, badge.text);
-const eventMeta = view => [`№${view.number}`, `с ${planText(view.opened_at) ?? clockText(view.opened_at)}`, `пик ${delayText(view.peak_s)}`,
+// Event texts (C5): «открыто 06:58 · пик +3:20 · №3» — never «с 06:58», which reads as «the delay
+// since 06:58». Values in the compact form, the same as the map labels and the stop rows.
+const eventMeta = view => [`открыто ${planText(view.opened_at) ?? clockText(view.opened_at)}`, `пик ${compactDelay(view.peak_s)}`, `№${view.number}`,
   view.lost ? 'нет данных' : null, view.close_reason ? `закрыто: ${view.close_reason}` : null].filter(Boolean).join(' · ');
-const eventValue = view => (view.group === 'ended' ? `пик ${delayText(view.peak_s)}` : delayText(view.last_s));
+const eventValue = view => (view.group === 'ended' ? `пик ${compactDelay(view.peak_s)}` : compactDelay(view.last_s));
+// Where the value applies: «у ост. 12 · 08:42 → 08:45» (the stop number only for the selected
+// vehicle, whose route is loaded; otherwise «у цели»). A held forecast is the previous target's.
+function eventTarget(view) {
+  const v = view.group === 'ended' ? null : findRow(view.tr_id);
+  const a = v ? assess(v, isFresh()) : null;
+  if (!v?.target_stop_id || a.level === 'nodata' || a.warming) return null;
+  const no = String(v.tr_id) === selected ? numbersFor(v, routeRows(shownRoute())).target : null;
+  const where = heldForNewTarget(v) ? 'у прошлой цели' : no ? `у ост. ${no}` : 'у цели';
+  return `${where} · ${planText(v.target_time_begin) ?? '?'} → ${shiftedText(v.target_time_begin, v.prediction_s) ?? '?'}`;
+}
 
 function queueItem(view) {
   const current = findIncident(store(), view.id)?.tr_id === selected;
-  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+  const meta = eventMeta(view);
+  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id, title: meta,
     dataset: {id: view.id, action: 'open-event', group: view.group, state: view.lifecycle, unread: String(view.unread), level: eventLevel(view)}});
   const check = el('input', {type: 'checkbox', className: 'event-check', 'aria-label': `Выбрать событие ТС ${view.tr_id}`,
     dataset: {action: 'check-event', id: view.id}});
   check.checked = view.selected;
   check.disabled = view.group === 'ended';
   item.append(check, el('span', {className: 'event-title'}, `ТС ${view.tr_id}`), el('span', {className: 'event-value'}, eventValue(view)),
-    el('span', {className: 'event-meta'}, eventMeta(view)), slaBadge(view.badge));
+    el('span', {className: 'event-meta'}, eventTarget(view) ?? meta), slaBadge(view.badge));
   if (view.sla) item.append(el('span', {className: 'sla-bar', dataset: {tone: view.badge.tone}, style: `width:${Math.round(view.sla.pct)}%`}));
   return item;
 }
@@ -1291,7 +1353,8 @@ function queueAction(fn) {
   renderCard(); renderEvents(); renderAttention(); renderToasts(); renderList();
   return true;
 }
-const takeEvent = id => queueAction(q => Q.take(q, id, dataNow()));
+// Taking an event opens its «Шаги реакции» (C1), even if they were closed before.
+const takeEvent = id => { stepsPref.delete(id); return queueAction(q => Q.take(q, id, dataNow())); };
 const untakeEvent = id => queueAction(q => Q.untake(q, id, dataNow(), wallNow()));
 const snoozeEvent = (id, minutes) => queueAction(q => Q.snooze(q, id, minutes, dataNow()));
 const unsnoozeEvent = id => queueAction(q => Q.unsnooze(q, id, dataNow()));
@@ -1553,6 +1616,8 @@ function onPanelClick(event) {
   else if (action === 'snooze-event') snoozeEvent(id, Number(control.dataset.minutes));
   else if (action === 'close-event') closeEvent(id, control.dataset.reason);
   else if (action === 'card-menu') { cardMenu = cardMenu === control.dataset.menu ? null : control.dataset.menu; renderCard(); }
+  else if (action === 'stops-passed') { passedOpen = !passedOpen; renderCard(); }
+  else if (action === 'stops-after') { afterOpen = !afterOpen; renderCard(); }
   else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
   else if (action === 'tab') setTab(control.dataset.tab);
   else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, slaWall(), shown));
@@ -1597,7 +1662,12 @@ $('card').addEventListener('change', event => {
   shiftAfterTarget = event.target.checked;
   renderRouteLayers(); renderMapObjects(); renderCard();
 });
-$('card').addEventListener('toggle', event => { if (event.target.id === 'card-tech') techOpen = event.target.open; }, true);
+$('card').addEventListener('toggle', event => {
+  const {id, open, dataset} = event.target;
+  if (id === 'card-tech') techOpen = open;
+  else if (id === 'steps' && dataset.id) stepsPref.set(dataset.id, open);
+  else if (id) { if (open) cardOpen.add(id); else cardOpen.delete(id); }
+}, true);
 $('card').addEventListener('input', event => {
   if (event.target.id === 'note-input') noteDraft = {id: event.target.dataset.id, text: event.target.value};
 });
