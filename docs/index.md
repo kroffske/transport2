@@ -4,11 +4,11 @@ type: index
 status: active
 owner: transport2
 tags: [navigation]
-updated: "2026-09-25T19:37:24Z"
-source_commit: "9339093e841d"
+updated: "2026-09-27T13:16:28Z"
+source_commit: "074ba94415b2"
 update_event: "sync"
-context: "changes=L files=22 task=T-2"
-description: "Навигация дополнена PRD, scorecard и проектным направлением."
+context: "changes=XL files=52 task=T-7"
+description: "Навигация: единое демо официального эмулятора, контракты, модель и проектное направление."
 ---
 
 # Документация transport2
@@ -23,8 +23,10 @@ description: "Навигация дополнена PRD, scorecard и проек
 - [Контракт датасета](../data/README.md) — формат выборок, целевая переменная, метрика и правила сабмита.
 - [Спецификация NDTP и эмулятора](../data/docs/Emulator-and-Telematic-Packets-Specification.md) — потоковый протокол и запуск эмулятора.
 - [Передача текущей модели и интеграции](runbooks/integration-handoff.md) — актуальный ML-кандидат, локальные зависимости и границы следующего этапа.
-- [Backend v1](api/backend-v1.md) — контракт часов, NDTP readback и live consumer для T-4.
-- [Локальный NDTP demo](runbooks/local-demo.md) — Docker-запуск, historical replay, официальный эмулятор и актуальные API/PyDoc команды.
+- [Локальный NDTP demo](runbooks/local-demo.md) — единое демо: официальный эмулятор → Backend → ML → consumer → карта; одна команда запуска, настройки, lifecycle, ограничения, troubleshooting, проверки.
+- [Диспетчерская карта](../dashboard/README.md) — что на экране, слои маршрута и карточка прогноза, сборка и browser check.
+- [Backend v1](api/backend-v1.md) — контракт прогона и часов, snapshot, маршрутного контекста и consumer (`/api/route`, `/api/build`).
+- [Географическая основа](runbooks/geography-foundation.md) — координаты, геоконтракт и ограничения по маршрутам.
 
 ## Generated reference
 
@@ -38,9 +40,9 @@ description: "Навигация дополнена PRD, scorecard и проек
 
 ## Gaps
 
-- Текущий кандидат подключён к отдельному ML API; NDTP Backend и минимальный live consumer прошли Docker readback.
-- BI-дашборд и карта ещё не реализованы; consumer не закрывает C4.
-- Platform score и независимое onset/lead-time evidence отсутствуют. Общая QA и performance evidence ведутся в T-4.
+- Реальных трасс маршрутов, `route_id` и устойчивых stop ID нет; на карте — путь по GPS прогона и плановые остановки.
+- Время NDTP ставит эмулятор, поэтому реальные задержки доставки данных не воспроизводятся.
+- Полный BI/C4, серверное хранение действий диспетчера, platform score и независимое onset/lead-time evidence отсутствуют.
 
 ## Project direction
 

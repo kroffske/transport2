@@ -2,38 +2,37 @@
 
 Единый локальный репозиторий для задачи хакатона Московского транспорта. Он объединяет официальную раздачу данных и эмулятор NDTP с начальным ML-решением, подготовленным на небольшой выборке.
 
-Локальная цепочка NDTP → Backend → отдельный ML API → live consumer реализована и проверена через Docker historical replay. Backend вычисляет текущее отклонение из прошлых GPS и плана. Consumer раздаёт диспетчерскую 2D-карту Москвы с событиями и действиями диспетчера в двух явно подписанных режимах: «Демо-сценарий» (значения заданы) и «Поток Backend». Это демонстрационный интерфейс, не полный BI.
+Демо одно: официальный эмулятор NDTP, которого драйвер кормит GPS-точками из данных проекта → Backend (контекст по расписанию) → отдельный ML API с реальной моделью → consumer → диспетчерская 2D-карта Москвы с маршрутным контекстом выбранного ТС и прогнозом задержки на цели. Отдельного UI-only сценария нет. Это демонстрационный интерфейс, не полный BI.
 
 Выбранная CatBoost-модель имеет локальный MAE 44.01 с на validate и 45.00 с на test. Она обучена на 4 139 строках после исключения синтетических копий validate/test-прибытий; validate разрешён для выбора модели, но не включается в fit. Официальный score неизвестен без MAE_TARGET. Потоковый detector не сохраняет автоматически этот offline MAE.
 
 ## Быстрый путь для жюри
 
-1. Нужны Docker и файл карты `consumer/map/moscow.pmtiles` (не хранится в Git; источник и SHA-256 — в `consumer/map/manifest.json`).
-2. `docker compose --profile ui-demo up --build -d ui-demo`
-3. Открыть <http://localhost:8003/?mode=demo> → «Начать демо» (или «Далее») → «События» → карточка → «Взять в работу».
-4. «Сброс» начинает сценарий заново без перезагрузки.
-
-Это сценарный показ: значения заданы сценарием, что видно по подписи режима. Рассказ на 2–3 минуты, тезисы и ограничения — в [runbook](docs/runbooks/local-demo.md#сценарный-показ-одна-команда). Сквозной режим с моделью описан ниже.
-
-## Локальный demo: NDTP + ML
-
-При наличии локальных data/model файлов:
+Один раз подготовить (файлы не хранятся в Git): Docker, образ эмулятора, данные `data/validate/{traffic.csv,schedule_plan.csv}`, модель `.local/validate-tuning-2026-09-26/` и карту `consumer/map/moscow.pmtiles` (источник и SHA-256 — в `consumer/map/manifest.json`).
 
 ```bash
-docker compose --profile demo up --build -d
+docker load -i data/emulator/ndtp-telemetry-emulator.tar
 ```
 
-Откройте [consumer в режиме потока](http://localhost:8002/?mode=live) во время replay; без `?mode=live` та же страница открывает «Демо-сценарий» с заданными значениями. Инструкция, configurable пути, часы, сбои и официальный эмулятор описаны в [runbook](docs/runbooks/local-demo.md). Для полного повторного запуска используйте `docker compose --profile demo down`.
+Запуск и перезапуск с нуля — одна и та же команда из корня репозитория:
+
+```bash
+SOURCE_COMMIT=$(git describe --always --dirty --abbrev=40) docker compose --profile demo up -d --build --force-recreate --remove-orphans
+```
+
+Открыть <http://localhost:8002> (экран рассчитан на 1920×1080). В шапке видны прогон `run-…`, «Ускорение ×5: 1 мин показа = 5 мин данных», время данных и состояние прогона. Клик по ТС показывает путь по GPS прогона, остановки и цель через 10–15 мин с прогнозом модели. Повторная команда создаёт новый прогон с новым `run_id`, и открытая страница сама очищает события и историю. Остановка: `docker compose --profile demo down`.
+
+Prerequisites, настройки `DEMO_SPEEDUP`/`DEMO_POST_PERIOD_S`/`DEMO_WINDOW`, состояния прогона, смысл слоёв и карточки, ограничения, troubleshooting и сценарий показа на 2–3 минуты — в [runbook](docs/runbooks/local-demo.md).
 
 ## Что где лежит
 
 | Путь | Назначение | Текущий статус |
 |---|---|---|
 | `transport_ml/` | Обучение, признаки, временное сравнение, инференс и FastAPI-сервис | Текущий direct-point API, pinned model/origin SHA и exact parity |
-| `transport_backend/` | TCP NDTP, bounded state, расписание и HTTP orchestration | Past-only computed stop detector, явные clocks и failure readback |
-| `consumer/` | Раздача диспетчерской карты, `/api/snapshot` и локальных PMTiles | Читает только Backend HTTP; старые результаты помечает явно |
-| `scripts/` | Historical NDTP sender | Receive-order lockstep replay с per-frame ack и trace |
-| `tests/` | ML, NDTP/state, schedule/orchestration и consumer contracts | 57 тестов в объединённом checkout; [независимая QA](.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/qa.md) приняла локальную цепочку |
+| `transport_backend/` | TCP NDTP, bounded state, расписание, прогон эмулятора и HTTP orchestration | `run.py` владеет часами и прогоном; past-only computed stop detector, route context, failure readback |
+| `consumer/` | Раздача диспетчерской карты, `/api/snapshot`, `/api/route/{tr_id}`, `/api/build` и локальных PMTiles | Читает только Backend HTTP; старые результаты помечает явно |
+| `scripts/` | Драйвер официального эмулятора и historical NDTP sender | `emulator_driver.py` — источник демо (profile `demo`); `replay_ndtp.py` — только инструмент тестов |
+| `tests/` | ML, NDTP/state, прогон и route, драйвер эмулятора, schedule/orchestration и consumer contracts | `.venv/bin/python -m pytest tests -q` — 78 тестов |
 | `artifacts/` | Исторические модели и метрики T-3/T-5 | Локальные файлы; прежние модели не являются текущим кандидатом |
 | `.local/validate-tuning-2026-09-26/` | Текущая модель, frozen код обучения/инференса и evidence | Игнорируется Git; production inference перенесён в owning пакет |
 | `data/` | Официальные train/test/validate, labels, шаблон сабмита и эмулятор | Полная локальная копия; тяжёлые файлы исключены из Git |
@@ -41,7 +40,7 @@ docker compose --profile demo up --build -d
 | `reference/initial-solution/` | Оригинальная документация начального решения | Сохранена побайтно для происхождения и контекста |
 | `docs/api/`, `docs/pydoc/` | Текущие OpenAPI и исторические PyDoc snapshots | Актуальные PyDoc команды находятся в runbook |
 | `notebooks/` | Четыре ноутбука аудита и моделирования T-3 | Сохраняют исторический результат T-3 |
-| `dashboard/` | Исходники диспетчерской карты (MapLibre, PMTiles, Three.js), сборка в `consumer/static` | Экран карты с режимами «Демо-сценарий» и «Поток Backend»; см. [`dashboard/README.md`](dashboard/README.md) |
+| `dashboard/` | Исходники диспетчерской карты (MapLibre, PMTiles, Three.js), сборка в `consumer/static` | Один экран живого прогона: шапка прогона, маршрутный контекст, карточка с фактом/прогнозом/допущением; см. [`dashboard/README.md`](dashboard/README.md) |
 
 Полное дерево и правила владения описаны в [`docs/repository-layout.md`](docs/repository-layout.md). Происхождение файлов — в [`docs/source-map.md`](docs/source-map.md). Навигация по документации начинается с [`docs/index.md`](docs/index.md).
 
@@ -51,7 +50,7 @@ docker compose --profile demo up --build -d
 
 Нужно прогнозировать задержку транспортного средства на целевой остановке за 10–15 минут до события. Вход — историческая или потоковая телеметрия NDTP, расписание и известное на момент прогноза состояние. Основная метрика Data Science — MAE задержки в секундах; меньше — лучше.
 
-Официальные критерии дополнительно требуют ML-ядро, Backend и BI-дашборд с Docker, низкой задержкой, обработкой обрывов и понятным интерфейсом. Текущий demo показывает три связанных процесса с минимальным consumer; он не доказывает полный BI/C4 или раннее предупреждение до независимого onset.
+Официальные критерии дополнительно требуют ML-ядро, Backend и BI-дашборд с Docker, низкой задержкой, обработкой обрывов и понятным интерфейсом. Текущее demo связывает официальный эмулятор, Backend, ML и диспетчерскую карту; оно не доказывает полный BI/C4 или раннее предупреждение до независимого onset.
 
 ## Локальные данные
 

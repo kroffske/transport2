@@ -54,7 +54,7 @@ transport2/
 ├── reference/
 │   └── initial-solution/          # неизменённые документы исходного решения
 ├── notebooks/                     # будущие исследования и обучение
-└── dashboard/                     # будущий диспетчерский интерфейс
+└── dashboard/                     # диспетчерская карта (исходники UI; сборка → consumer/static)
 ```
 
 ## Владение компонентами
@@ -62,8 +62,8 @@ transport2/
 - `transport_ml/` владеет подготовкой признаков, обучением, схемой модели и инференсом. `service.py` обслуживает выбранный final artifact отдельным stateless HTTP API; NDTP state ему не принадлежит.
 - `transport_backend/` владеет NDTP TCP boundary, bounded telemetry, unit mapping, source clocks, планом, computed current deviation и HTTP orchestration. Оно передаёт ML только разрешённые point/telemetry/plan поля.
 - `consumer/` владеет минимальным polling view и возрастом последнего HTTP snapshot. Оно читает Backend API, не model/data files, и не заменяет полный BI.
-- `scripts/` владеет source replay transport: CSV читается sender, а Backend узнаёт данные через NDTP по одному подтверждённому кадру.
-- `dashboard/` предназначен для карты, риска, карточек инцидентов и метрик. README в каталоге фиксирует контракт, но не изображает готовую реализацию.
+- `scripts/` владеет источниками телеметрии: `emulator_driver.py` регистрирует прогон в Backend и кормит официальный эмулятор точками датасета через его `POST /api/config` (единственный показ, compose profile `demo`); `replay_ndtp.py` — инструмент тестов прямой NDTP-отправки в Backend режима `dataset_wall`. Backend узнаёт данные только через NDTP.
+- `dashboard/` владеет диспетчерской картой: MapLibre/PMTiles, ТС прогона, путь и остановки выбранного ТС, карточка с фактом/прогнозом модели, события и diagnostics. Собирается в `consumer/static` командой `npm --prefix dashboard run build`.
 - `notebooks/` предназначен для аудита данных, экспериментов и воспроизводимого обучения. Производственный код не должен жить только в ноутбуках.
 - `data/` — локальный неизменяемый вход. Производные таблицы и кэши в будущем должны получить отдельные подкаталоги и правила воспроизводимости.
 
