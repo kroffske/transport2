@@ -19,6 +19,7 @@
 // 300 s) is grey «ТС пропало».
 import {HELD_REASON, assess, isHeld} from './incidents.js';
 import {reasonText} from './reasons.js';
+import {wallEquivalentText} from './run.js';
 import {NBSP, agoText, delayText, delayWords, durationText, planText, shiftedText} from './route-context.js';
 
 const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
@@ -83,7 +84,8 @@ function parts(v, ctx) {
     newTarget: numbers.newTarget ?? null,
     dataTime: planText(ctx.dataTime),
     noTargetReason: noTargetReason(v),
-    ageTitle: durationText(v.prediction_age_s) ?? 'неизвестен',
+    // Q7: the age is data time; the tooltip adds what it means on screen («≈12 с на экране при ×5»).
+    ageTitle: `${durationText(v.prediction_age_s) ?? 'неизвестен'}, время данных${wallEquivalentText(v.prediction_age_s, ctx.speedup) ? `; ${wallEquivalentText(v.prediction_age_s, ctx.speedup)}` : ''}`,
     heldNoTarget: isHeld(v) && !heldForNewTarget(v),
     eta: finite(v.warming_eta_s) ? durationText(v.warming_eta_s) : null,
   };
@@ -102,8 +104,8 @@ export const FORECAST_STATES = {
     big: {label: 'Опоздание по прогнозу', value: p.value, size: 'large'},
     lines: [line(`Прогноз обновляется · последний результат для этой цели: ${p.value} · ${p.ago ?? 'возраст неизвестен'}`, 'updating')],
     updating: p.heldNoTarget
-      ? `Нового прогноза пока нет; показан последний для этой цели (возраст ${p.ageTitle}, время данных). Backend держит его до 5 мин, пока не придёт новый.`
-      : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний результат для этой цели (возраст ${p.ageTitle}, время данных).`}),
+      ? `Нового прогноза пока нет; показан последний для этой цели (возраст ${p.ageTitle}). Backend держит его до 5 мин, пока не придёт новый.`
+      : `Пришли новые кадры той же цели; прогноз по ним ещё считается. Показан последний результат для этой цели (возраст ${p.ageTitle}).`}),
   warming: p => ({tone: 'live', head: p.head, rows: p.plan ? [['По расписанию', p.plan]] : [],
     big: {value: 'По графику · прогноз готовится', size: 'medium'},
     lines: [line(`ТС вышло на маршрут; первый прогноз считается${p.eta ? ` — примерно через ${p.eta} (время данных)` : ''} и появится здесь сам.`)]}),
@@ -111,7 +113,7 @@ export const FORECAST_STATES = {
     lines: [line(p.newTarget ? `Новая цель: ост.${NBSP}${p.newTarget.no} · по расписанию ${p.newTarget.plan}. Прогноз для неё считается.`
       : 'Новая цель выбрана по расписанию. Прогноз для неё считается.', 'updating'),
     line(`Прошлый результат: ${[p.stop, p.plan, p.value].filter(Boolean).join(' · ')}. К новой цели не относится.`, 'muted')],
-    updating: `Цель сменилась по расписанию; прогноз для новой цели считается. Прошлый результат относится к прошлой цели (возраст ${p.ageTitle}, время данных).`}),
+    updating: `Цель сменилась по расписанию; прогноз для новой цели считается. Прошлый результат относится к прошлой цели (возраст ${p.ageTitle}).`}),
   stale: p => ({tone: 'quiet', head: p.head, rows: [], big: {value: 'Прогноз устарел', size: 'large'},
     lines: [line(`${p.last ?? ''} ${p.got} Не использовать как текущий.`.trim(), 'muted'),
       line(`Причина: ${p.reason || 'данные устарели'}.`, 'reason')]}),

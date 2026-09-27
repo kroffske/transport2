@@ -871,7 +871,7 @@ let revealedFor = null; // the vehicle whose target row was scrolled into view
 function forecastBlock(v, rows) {
   const run = currentRun();
   const f = forecastView(v, {fresh: isFresh(), runOver: runOver(run), datasetEnd: run?.dataset_end ?? null,
-    dataTime: sourceClock() ?? run?.dataset_time ?? null, numbers: numbersFor(v, rows), targetOnMap: Boolean(targetPoint(v))});
+    dataTime: sourceClock() ?? run?.dataset_time ?? null, numbers: numbersFor(v, rows), targetOnMap: Boolean(targetPoint(v)), speedup: run?.speedup});
   const help = el('details', {className: 'help', id: 'forecast-help', open: openDetails.has('forecast-help')},
     el('summary', {'aria-label': 'Что такое цель прогноза', title: 'Что такое цель прогноза'}, 'ⓘ'), el('p', {}, f.help));
   const box = el('section', {className: 'forecast', id: 'forecast', 'data-key': 'forecast', 'aria-label': 'Прогноз опоздания на целевой остановке',
@@ -1378,8 +1378,8 @@ function renderEvents() {
     el('span', {}, `${title} · ${counts[key]}`), extra);
   const all2 = key => el('button', {type: 'button', dataset: {action: 'select-group', group: key}},
     all[key].length && all[key].every(v => v.selected || v.group !== key) ? 'снять выбор' : 'выбрать все');
-  const shown = key => queueFilter === 'all' || queueFilter === key;
-  if (shown('needs')) {
+  const filterShows = key => queueFilter === 'all' || queueFilter === key;
+  if (filterShows('needs')) {
     parts.push(group('needs', Q.GROUP_TITLES.needs, counts.needs > 1 ? all2('needs') : null));
     if (!all.needs.length) {
       parts.push(el('p', {className: 'events-empty', 'data-key': 'needs-empty'}, isFresh()

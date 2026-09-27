@@ -952,7 +952,8 @@ try {
       return runs.map(([a, b]) => [a / on.ratio - 20, b / on.ratio - 20]);
     }, [layers, lon, lat]);
     const mid = v => [v.lon + 0.005, v.lat];
-    const selectedBands = await bands(['route-ahead'], ...mid(sel));
+    // T-17: the line is solid up to the target (the turnaround here) and dashed after it, so both parts count.
+    const selectedBands = await bands(['route-ahead', 'route-after'], ...mid(sel));
     check(selectedBands.length >= 2 && selectedBands.some(([a]) => a > 0) && selectedBands.some(([, b]) => b < 0),
       `selected out-and-back: the two directions are two separate bands, one each side of the street (${JSON.stringify(selectedBands.map(b => b.map(Math.round)))})`);
     // Eastbound (outbound) runs south of the street = right of travel; westbound north.
@@ -1052,7 +1053,7 @@ try {
     setSnapshot(RUN('run-W16-0001'), [heldW, g, x, lostBus, noFix]);
     await page.waitForTimeout(3 * POLL_SPAN_MS);
     const rowW = await rowOf('900041').textContent();
-    check(await rowOf('900041').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется') && !/устарел|нет прогноза|пропал/i.test(rowW)
+    check(await rowOf('900041').getAttribute('data-level') === 'warning' && rowW.includes('+3:20') && rowW.includes('обновляется') && !/устарел|нет прогноза|пропал/i.test(rowW)
       && await page.locator('#events-list .event[data-group=needs]').count() === 1 && !(await page.locator('#events-list').textContent()).includes('нет данных'),
     `W16 hold (F-5): status unavailable + «updating» keeps level and value, quiet «обновляется», the event stays open, no «устарел» (${rowW.replace(/\s+/g, ' ')})`);
     // Warming: green, «по графику», «прогноз готовится», not counted as «Без прогноза», never dimmed.
@@ -1071,7 +1072,7 @@ try {
       && await page.locator('.vehicle-label[data-id="900046"]').count() === 0, 'no GPS fix and no coordinates: listed, not drawn, card «объект на карте не показан»');
     await rowOf('900043').click();
     await page.waitForTimeout(500);
-    const headG = await page.locator('#card .headline').innerText();
+    const headG = await page.locator('#forecast').innerText();
     check(await page.locator('#card').getAttribute('data-level') === 'normal' && headG.includes('По графику · прогноз готовится')
       && (await page.locator('#card .level-chip').textContent()) === 'По графику' && !/нет прогноза|устарел|NaN|undefined/i.test(headG),
     `W16 warming card: «По графику · прогноз готовится», chip «По графику» (${headG.replace(/\s+/g, ' ')})`);
@@ -1087,6 +1088,30 @@ try {
     const second = await slaText();
     check(first.length === 1 && first[0] === 'прогон завершён' && second.join() === first.join() && await page.locator('#events-list .sla-bar').count() === 0,
       `W16 run completed (F-6): the reaction SLA stops, badge «прогон завершён», no countdown bar (${first.join()} → ${second.join()})`);
+    await page.close();
+  }
+
+  // T-19 (user report): with many events (5 «Требуют реакции» + 28 «Завершены») the queue scrolls and
+  // no row is squashed below its content height.
+  {
+    const many = Array.from({length: 33}, (_, i) => bus(String(900200 + i), center[0] + (i % 6) * 0.004, center[1] + Math.floor(i / 6) * 0.003, {prediction_s: 200}));
+    setSnapshot(RUN('run-QUEUE-33'), many);
+    state.routes = null;
+    state.route = {};
+    const page = await open({setup, allow: /\/api\/route\//, tab: 'events', context: {viewport: {width: 1366, height: 768}}});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(POLL_SPAN_MS);
+    setSnapshot(RUN('run-QUEUE-33'), many.map((v, i) => (i < 5 ? v : {...v, prediction_s: 30})));
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    const endedToggle = page.locator('[data-action=toggle-ended]');
+    if (await endedToggle.count()) await endedToggle.first().click();
+    await page.waitForTimeout(400);
+    const rows = await page.locator('#events-list .event').evaluateAll(els => els.map(e => ({h: e.getBoundingClientRect().height, s: e.scrollHeight})));
+    const list = await page.locator('#events-list').evaluate(l => ({scroll: l.scrollHeight, client: l.clientHeight}));
+    const squashed = rows.filter(r => r.h < r.s - 1);
+    check(rows.length >= 30 && !squashed.length && list.scroll > list.client,
+      `many events at 1366×768: ${rows.length} rows, none squashed (${squashed.length}), the list scrolls (${list.scroll} > ${list.client})`);
+    await shot(page, 'regression-queue-33-events-1366.png');
     await page.close();
   }
 

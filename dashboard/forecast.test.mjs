@@ -140,3 +140,9 @@ test('W16: warming is green «По графику · прогноз готови
   const heldTarget = forecastView(row({prediction_state: 'updating', prediction_updating: true, prediction_hold_reason: 'target_changed'}), ctx());
   assert.equal(heldTarget.state, 'held');
 });
+
+test('the forecast age tooltip adds its screen equivalent at the run speed-up (Q7)', () => {
+  const view = forecastView(row({prediction_updating: true, prediction_age_s: 60}), {...ctx(), speedup: 5});
+  assert.equal(view.state, 'updating');
+  assert.match(view.updating, /время данных; ≈12 с на экране при ×5/);
+});
