@@ -9,11 +9,18 @@ const fhdPane = rect(0, 56, 1120, 1024);
 const laptopPane = rect(0, 56, 1046, 712);
 const laptopCard = rect(626, 56, 420, 712);
 
-test('top clears the attention bar with a gap and a label; bottom clears the legend with a gap', () => {
-  const pad = framePadding({pane: fhdPane, attention: rect(14, 70, 600, 58), legend: rect(14, 990, 690, 60)});
+// The legend is a vertical panel docked to the map's left edge, bottom-anchored.
+const fhdLegend = rect(14, 790, 200, 260);
+
+test('top clears the attention bar with a gap and a label; left clears the legend panel with a gap', () => {
+  const pad = framePadding({pane: fhdPane, attention: rect(14, 70, 600, 58), legend: fhdLegend});
   assert.equal(pad.top, 128 - 56 + FRAME_GAP + FRAME_LABEL_H);
-  assert.equal(pad.bottom, 1080 - 990 + FRAME_GAP);
-  assert.deepEqual([pad.left, pad.right], [FRAME_MARGIN, FRAME_MARGIN]);
+  assert.equal(pad.left, 214 + FRAME_GAP);
+  assert.deepEqual([pad.bottom, pad.right], [FRAME_MARGIN, FRAME_MARGIN]);
+});
+
+test('a legend narrower than the margin keeps the minimum margin on the left', () => {
+  assert.equal(framePadding({pane: fhdPane, legend: rect(0, 900, 10, 100)}).left, FRAME_MARGIN);
 });
 
 test('without panels every side keeps the minimum margin', () => {
@@ -45,8 +52,23 @@ test('at 1366 px with the panel open the full label room still fits', () => {
   assert.ok(1046 - pad.left - pad.right >= MIN_FRAME);
 });
 
+test('at 1366 px with the panel open, the legend and the target east: the label room gives way first', () => {
+  const pad = framePadding({pane: laptopPane, overlay: laptopCard, legend: rect(14, 400, 200, 330), targetEast: true});
+  assert.equal(1046 - pad.left - pad.right, MIN_FRAME);
+  assert.equal(pad.left, 214 + FRAME_GAP);
+  assert.ok(pad.right >= FRAME_MARGIN + 420 && pad.right < FRAME_MARGIN + 420 + TARGET_LABEL_W);
+});
+
+test('a narrow map: label, then the gaps, then the legend strip give way; the card panel strip stays', () => {
+  const narrow = rect(0, 56, 780, 712); // 1100 px window: 1100 − 320 queue
+  const pad = framePadding({pane: narrow, overlay: rect(360, 56, 420, 712), legend: rect(14, 400, 200, 330), targetEast: true});
+  assert.equal(780 - pad.left - pad.right, MIN_FRAME);
+  assert.equal(pad.right, 420, 'the covered strip is never given up; the right margin and the label are gone');
+  assert.equal(pad.left, 780 - MIN_FRAME - 420, 'the legend strip keeps what is left');
+});
+
 test('a short map shrinks top and bottom in proportion to keep MIN_FRAME', () => {
-  const pad = framePadding({pane: rect(0, 56, 1000, 400), attention: rect(14, 70, 400, 200), legend: rect(14, 330, 600, 100)});
+  const pad = framePadding({pane: rect(0, 56, 1000, 400), attention: rect(14, 70, 400, 200), legend: rect(14, 230, 200, 200)});
   assert.ok(400 - pad.top - pad.bottom >= MIN_FRAME);
   assert.ok(pad.top > pad.bottom);
 });

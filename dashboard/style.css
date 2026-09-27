@@ -207,12 +207,16 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
    covers the whole layout width (map and queue); × closes it. The page never scrolls sideways. */
 @media (max-width: 899px) {
   .layout > .card { z-index: 6; left: 0; right: 0; width: auto; border-left: 0; }
+  /* The legend panel gets compact so it keeps most of the narrow map clear; the rest scrolls inside. */
+  .map-pane .legend { left: 8px; gap: 5px; max-height: min(calc(100% - 130px), 50%); padding: 5px 8px; font-size: 11px; line-height: 1.2; }
+  .map-pane .legend-row { gap: 2px; }
+  .map-pane .legend-row > span { gap: 4px; }
 }
 /* Panels drawn over the map keep clear of the card panel (0 px when the card is a column). */
 .map-pane .map-tools { right: calc(14px + var(--card-overlay)); }
 .map-pane .toasts { right: calc(56px + var(--card-overlay)); }
 .map-pane .maplibregl-ctrl-bottom-right { right: var(--card-overlay); }
-.map-pane .legend { max-width: min(920px, calc(100% - 80px - var(--card-overlay))); }
+.map-pane .legend { max-width: min(240px, calc(100% - 28px - var(--card-overlay))); }
 .map-pane .attention { max-width: calc(100% - 540px - var(--card-overlay)); }
 @media (max-width: 1699px) { .map-pane .attention { max-width: calc(100% - 280px - var(--card-overlay)); } }
 /* «Следить за ТС …» (§L5) stands out from the other map tools: it is the way back to the frame. */
@@ -287,12 +291,18 @@ details.steps:not([open]), details.incident:not([open]) { padding-top: 7px; padd
 .dim-toggle[aria-pressed=true] .switch { background: var(--navy); }
 .dim-toggle[aria-pressed=true] .switch i { left: 14px; }
 
-.legend { position: absolute; z-index: 2; left: 14px; bottom: 30px; display: grid; gap: 4px; max-width: 920px; padding: 6px 10px; background: rgba(255, 255, 255, .95); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
-.legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+/* The legend is a vertical panel docked to the map's left edge, one item per line. It is anchored at
+   the bottom (above the OSM attribution) and grows upwards: the top-left stays free for the attention
+   bar, and a legend taller than the map scrolls inside instead of reaching it. */
+.legend { position: absolute; z-index: 2; left: 14px; bottom: 30px; display: grid; gap: 8px; width: max-content; max-width: 240px; max-height: calc(100% - 130px); overflow-y: auto; padding: 8px 10px; background: rgba(255, 255, 255, .95); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.25; }
+.legend-row { display: grid; gap: 4px; }
 .legend-row[hidden] { display: none; }
-.legend-row b { min-width: 38px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-.legend span { display: inline-flex; align-items: center; gap: 5px; }
-.legend-help { justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); font-size: 11px; font-weight: 700; cursor: help; }
+.legend-row b { padding-right: 22px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+/* Symbol column 24 px wide, centred: the bitmaps and line samples differ in size, the labels align. */
+.legend-row > span { display: grid; grid-template-columns: 24px auto; align-items: center; gap: 6px; min-height: 18px; }
+.legend-row > span > :first-child { justify-self: center; }
+.legend-help { position: absolute; top: 6px; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); font-size: 11px; font-weight: 700; cursor: help; }
+.legend-row > .legend-help { display: inline-flex; min-height: 0; }
 .line { display: inline-block; width: 22px; height: 4px; border-radius: 2px; }
 .line.ahead { background: #1565c0; height: 5px; box-shadow: 0 0 0 1.5px #fff; }
 .line.leader { height: 0; border-top: 2px dashed #1b2a36; border-radius: 0; }
