@@ -185,7 +185,7 @@ Data descriptors inherited from <a href="builtins.html#BaseException">builtins.B
 <td class="section-title" colspan=3>&nbsp;<br><a name="Orchestrator">class <strong>Orchestrator</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
     
 <tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
-<td class="decor title-decor" colspan=2><span class="code"><a href="#Orchestrator">Orchestrator</a>(state:&nbsp;'TelemetryState',&nbsp;server:&nbsp;'NDTPServer',&nbsp;schedule:&nbsp;'Schedule',&nbsp;model:&nbsp;'<a href="#ModelClient">ModelClient</a>',&nbsp;*,&nbsp;predict_interval_s:&nbsp;'float'&nbsp;=&nbsp;60.0,&nbsp;alert_cooldown_s:&nbsp;'float'&nbsp;=&nbsp;300.0,&nbsp;queue_limit:&nbsp;'int'&nbsp;=&nbsp;32,&nbsp;tick_interval_s:&nbsp;'float&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;off_route_m:&nbsp;'float'&nbsp;=&nbsp;400.0,&nbsp;off_route_clear_m:&nbsp;'float'&nbsp;=&nbsp;250.0,&nbsp;prediction_hold_s:&nbsp;'float'&nbsp;=&nbsp;180.0)<br>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#Orchestrator">Orchestrator</a>(state:&nbsp;'TelemetryState',&nbsp;server:&nbsp;'NDTPServer',&nbsp;schedule:&nbsp;'Schedule',&nbsp;model:&nbsp;'<a href="#ModelClient">ModelClient</a>',&nbsp;*,&nbsp;predict_interval_s:&nbsp;'float'&nbsp;=&nbsp;60.0,&nbsp;alert_cooldown_s:&nbsp;'float'&nbsp;=&nbsp;300.0,&nbsp;queue_limit:&nbsp;'int'&nbsp;=&nbsp;32,&nbsp;tick_interval_s:&nbsp;'float&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;off_route_m:&nbsp;'float'&nbsp;=&nbsp;400.0,&nbsp;off_route_clear_m:&nbsp;'float'&nbsp;=&nbsp;250.0,&nbsp;prediction_hold_s:&nbsp;'float'&nbsp;=&nbsp;300.0,&nbsp;vehicle_lost_s:&nbsp;'float'&nbsp;=&nbsp;300.0)<br>
 &nbsp;<br>
 Bounded&nbsp;prediction&nbsp;worker;&nbsp;HTTP&nbsp;readbacks&nbsp;never&nbsp;execute&nbsp;model&nbsp;I/O.<br>
 &nbsp;<br>
@@ -206,7 +206,7 @@ keeps&nbsp;the&nbsp;last&nbsp;success&nbsp;as&nbsp;a&nbsp;whole&nbsp;pair&nbsp;(
 
 <dl><dt><a name="Orchestrator-__exit__"><strong>__exit__</strong></a>(self, *_: 'object') -&gt; 'None'</dt></dl>
 
-<dl><dt><a name="Orchestrator-__init__"><strong>__init__</strong></a>(self, state: 'TelemetryState', server: 'NDTPServer', schedule: 'Schedule', model: 'ModelClient', *, predict_interval_s: 'float' = 60.0, alert_cooldown_s: 'float' = 300.0, queue_limit: 'int' = 32, tick_interval_s: 'float | None' = None, off_route_m: 'float' = 400.0, off_route_clear_m: 'float' = 250.0, prediction_hold_s: 'float' = 180.0)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+<dl><dt><a name="Orchestrator-__init__"><strong>__init__</strong></a>(self, state: 'TelemetryState', server: 'NDTPServer', schedule: 'Schedule', model: 'ModelClient', *, predict_interval_s: 'float' = 60.0, alert_cooldown_s: 'float' = 300.0, queue_limit: 'int' = 32, tick_interval_s: 'float | None' = None, off_route_m: 'float' = 400.0, off_route_clear_m: 'float' = 250.0, prediction_hold_s: 'float' = 300.0, vehicle_lost_s: 'float' = 300.0)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
 
 <dl><dt><a name="Orchestrator-close"><strong>close</strong></a>(self) -&gt; 'None'</dt></dl>
 

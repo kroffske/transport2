@@ -89,12 +89,12 @@ Data and other attributes defined here:<br>
 <td class="section-title" colspan=3>&nbsp;<br><a name="Schedule">class <strong>Schedule</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
     
 <tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
-<td class="decor title-decor" colspan=2><span class="code"><a href="#Schedule">Schedule</a>(plan:&nbsp;'pd.DataFrame',&nbsp;*,&nbsp;stop_radius_m:&nbsp;'float'&nbsp;=&nbsp;35.0,&nbsp;stop_speed_kmh:&nbsp;'float'&nbsp;=&nbsp;3.0,&nbsp;observation_lag_s:&nbsp;'float'&nbsp;=&nbsp;900.0,&nbsp;shapes:&nbsp;'RouteShapes&nbsp;|&nbsp;None'&nbsp;=&nbsp;None)<br>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#Schedule">Schedule</a>(plan:&nbsp;'pd.DataFrame',&nbsp;*,&nbsp;stop_radius_m:&nbsp;'float'&nbsp;=&nbsp;35.0,&nbsp;stop_speed_kmh:&nbsp;'float'&nbsp;=&nbsp;3.0,&nbsp;observation_lag_s:&nbsp;'float'&nbsp;=&nbsp;900.0,&nbsp;shapes:&nbsp;'RouteShapes&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;routes:&nbsp;'dict[str,&nbsp;RouteInfo]&nbsp;|&nbsp;None'&nbsp;=&nbsp;None)<br>
 &nbsp;<br>
 One&nbsp;owner&nbsp;for&nbsp;target&nbsp;choice,&nbsp;ordered&nbsp;stop&nbsp;matching&nbsp;and&nbsp;the&nbsp;planned-stop&nbsp;line.<br>&nbsp;</span></td></tr>
 <tr><td>&nbsp;</td>
 <td class="singlecolumn">Methods defined here:<br>
-<dl><dt><a name="Schedule-__init__"><strong>__init__</strong></a>(self, plan: 'pd.DataFrame', *, stop_radius_m: 'float' = 35.0, stop_speed_kmh: 'float' = 3.0, observation_lag_s: 'float' = 900.0, shapes: 'RouteShapes | None' = None)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+<dl><dt><a name="Schedule-__init__"><strong>__init__</strong></a>(self, plan: 'pd.DataFrame', *, stop_radius_m: 'float' = 35.0, stop_speed_kmh: 'float' = 3.0, observation_lag_s: 'float' = 900.0, shapes: 'RouteShapes | None' = None, routes: 'dict[str, RouteInfo] | None' = None)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
 
 <dl><dt><a name="Schedule-counters"><strong>counters</strong></a>(self) -&gt; 'dict[str, int]'</dt></dl>
 
@@ -260,5 +260,6 @@ caller's&nbsp;order&nbsp;decides&nbsp;between&nbsp;overlapping&nbsp;out-and-back
 <tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
 <td class="singlecolumn"><strong>M_PER_DEG_LAT</strong> = 110540.0<br>
 <strong>M_PER_DEG_LON_EQUATOR</strong> = 111320.0<br>
-<strong>RouteShapes</strong> = dict[str, dict[tuple[str, str], transport_backend.route_shapes.SegmentShape]]</td></tr></table>
+<strong>RouteShapes</strong> = dict[str, dict[tuple[str, str], transport_backend.route_shapes.SegmentShape]]<br>
+<strong>TYPE_CHECKING</strong> = False</td></tr></table>
 </body></html>
