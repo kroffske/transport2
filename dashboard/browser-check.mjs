@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {LOST_AFTER_S} from './incidents.js';
 import {reasonText} from './reasons.js';
-import {shiftedText} from './route-context.js';
+import {coordOk, shiftedText} from './route-context.js';
 import {speedupText} from './run.js';
 
 const base = process.env.UI_URL || 'http://127.0.0.1:18882';
@@ -33,7 +33,7 @@ const shot = async (page, name) => { if (evidenceDir) await page.screenshot({pat
 
 const browser = await chromium.launch({headless: true, args: ['--use-gl=angle', '--use-angle=swiftshader']});
 // `allow` exempts expected error answers (e.g. a provoked 404 of /api/route) by URL; `allowErrors` exempts all.
-async function open({allowErrors = false, allow = null, setup, context: contextOptions} = {}) {
+async function open({allowErrors = false, allow = null, setup, context: contextOptions, query = ''} = {}) {
   const expected = url => allowErrors || Boolean(allow && url && allow.test(url));
   const context = await browser.newContext({viewport: VIEWPORT, deviceScaleFactor: 1, ...contextOptions});
   const page = await context.newPage();
@@ -43,7 +43,7 @@ async function open({allowErrors = false, allow = null, setup, context: contextO
   // An error status (e.g. the browser's automatic /favicon.ico) is a failure unless the pass provokes errors on purpose.
   page.on('response', res => { if (res.status() >= 400 && !expected(res.url())) failures.push(`${pass}: HTTP ${res.status()}: ${res.url()}`); });
   if (setup) await setup(page);
-  await page.goto(`${base}/`, {waitUntil: 'domcontentloaded', timeout: 30000});
+  await page.goto(`${base}/${query}`, {waitUntil: 'domcontentloaded', timeout: 30000});
   return page;
 }
 const inside = (box, area) => box && box.x >= area.x - 1 && box.y >= area.y - 1
@@ -88,6 +88,16 @@ async function pressAcrossPoll(page, selector) {
   await page.waitForTimeout(POLL_SPAN_MS); // a poll re-renders the panels between down and up
   await page.mouse.up();
   await page.waitForTimeout(300);
+}
+
+// Map symbols (map-symbols.js shapeOf): kind|size|border|badge|ring on each vehicle label.
+const symbolsOnMap = page => page.locator('.vehicle-label').evaluateAll(labels => labels.map(l => ({id: l.dataset.id, level: l.dataset.level, symbol: l.dataset.symbol ?? ''})));
+function symbolMatchesLevel({level, symbol}) {
+  const [kind, , border, badge] = symbol.split('|');
+  if (kind !== 'vehicle') return false;
+  if (badge === '?') return true; // invalid GPS: grey with «?» whatever the level
+  return level === 'nodata' ? border === 'dashed' && badge === ''
+    : border === 'solid' && badge === ({severe: '!!', warning: '!', normal: ''})[level];
 }
 
 const noScenario = async page => await page.locator('#scenario, #mode-badge, [data-mode], .mode-switch, .direction-chip, #routes, [id^=scenario-]').count() === 0
@@ -161,6 +171,13 @@ try {
     const overlapsOverview = await labelOverlaps(page);
     check(overlapsOverview.length === 0, `overview: no two map labels intersect (${overlapsOverview.join(', ') || 'none'})`);
     await shot(page, 'live-1-overview-1920.png');
+    const drawn = await symbolsOnMap(page);
+    check(drawn.length > 0 && drawn.every(symbolMatchesLevel), `map symbols: every vehicle is a bus icon whose non-colour marks match its state (${drawn.map(d => `${d.id}:${d.symbol}`).join(', ')})`);
+    const legend = await page.locator('img.legend-symbol').evaluateAll(images => images.map(img => img.src));
+    check(legend.length === 7 && new Set(legend).size === 7 && legend.every(src => src.startsWith('data:image/png')), 'legend shows the 7 map symbols, all different, drawn locally');
+    const legendBox = await page.locator('.legend').boundingBox();
+    check(legendBox.height <= 56 && legendBox.width <= 720 && await page.locator('#legend-route').isHidden()
+      && (await page.locator('#legend-help').getAttribute('title')).includes('Цвет ТС'), `legend without a selection: one row ≤ 56 px, route row hidden, note in «?» (${Math.round(legendBox.width)}×${Math.round(legendBox.height)})`);
 
     // A vehicle with a current model prediction, a target and a valid position.
     const candidate = vehicles.filter(v => v.status === 'normal' && v.prediction_s != null && v.target_stop_id && v.location_valid)
@@ -196,7 +213,7 @@ try {
         await page.locator('#shift-after-target').check();
       }
       check((await page.locator('#route .route-caption').textContent()).includes('не официальная трасса'), 'card: the grey line is named «путь по GPS прогона», not an official route');
-      check((await page.locator('#legend-route').textContent()).includes('путь по GPS прогона'), 'legend names the route layers');
+      check((await page.locator('#legend-route').textContent()).includes('путь по GPS прогона') && (await page.locator('.legend').boundingBox()).height <= 84, 'legend with a selection: route row shown, ≤ 84 px');
       check(await page.locator('.stop-label').count() <= 2, 'map: time labels only for the target and the nearest future stop');
       const overlapsSelected = await labelOverlaps(page);
       check(overlapsSelected.length === 0, `selected: no two map labels intersect (${overlapsSelected.join(', ') || 'none'})`);
@@ -232,10 +249,15 @@ try {
       await page.locator(`#vehicles .vehicle[data-id="${invalid.tr_id}"]`).click();
       await page.waitForTimeout(900);
       const row = ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).find(v => String(v.tr_id) === String(invalid.tr_id));
-      if (row && !row.location_valid) {
-        check(await cardTitle(page) === String(invalid.tr_id) && (await cardText(page)).includes('Позиция недостоверна') && await page.locator('#card-show').isDisabled()
-          && await page.locator(`.vehicle-label[data-id="${invalid.tr_id}"]`).count() === 0, 'invalid GPS: vehicle listed, not drawn, card says so');
+      if (row && !row.location_valid && coordOk(row.lon, row.lat)) {
+        // lon/lat is the last valid position: drawn grey with «?», the card says so.
+        check(await cardTitle(page) === String(invalid.tr_id) && (await cardText(page)).includes('Последний кадр без валидного GPS')
+          && (await page.locator(`.vehicle-label[data-id="${invalid.tr_id}"]`).getAttribute('data-symbol'))?.includes('|?|'),
+        'invalid GPS: drawn at the last valid position with «?», card says so');
         await shot(page, 'live-5-invalid-gps-1920.png');
+      } else if (row && !row.location_valid) {
+        check(await cardTitle(page) === String(invalid.tr_id) && (await cardText(page)).includes('объект на карте не показан') && await page.locator('#card-show').isDisabled()
+          && await page.locator(`.vehicle-label[data-id="${invalid.tr_id}"]`).count() === 0, 'invalid GPS without a valid position: listed, not drawn, card says so');
       } else skipped.push(`live: ${invalid.tr_id} got a valid GPS fix during the check — invalid-GPS card not asserted`);
     } else skipped.push('live: no vehicle with invalid GPS in this snapshot');
 
@@ -341,6 +363,7 @@ try {
     check(await page.evaluate(() => document.activeElement?.id) === 'shift-after-target', 'the toggle keeps keyboard focus across a poll');
     await page.locator('#card-close').click();
     setSnapshot(RUN('run-A-0001'), [a, b]);
+    await page.waitForTimeout(POLL_SPAN_MS);
 
     // prediction_updating: still the normal level, with the «обновляется» badge and age.
     await page.locator('#vehicles .vehicle[data-id="900002"]').click();
@@ -442,6 +465,54 @@ try {
     check((await page.locator('#run-source').textContent()).includes('часы dataset_wall') && await page.locator('#run-id').textContent() === 'прогона нет'
       && await page.locator('#run-speed').textContent() === 'Ускорение неизвестно', 'snapshot.run = null: no run, no speed-up invented');
     check(await noScenario(page), 'no scenario elements in any state');
+    await page.close();
+  }
+
+  // Every map symbol state at once: warning, severe, normal, invalid GPS at the last valid
+  // position, no current prediction; then the selected vehicle with its stops and target.
+  {
+    const a = bus('900001', center[0], center[1], {prediction_s: 200});
+    const b = bus('900002', center[0] + 0.03, center[1] + 0.01, {prediction_s: 40});
+    const gpsBad = bus('900003', center[0] - 0.03, center[1] - 0.012, {prediction_s: 30, location_valid: false});
+    const stale = bus('900004', center[0] + 0.02, center[1] - 0.015, {status: 'degraded', reason: 'prediction_pending', prediction_s: null});
+    const severe = bus('900005', center[0] - 0.015, center[1] + 0.016, {prediction_s: 420});
+    setSnapshot(RUN('run-E-0005'), [a, b, gpsBad, stale, severe]);
+    // Dense timetable (a stop every ~100 m) to check that stops are thinned below z13.
+    const dense = Array.from({length: 30}, (_, i) => ({stop_id: `D${i}`, time: `06:${String(48 + Math.floor(i / 3)).padStart(2, '0')}:${String((i % 3) * 20).padStart(2, '0')}`,
+      lon: center[0] - 0.02 + i * 0.0015, lat: center[1] - 0.006 + i * 0.0004, role: i < 10 ? 'passed' : i < 20 ? 'before_target' : 'after_target'}));
+    state.route = {900001: routeOf(a, {stops: [...dense.slice(0, 20), {stop_id: a.target_stop_id, time: '06:58:00', lon: a.target_lon, lat: a.target_lat, role: 'target'}, ...dense.slice(20)]})};
+    const page = await open({setup, query: '?debug'});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(2500);
+    const symbols = Object.fromEntries((await symbolsOnMap(page)).map(d => [d.id, d.symbol]));
+    check(symbols['900001']?.includes('|!|') && symbols['900005']?.includes('|!!|') && symbols['900003']?.includes('|?|')
+      && symbols['900004']?.includes('|dashed|') && symbols['900002']?.split('|')[3] === '' && new Set(Object.values(symbols)).size === 5,
+    `symbols differ without colour: «!», «!!», «?», dashed, plain (${JSON.stringify(symbols)})`);
+    check(await page.locator('.vehicle-label[data-id="900003"]').count() === 1 && (await page.locator('#vehicles .vehicle[data-id="900003"]').textContent()).includes('GPS недостоверен'),
+      'invalid GPS with a last valid position: drawn there and marked in the list');
+    await shot(page, 'regression-7-symbols-1920.png');
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    await page.waitForFunction(() => document.getElementById('route')?.dataset.status === 'ok', null, {timeout: 8000});
+    await page.waitForTimeout(800);
+    check((await page.locator('.vehicle-label.is-selected').getAttribute('data-symbol'))?.endsWith('|selected'), 'selected vehicle: ring and larger icon');
+    const overlaps = await labelOverlaps(page);
+    check(overlaps.length === 0, `symbols: no two map labels intersect (${overlaps.join(', ') || 'none'})`);
+    await shot(page, 'regression-8-symbols-selected-1920.png');
+    // M-2: at z11 and z12 no two drawn stops closer than 12 px; at z14 every stop is drawn.
+    for (const zoom of [11, 12, 14]) {
+      await page.evaluate(z => window.__map.jumpTo({zoom: z}), zoom);
+      await page.waitForTimeout(700);
+      const {count, minGap} = await page.evaluate(() => {
+        const map = window.__map;
+        const points = map.queryRenderedFeatures({layers: ['route-stops']}).map(f => map.project(f.geometry.coordinates));
+        let min = Infinity;
+        for (let i = 0; i < points.length; i += 1) for (let j = i + 1; j < points.length; j += 1) min = Math.min(min, Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y));
+        return {count: points.length, minGap: min};
+      });
+      if (zoom < 13) check(count > 0 && minGap >= 12, `z${zoom}: ${count} stops drawn, closest pair ${Math.round(minGap)} px ≥ 12`);
+      else check(count === 30, `z${zoom}: all 30 stops drawn (${count})`);
+      if (zoom === 12) await shot(page, 'regression-9-stops-thinned-z12-1920.png');
+    }
     await page.close();
   }
 

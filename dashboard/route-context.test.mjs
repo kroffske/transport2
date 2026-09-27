@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BASIS, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
-  undrawnCount} from './route-context.js';
+import {BASIS, MIN_STOP_GAP_PX, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
+  thinStops, undrawnCount} from './route-context.js';
 
 const usable = {modelUsable: true, factUsable: true};
 const route = (overrides = {}) => ({
@@ -104,4 +104,14 @@ test('a stale or degraded prediction is never shown as the model value; an offli
   const offline = stopRows(route(), {modelUsable: false, factUsable: false});
   assert.ok(offline.every(r => r.basis === null && r.expected === null), 'offline: plan times only');
   assert.throws(() => stopRows(route(), {}), /modelUsable/);
+});
+
+test('stops are thinned on screen: none closer than the gap to a kept stop or to the target', () => {
+  const points = Array.from({length: 10}, (_, i) => ({row: `s${i}`, x: i * 5, y: 0}));
+  const kept = thinStops(points, {avoid: [{x: 45, y: 0}]});
+  const xs = kept.map(id => Number(id.slice(1)) * 5);
+  for (let i = 1; i < xs.length; i += 1) assert.ok(xs[i] - xs[i - 1] >= MIN_STOP_GAP_PX);
+  assert.ok(xs.every(x => Math.abs(x - 45) >= MIN_STOP_GAP_PX), 'clear of the target');
+  assert.deepEqual(kept, ['s0', 's3', 's6']);
+  assert.equal(thinStops(points, {gap: 0}).length, 10, 'no thinning at gap 0');
 });

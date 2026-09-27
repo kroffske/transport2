@@ -1,14 +1,16 @@
 import * as maplibregl from 'maplibre-gl';
 import {PMTiles, Protocol} from 'pmtiles';
-import * as THREE from 'three';
 import {NOTE_MAX, acknowledge, addNote, assess, countByFilter, createIncidentStore, findIncident, incidentCounts,
   incidentForVehicle, markRead, observeSnapshot, orderedIncidents, reopen, visibleRows} from './incidents.js';
 import {patchChildren, patchText} from './dom.js';
 import {placeLabels} from './map-labels.js';
+import {drawSymbol, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
 import {reasonText} from './reasons.js';
-import {BASIS, DATA_BOUNDS, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText,
+import {BASIS, coordOk, durationText, labelledStops, planText, shiftedText, signedDurationText,
   stopRows, undrawnCount} from './route-context.js';
+import {createRouteLayers} from './route-layers.js';
 import {createRunTracker, dataTimeText, runStateText, shortRunId, sourceText, speedupText} from './run.js';
+import {createTransportLayer} from './transport-layer.js';
 import './style.css';
 
 const $ = id => document.getElementById(id);
@@ -18,28 +20,29 @@ const ageText = seconds => seconds == null || !Number.isFinite(Number(seconds)) 
 const clockText = iso => typeof iso === 'string' && iso.length >= 16 ? iso.slice(11, 16) : text(iso);
 const percentText = ratio => ratio == null || ratio === '' || !Number.isFinite(Number(ratio)) ? '—'
   : `${(Number(ratio) * 100).toLocaleString('ru-RU', {maximumFractionDigits: 1})} %`;
-// A vehicle is drawn only with a valid GPS fix inside the data extent (DATA_BOUNDS).
-const locationOk = v => v.location_valid === true && coordOk(v.lon, v.lat);
-const positionNote = v => (v.location_valid === true && v.lon != null && v.lat != null && !(Number(v.lon) === 0 && Number(v.lat) === 0)
-  ? 'вне карты' : 'без позиции');
+// Backend `lon/lat` is the last valid GPS position; `location_valid` describes the latest frame.
+// A vehicle is drawn at that position when it lies inside the data extent (DATA_BOUNDS); with an
+// invalid latest frame it is drawn grey with «?» (map-symbols.js). No position: listed, not drawn.
+const locationOk = v => coordOk(v.lon, v.lat);
+const gpsValid = v => v.location_valid === true;
+const positionNote = v => (locationOk(v) ? (gpsValid(v) ? '' : 'GPS недостоверен · последняя позиция')
+  : v.lon != null && v.lat != null && !(Number(v.lon) === 0 && Number(v.lat) === 0) ? 'вне карты' : 'без позиции');
 const targetOk = v => coordOk(v.target_lon, v.target_lat);
 
 const LEVEL = {
-  severe: {color: '#c8412f', halo: '#f2c4bc', label: 'Сильная задержка'},
-  warning: {color: '#e39a2d', halo: '#f7deb0', label: 'Предупреждение'},
-  normal: {color: '#23845f', label: 'В пределах нормы'},
-  nodata: {color: '#ffffff', label: 'Нет прогноза'},
+  severe: {label: 'Сильная задержка'},
+  warning: {label: 'Предупреждение'},
+  normal: {label: 'В пределах нормы'},
+  nodata: {label: 'Нет прогноза'},
 };
 const FILTER_LABEL = {all: 'Все', warning: 'С предупреждениями', nodata: 'Нет прогноза'};
 const STATUS = {normal: 'данные в норме', degraded: 'данные частично устарели', unavailable: 'прогноз недоступен'};
-const ROLE = {passed: 'пройдена', before_target: 'до цели', target: 'цель', after_target: 'после цели', planned: 'по плану'};
 const DEFAULT_VIEW = {center: [37.6173, 55.7558], zoom: 11};
 const TOAST_MS = 15000;
 const POLL_MS = 1500;
 const ROUTE_REFRESH_MS = 3000;
 const INCIDENT_STATE = {active: 'Активно', monitoring_lost: 'Мониторинг потерян', resolved: 'Задержка закончилась'};
 const WORKFLOW = {new: 'Новое', in_work: 'В работе'};
-const ROUTE_COLOR = {path: '#8795a0', passed: '#2f6f9f', stop: '#1b2a36', stopPassed: '#a9b3ba'};
 // The camera may range wider than the data extent, so a 1500×1024 map can zoom out far enough to show
 // every vehicle of a run at once; nothing is drawn outside DATA_BOUNDS (route-context.js).
 const CAMERA_BOUNDS = [[36.8, 55.42], [38.45, 56.08]];
@@ -97,30 +100,42 @@ maplibregl.addProtocol('pmtiles', protocol.tile);
 const tiles = new PMTiles(`${location.origin}/map/moscow.pmtiles`);
 protocol.add(tiles);
 
+// Road-first base map (inline style, local tiles only). Roads carry the picture: every class has a
+// casing, and the hierarchy highway > major > minor reads by width and colour on a slightly darker
+// ground. Parks and water are muted; buildings are faint and appear only from z15. No labels: no
+// glyphs are shipped (README «Происхождение геоосновы»).
 const roadWidth = (base, top) => ['interpolate', ['exponential', 1.6], ['zoom'], 9, base, 16, top];
+const roadKind = kinds => ['in', ['get', 'kind'], ['literal', kinds]];
+const ROAD = {
+  minor: {filter: roadKind(['minor_road', 'other']), fill: '#ffffff', casing: '#c5cac4', width: [0.35, 5.5], minzoom: 11},
+  major: {filter: roadKind(['major_road']), fill: '#ffffff', casing: '#9ea59d', width: [0.9, 9.5]},
+  highway: {filter: roadKind(['highway']), fill: '#f6cf7d', casing: '#b3873a', width: [1.5, 12.5]},
+};
+const casing = ([base, top]) => roadWidth(base + 0.9, top + 3);
+const roadLayers = [
+  ...Object.entries(ROAD).map(([name, road]) => ({id: `roads-${name}-casing`, type: 'line', source: 'osm', 'source-layer': 'roads',
+    filter: road.filter, ...(road.minzoom ? {minzoom: road.minzoom} : {}), layout: {'line-cap': 'round', 'line-join': 'round'},
+    paint: {'line-color': road.casing, 'line-width': casing(road.width)}})),
+  ...Object.entries(ROAD).map(([name, road]) => ({id: `roads-${name}`, type: 'line', source: 'osm', 'source-layer': 'roads',
+    filter: road.filter, ...(road.minzoom ? {minzoom: road.minzoom} : {}), layout: {'line-cap': 'round', 'line-join': 'round'},
+    paint: {'line-color': road.fill, 'line-width': roadWidth(...road.width)}})),
+];
 const baseStyle = {
   version: 8,
   sources: {osm: {type: 'vector', url: `pmtiles://${location.origin}/map/moscow.pmtiles`, attribution: '© OpenStreetMap contributors (ODbL)'}},
   layers: [
-    {id: 'land', type: 'background', paint: {'background-color': '#eef1ee'}},
+    {id: 'land', type: 'background', paint: {'background-color': '#e6e8e3'}},
     {id: 'green', type: 'fill', source: 'osm', 'source-layer': 'landuse',
       filter: ['in', ['get', 'kind'], ['literal', ['park', 'forest', 'wood', 'grass', 'garden', 'cemetery', 'nature_reserve', 'meadow']]],
-      paint: {'fill-color': '#dde8da'}},
+      paint: {'fill-color': '#d7e2d3'}},
     {id: 'water', type: 'fill', source: 'osm', 'source-layer': 'water',
-      filter: ['==', ['geometry-type'], 'Polygon'], paint: {'fill-color': '#c3dbe6'}},
-    {id: 'buildings', type: 'fill', source: 'osm', 'source-layer': 'buildings', minzoom: 13, paint: {'fill-color': '#e6e7e2'}},
-    {id: 'roads-minor', type: 'line', source: 'osm', 'source-layer': 'roads',
-      filter: ['in', ['get', 'kind'], ['literal', ['minor_road', 'other']]],
-      paint: {'line-color': '#ffffff', 'line-width': roadWidth(0.3, 5)}},
-    {id: 'roads-major', type: 'line', source: 'osm', 'source-layer': 'roads',
-      filter: ['==', ['get', 'kind'], 'major_road'],
-      paint: {'line-color': '#fbfbf8', 'line-width': roadWidth(0.8, 9)}},
-    {id: 'roads-highway', type: 'line', source: 'osm', 'source-layer': 'roads',
-      filter: ['==', ['get', 'kind'], 'highway'],
-      paint: {'line-color': '#f3e3bd', 'line-width': roadWidth(1.2, 11)}},
+      filter: ['==', ['geometry-type'], 'Polygon'], paint: {'fill-color': '#c2d6df'}},
+    {id: 'buildings', type: 'fill', source: 'osm', 'source-layer': 'buildings', minzoom: 15,
+      paint: {'fill-color': '#dcddd8', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 15, 0.35, 16, 0.6]}},
     {id: 'rail', type: 'line', source: 'osm', 'source-layer': 'roads',
       filter: ['==', ['get', 'kind'], 'rail'], minzoom: 11,
-      paint: {'line-color': '#c9cdd0', 'line-width': 1, 'line-dasharray': [3, 2]}},
+      paint: {'line-color': '#b7bcc0', 'line-width': 1, 'line-dasharray': [3, 2]}},
+    ...roadLayers,
     {id: 'boundaries', type: 'line', source: 'osm', 'source-layer': 'boundaries',
       paint: {'line-color': '#b9bfc4', 'line-width': 0.8, 'line-dasharray': [2, 2]}},
   ],
@@ -134,6 +149,7 @@ try {
     pitch: 0, bearing: 0, maxPitch: 0, dragRotate: false, pitchWithRotate: false, touchPitch: false,
     attributionControl: false,
   });
+  if (new URLSearchParams(location.search).has('debug')) window.__map = map; // browser-check only: query rendered layers
   map.touchZoomRotate.disableRotation();
   map.keyboard.disableRotation();
   map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'bottom-right');
@@ -155,6 +171,8 @@ function markMapUnavailable(reason) {
   renderDiagnostics();
 }
 
+const transportLayer = createTransportLayer();
+const routeLayers = map ? createRouteLayers(map) : null;
 let tileErrorSeen = false;
 if (map) {
   map.on('error', event => {
@@ -163,7 +181,7 @@ if (map) {
     if (mapStatus !== 'ready') markMapUnavailable(`плитки Москвы не загрузились (${message})`);
     else $('map-state').textContent = `Часть плиток не загрузилась: ${message}`;
   });
-  map.on('load', () => { addRouteLayers(); map.addLayer(transportLayer); renderMapObjects(); });
+  map.on('load', () => { routeLayers.add(); map.addLayer(transportLayer); renderMapObjects(); });
   map.on('idle', () => {
     if (mapStatus !== 'loading' || tileErrorSeen || !map.isSourceLoaded('osm')) return;
     mapStatus = 'ready';
@@ -173,15 +191,16 @@ if (map) {
     if (pendingOverview && snapshotRows().length) overview(false);
   });
   map.on('move', layoutLabels);
+  map.on('zoomend', () => { routeLayers.rethin(); layoutLabels(); });
   map.on('resize', layoutLabels);
   map.on('click', event => { const hit = hitTest(event.point); if (hit) choose(hit, false); });
   map.on('mousemove', event => {
     const hit = hitTest(event.point);
     map.getCanvas().style.cursor = hit ? 'pointer' : '';
     setHovered(hit);
-    showStopTip(hit ? null : event);
+    routeLayers.showTip(hit ? null : event);
   });
-  map.on('mouseout', () => { setHovered(null); showStopTip(null); });
+  map.on('mouseout', () => { setHovered(null); routeLayers.showTip(null); });
 }
 // A missing or unreadable archive fails here deterministically, before any tile request.
 tiles.getHeader().catch(error => markMapUnavailable(`нет локального архива плиток (${error.message || error})`));
@@ -189,120 +208,19 @@ fetch('/map/manifest.json').then(r => { if (!r.ok) throw Error(`HTTP ${r.status}
   .then(body => { manifest = body; renderDiagnostics(); })
   .catch(error => markMapUnavailable(`нет описания геоосновы manifest.json (${error.message})`));
 
-// ---- Transport layer: the only renderer of vehicle and target symbols ----------------------
-// Three.js draws flat symbols inside a MapLibre custom layer, sharing its camera and WebGL
-// context. Positions are MercatorCoordinate scaled to world pixels, so a radius in world
-// pixels is a radius in screen pixels at every zoom.
-const shapesGeometry = {circle: new THREE.CircleGeometry(1, 40), diamond: new THREE.CircleGeometry(1, 4)};
-const materials = new Map();
-const material = color => {
-  if (!materials.has(color)) {
-    materials.set(color, new THREE.MeshBasicMaterial({color, depthTest: false, depthWrite: false, side: THREE.DoubleSide}));
-  }
-  return materials.get(color);
-};
-const transportLayer = {
-  id: 'transport-three', type: 'custom', renderingMode: '3d',
-  onAdd(mapInstance, gl) {
-    this.map = mapInstance;
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.Camera();
-    this.renderer = new THREE.WebGLRenderer({canvas: mapInstance.getCanvas(), context: gl, antialias: true});
-    this.renderer.autoClear = false;
-    this.meshes = [];
-  },
-  setShapes(shapes) {
-    if (!this.scene) return;
-    for (const mesh of this.meshes) this.scene.remove(mesh);
-    this.meshes = shapes.map((shape, index) => {
-      const mesh = new THREE.Mesh(shapesGeometry[shape.geometry || 'circle'], material(shape.color));
-      mesh.userData = {coord: maplibregl.MercatorCoordinate.fromLngLat([shape.lon, shape.lat], 0), radius: shape.radius};
-      mesh.renderOrder = index;
-      mesh.frustumCulled = false;
-      this.scene.add(mesh);
-      return mesh;
-    });
-    this.map.triggerRepaint();
-  },
-  render(gl, options) {
-    const worldSize = 512 * 2 ** this.map.getZoom();
-    for (const mesh of this.meshes) {
-      const {coord, radius} = mesh.userData;
-      mesh.position.set(coord.x * worldSize, coord.y * worldSize, 0);
-      mesh.scale.setScalar(radius);
-    }
-    this.camera.projectionMatrix.fromArray(options.modelViewProjectionMatrix);
-    this.renderer.resetState();
-    this.renderer.setViewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    this.renderer.render(this.scene, this.camera);
-  },
-  onRemove() { for (const geometry of Object.values(shapesGeometry)) geometry.dispose(); for (const m of materials.values()) m.dispose(); this.renderer.dispose(); },
-};
-
-// ---- Route context: ordinary MapLibre layers under the transport layer -----------------------
-// For the selected vehicle only: the grey GPS path of this run (the driver's plan for the window,
-// display-only — not an official route and not a model input), the passed part in colour, and the
-// timetable stops of the window as points. The target is the diamond of the transport layer.
-const emptyCollection = {type: 'FeatureCollection', features: []};
-function addRouteLayers() {
-  for (const id of ['route-path', 'route-passed', 'route-stops']) map.addSource(id, {type: 'geojson', data: emptyCollection});
-  map.addLayer({id: 'route-path-casing', type: 'line', source: 'route-path', layout: {'line-cap': 'round', 'line-join': 'round'},
-    paint: {'line-color': '#ffffff', 'line-width': 7, 'line-opacity': 0.8}});
-  map.addLayer({id: 'route-path', type: 'line', source: 'route-path', layout: {'line-cap': 'round', 'line-join': 'round'},
-    paint: {'line-color': ROUTE_COLOR.path, 'line-width': 3.5}});
-  map.addLayer({id: 'route-passed', type: 'line', source: 'route-passed', layout: {'line-cap': 'round', 'line-join': 'round'},
-    paint: {'line-color': ROUTE_COLOR.passed, 'line-width': 5}});
-  const passed = ['==', ['get', 'role'], 'passed'];
-  map.addLayer({id: 'route-stops', type: 'circle', source: 'route-stops',
-    paint: {'circle-radius': ['case', passed, 3.5, 5], 'circle-color': '#ffffff',
-      'circle-stroke-color': ['case', passed, ROUTE_COLOR.stopPassed, ROUTE_COLOR.stop], 'circle-stroke-width': ['case', passed, 1.5, 2.5]}});
-}
-
-const multiLine = parts => ({type: 'FeatureCollection', features: parts.length
-  ? [{type: 'Feature', properties: {}, geometry: {type: 'MultiLineString', coordinates: parts}}] : []});
-
+// ---- Route context and transport symbols: route-layers.js, transport-layer.js ----------------
 function renderRouteLayers() {
-  if (!map?.getSource('route-path')) return;
   const data = mapStatus === 'ready' ? shownRoute() : null;
-  map.getSource('route-path').setData(multiLine(data ? lineParts(data.path) : []));
-  map.getSource('route-passed').setData(multiLine(data ? lineParts(data.passed) : []));
   const rows = routeRows(data);
-  map.getSource('route-stops').setData({type: 'FeatureCollection', features: rows
-    .filter(r => r.onMap && r.role !== 'target')
-    .map(r => ({type: 'Feature', properties: {role: r.role, tip: stopTip(r)}, geometry: {type: 'Point', coordinates: [r.lon, r.lat]}}))});
+  const chosen = findRow(selected);
+  routeLayers?.render(data, rows, {keep: labelledStops(rows).next, target: chosen ? targetPoint(chosen) : null});
 }
 
-// One line of a stop for hover and the card: «до цели · план 06:52 → ~06:53:35 · по факту, не прогноз».
-function stopTip(row) {
-  return [ROLE[row.role] ?? row.role, `план ${row.plan ?? 'неизвестно'}${row.expected ? ` → ${row.expected}` : ''}`,
-    row.basis ? BASIS[row.basis] : null].filter(Boolean).join(' · ');
-}
-
-let stopPopup = null;
-function showStopTip(event) {
-  const features = event && map.getLayer('route-stops') ? map.queryRenderedFeatures(event.point, {layers: ['route-stops']}) : [];
-  if (!features.length) { stopPopup?.remove(); stopPopup = null; return; }
-  stopPopup ??= new maplibregl.Popup({closeButton: false, closeOnClick: false, className: 'stop-tip', offset: 8});
-  stopPopup.setLngLat(features[0].geometry.coordinates).setText(`Остановка · ${features[0].properties.tip}`).addTo(map);
-}
-
-function vehicleShapes(vehicle, assessment) {
-  const lon = Number(vehicle.lon), lat = Number(vehicle.lat);
+const vehicleSymbol = (vehicle, assessment) => {
   const id = String(vehicle.tr_id);
-  const shapes = [];
-  const level = LEVEL[assessment.level];
-  if (id === selected) shapes.push({lon, lat, radius: 16, color: '#10202e'}, {lon, lat, radius: 13, color: '#ffffff'});
-  else if (id === hovered) shapes.push({lon, lat, radius: 13, color: '#2f6f9f'});
-  else if (level.halo) shapes.push({lon, lat, radius: 13, color: level.halo});
-  const big = id === selected ? 1.5 : 0;
-  if (assessment.level === 'nodata') {
-    // Hollow ring: "no usable prediction" differs by shape, not only by color.
-    shapes.push({lon, lat, radius: 8 + big, color: '#5d6b76'}, {lon, lat, radius: 5.5 + big, color: '#ffffff'});
-  } else {
-    shapes.push({lon, lat, radius: 8.5 + big, color: '#1b2a36'}, {lon, lat, radius: 6.5 + big, color: level.color});
-  }
-  return shapes;
-}
+  return {lon: Number(vehicle.lon), lat: Number(vehicle.lat),
+    look: vehicleLook(assessment.level, {gpsValid: gpsValid(vehicle), selected: id === selected, hovered: id === hovered})};
+};
 
 // Where the selected vehicle's target is drawn: the snapshot's coordinate, else the route's target stop.
 function targetPoint(vehicle) {
@@ -318,23 +236,18 @@ function renderMapObjects() {
   const located = drawable ? visible.filter(({vehicle}) => locationOk(vehicle)) : [];
   const chosen = findRow(selected);
   const target = drawable && chosen ? targetPoint(chosen) : null;
-  const shapes = [];
-  if (target) {
-    const [lon, lat] = target;
-    shapes.push({lon, lat, radius: 12, color: '#1b2a36', geometry: 'diamond'},
-      {lon, lat, radius: 9, color: '#ffffff', geometry: 'diamond'},
-      {lon, lat, radius: 3.5, color: '#1b2a36', geometry: 'diamond'});
-  }
+  const symbols = target ? [{lon: target[0], lat: target[1], look: targetLook()}] : [];
   const ordered = [...located].sort((a, b) => (String(a.vehicle.tr_id) === selected) - (String(b.vehicle.tr_id) === selected)
     || (String(a.vehicle.tr_id) === hovered) - (String(b.vehicle.tr_id) === hovered));
   // A selected object hidden by the filter stays on the map, drawn on top.
   if (drawable && chosen && locationOk(chosen) && !located.some(({vehicle}) => vehicle === chosen)) {
     ordered.push({vehicle: chosen, assessment: assess(chosen, isFresh())});
   }
-  for (const {vehicle, assessment} of ordered) shapes.push(...vehicleShapes(vehicle, assessment));
-  transportLayer.setShapes(shapes);
+  for (const {vehicle, assessment} of ordered) symbols.push(vehicleSymbol(vehicle, assessment));
+  transportLayer.setSymbols(symbols);
   renderLabels(ordered);
   renderStopLabels(drawable && chosen ? chosen : null, target);
+  $('legend-route').hidden = !chosen; // the route legend only describes a selected vehicle
   layoutLabels();
 }
 
@@ -391,6 +304,7 @@ function renderLabels(rows) {
     }
     const element = marker.getElement();
     element.dataset.level = assessment.level;
+    element.dataset.symbol = shapeOf(vehicleSymbol(vehicle, assessment).look); // what the icon shows besides colour
     element.classList.toggle('is-selected', id === selected);
     element.classList.toggle('is-hovered', id === hovered);
     element.textContent = `${id} · ${shortValue(vehicle, assessment)}`;
@@ -420,12 +334,11 @@ function layoutLabels() {
     element.hidden = !(p.x >= 0 && p.y >= 0 && p.x <= area.width && p.y <= area.height);
     return element.hidden ? null : {id, x: p.x, y: p.y, width: element.offsetWidth, height: element.offsetHeight, ...extra};
   };
-  // Route stops without a time label are obstacles too: a label must not hide a stop. The target and
-  // the labelled next stop are already kept clear as the dots of their own labels.
-  const stops = routeRows(shownRoute());
-  const labelled = labelledStops(stops);
-  for (const row of stops) {
-    if (!row.onMap || row.role === 'target' || row === labelled.next) continue;
+  // Route stops drawn without a time label are obstacles too: a label must not hide a stop. The
+  // target and the labelled next stop are already kept clear as the dots of their own labels.
+  const labelled = labelledStops(routeRows(shownRoute()));
+  for (const row of routeLayers?.drawnStops() ?? []) {
+    if (row.stop_id === labelled.next?.stop_id && row.time === labelled.next?.time) continue;
     const p = map.project([row.lon, row.lat]);
     obstacles.push({x: p.x - STOP_OBSTACLE_PX / 2, y: p.y - STOP_OBSTACLE_PX / 2, width: STOP_OBSTACLE_PX, height: STOP_OBSTACLE_PX});
   }
@@ -473,7 +386,7 @@ function focusSelected() {
   const target = targetPoint(v);
   if (!target) { map.easeTo({center: here, zoom: Math.max(13, map.getZoom()), duration: 600}); return; }
   const bounds = new maplibregl.LngLatBounds(here, here).extend(target);
-  map.fitBounds(bounds, {padding: {top: 150, bottom: 170, left: 160, right: 160}, maxZoom: 15, duration: 600});
+  map.fitBounds(bounds, {padding: {top: 150, bottom: 200, left: 160, right: 160}, maxZoom: 15, duration: 600}); // bottom clears the legend
 }
 
 // ---- Selection ---------------------------------------------------------------------------
@@ -563,7 +476,9 @@ function rowNote(vehicle, assessment) {
   } else if (vehicle.prediction_updating === true) {
     note = `${note} · обновляется`;
   }
-  return locationOk(vehicle) ? note : `${note} · ${positionNote(vehicle)}`;
+  // An invalid-GPS reason already says it; the position note is not repeated.
+  const where = assessment.level === 'nodata' && vehicle.reason === 'invalid_gps' && locationOk(vehicle) ? '' : positionNote(vehicle);
+  return where ? `${note} · ${where}` : note;
 }
 
 function renderFilters() {
@@ -709,7 +624,7 @@ function renderCard() {
     link.dataset.contextRevision = text(v.prediction_context_revision);
   }
   field(details, 'Свежесть', [v.prediction_age_s == null ? 'прогноза нет' : `прогноз ${ageText(v.prediction_age_s)}`,
-    `GPS ${locationOk(v) ? ageText(v.gps_age_s) : 'недостоверен'}`].join(' · '),
+    `GPS ${gpsValid(v) ? ageText(v.gps_age_s) : `недостоверен · последняя валидная позиция ${ageText(v.gps_age_s)}`}`].join(' · '),
     fresh ? 'возраст во времени данных, на момент снимка Backend' : 'на момент последнего снимка; Backend недоступен — снимок не обновляется');
   field(details, 'Состояние данных', `${STATUS[v.status] || text(v.status)}${v.reason ? ` · ${reasonText(v.reason)}` : ''}`);
   field(details, 'Причина задержки', 'не установлена', 'источника причин нет — причина не угадывается');
@@ -740,8 +655,10 @@ function renderCard() {
   show.disabled = !(locationOk(v) && mapStatus === 'ready');
   show.dataset.action = 'focus';
   actions.append(show);
-  if (!locationOk(v)) {
-    const note = document.createElement('p'); note.className = 'card-note'; note.textContent = positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Позиция недостоверна — объект не показан на карте.';
+  if (!locationOk(v) || !gpsValid(v)) {
+    const note = document.createElement('p'); note.className = 'card-note';
+    note.textContent = locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
+      : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект не показан на карте.';
     actions.append(note);
   }
   const parts = [head, headline, facts, incident ? incidentBlock(incident, v) : null, routeBlock(v), details, actions].filter(Boolean);
@@ -1291,6 +1208,15 @@ setInterval(() => { renderStatus(); if ($('diagnostics').open) renderDiagnostics
 // The served build is shown in diagnostics so a presenter can confirm the browser has the new bundle.
 fetch('/api/build', {cache: 'no-store'}).then(r => r.ok ? r.json() : null).then(payload => { build = payload && typeof payload === 'object' ? payload : null; })
   .catch(() => { build = null; }).finally(() => { if ($('diagnostics').open) renderDiagnostics(); });
+
+// The legend shows the same bitmaps as the map.
+const LEGEND_LOOKS = {normal: vehicleLook('normal'), warning: vehicleLook('warning'), severe: vehicleLook('severe'),
+  nodata: vehicleLook('nodata'), invalid: vehicleLook('normal', {gpsValid: false}), selected: vehicleLook('normal', {selected: true}), target: targetLook()};
+for (const img of document.querySelectorAll('img.legend-symbol')) {
+  const {canvas, box} = drawSymbol(LEGEND_LOOKS[img.dataset.symbol], 2);
+  img.src = canvas.toDataURL();
+  img.width = img.height = Math.round(box * 0.6);
+}
 
 renderMapState();
 render();

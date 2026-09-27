@@ -125,3 +125,15 @@ export function undrawnCount(route) {
   const bad = list => (Array.isArray(list) ? list : []).filter(p => !(Array.isArray(p) ? coordOk(p[0], p[1]) : coordOk(p?.lon, p?.lat))).length;
   return {path: bad(route?.path), passed: bad(route?.passed), stops: bad(route?.stops)};
 }
+
+// Stop thinning on the map below DECLUTTER_BELOW_ZOOM (route-layers.js). Pure: points are
+// [{row, x, y}] in screen pixels, in preference order; `avoid` are points to keep clear of (the
+// target, the labelled stop). A stop is kept if it is at least `gap` px from all kept and avoided.
+export const DECLUTTER_BELOW_ZOOM = 13;
+export const MIN_STOP_GAP_PX = 14;
+export function thinStops(points, {avoid = [], gap = MIN_STOP_GAP_PX} = {}) {
+  const kept = [];
+  const far = p => [...avoid, ...kept].every(q => Math.hypot(p.x - q.x, p.y - q.y) >= gap);
+  for (const p of points) if (far(p)) kept.push(p);
+  return kept.map(p => p.row);
+}

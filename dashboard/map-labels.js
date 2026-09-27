@@ -6,28 +6,32 @@
 // labels, and lies inside the map; if every side is taken it is stacked further above or below its dot.
 // The result depends only on the input geometry, so the same view always gives the same placement.
 
-export const LABEL_GAP = 14; // dot centre → nearest label edge; the unobstructed label sits above its dot
-const DIAGONAL_GAP = 10;
+// Sizes follow the map symbols (map-symbols.js): a 24 px bus icon with a corner badge, a 32 px
+// selected icon inside its ring, a 30 px target diamond.
+export const LABEL_GAP = 19; // symbol centre → nearest label edge; the unobstructed label sits above its symbol
+export const SELECTED_LABEL_GAP = 25;
+const DIAGONAL_RATIO = 0.85; // diagonal placements sit a little closer: the icon's corners are rounded
 export const LABEL_MARGIN = 4; // clear space between labels; also covers the selected label's outline
-export const DOT_RADIUS = 13; // the halo drawn around a dot
-export const SELECTED_DOT_RADIUS = 16;
+export const DOT_RADIUS = 17; // a symbol with its badge, kept clear of other labels
+export const SELECTED_DOT_RADIUS = 24;
 
 const SIDES = ['top', 'bottom', 'right', 'left', 'top-right', 'top-left', 'bottom-right', 'bottom-left'];
 
 // Offset of the label centre from its dot for a placement name (`top`, `bottom-left`, `top+2`, …).
-export function labelOffset(placement, width, height) {
+export function labelOffset(placement, width, height, gap = LABEL_GAP) {
   const [side, level = '0'] = placement.split('+');
   const stack = Number(level) * (height + LABEL_MARGIN);
   const dx = width / 2, dy = height / 2;
+  const diagonal = Math.round(gap * DIAGONAL_RATIO);
   switch (side) {
-    case 'top': return [0, -(LABEL_GAP + dy + stack)];
-    case 'bottom': return [0, LABEL_GAP + dy + stack];
-    case 'right': return [LABEL_GAP + dx, 0];
-    case 'left': return [-(LABEL_GAP + dx), 0];
-    case 'top-right': return [DIAGONAL_GAP + dx, -(DIAGONAL_GAP + dy)];
-    case 'top-left': return [-(DIAGONAL_GAP + dx), -(DIAGONAL_GAP + dy)];
-    case 'bottom-right': return [DIAGONAL_GAP + dx, DIAGONAL_GAP + dy];
-    case 'bottom-left': return [-(DIAGONAL_GAP + dx), DIAGONAL_GAP + dy];
+    case 'top': return [0, -(gap + dy + stack)];
+    case 'bottom': return [0, gap + dy + stack];
+    case 'right': return [gap + dx, 0];
+    case 'left': return [-(gap + dx), 0];
+    case 'top-right': return [diagonal + dx, -(diagonal + dy)];
+    case 'top-left': return [-(diagonal + dx), -(diagonal + dy)];
+    case 'bottom-right': return [diagonal + dx, diagonal + dy];
+    case 'bottom-left': return [-(diagonal + dx), diagonal + dy];
     default: throw new Error(`unknown label placement ${placement}`);
   }
 }
@@ -61,7 +65,7 @@ export function placeLabels(labels, {obstacles = [], area = null} = {}) {
       || obstacles.some(o => overlaps(rect, o, LABEL_MARGIN))
       || dots.some(d => d.id !== label.id && overlaps(rect, dotRect(d), 0));
     const tried = options.map(placement => {
-      const offset = labelOffset(placement, label.width, label.height);
+      const offset = labelOffset(placement, label.width, label.height, label.selected ? SELECTED_LABEL_GAP : LABEL_GAP);
       return {placement, offset, rect: rectAt(label.x, label.y, offset, label.width, label.height)};
     });
     const chosen = tried.find(c => !blocked(c.rect) && within(c.rect, area)) ?? tried.find(c => !blocked(c.rect)) ?? tried[0];

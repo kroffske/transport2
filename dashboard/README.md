@@ -93,6 +93,7 @@ Consumer раздаёт собранные `consumer/static/{app.js,app.css,map-
 | `three` | 0.180.0 | MIT | © 2010-2025 three.js authors, `node_modules/three/LICENSE` |
 | `pmtiles` | 4.4.0 | BSD-3-Clause | автор Brandon Liu (Protomaps); в npm-пакете нет файла LICENSE, текст — в репозитории protomaps/PMTiles |
 | `fflate` (зависимость `pmtiles`) | 0.8.3 | MIT | © Arjun Barrett, `node_modules/fflate/LICENSE` |
+| Иконки Lucide `bus`, `flag` (`dashboard/icons/lucide.js`) | 0.546.0 | ISC; части из Feather — MIT | © Lucide Contributors 2025, © 2013-2023 Cole Bemis (Feather); полный текст — `dashboard/icons/LICENSE-lucide`. Геометрия скопирована без изменений из `lucide-react@0.546.0` и рисуется на canvas в `map-symbols.js`; npm-зависимости нет |
 | `consumer/map/moscow.pmtiles` | 2026-09-25 | ODbL | © OpenStreetMap contributors; подпись видна на карте, источник — в `consumer/map/manifest.json` |
 
 Esbuild сохраняет в `app.js` и `map-worker.js` комментарии `@license` MapLibre и Three.js. Esbuild, Playwright и `@types/geojson` в сборку не попадают. Список production-пакетов с лицензиями из lockfile:
