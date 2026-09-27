@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T13:25:33.673Z",
+  "generated_at": "2026-09-27T13:54:00.833Z",
   "tasks": [
     {
       "id": "T-5",
@@ -77,23 +77,26 @@
       "priority": "p1",
       "owner": "claude",
       "created_at": "2026-09-27T11:24:42.661Z",
-      "updated_at": "2026-09-27T13:25:33.647Z",
+      "updated_at": "2026-09-27T13:28:30.632Z",
       "stream": "T",
       "path": "T-7-2026-09-27-ml",
-      "work_items_total": 10,
+      "work_items_total": 13,
       "work_items_done": 7,
       "work_items_remaining": [
         "Road-first карта и символы (agent B, после W4/W5).",
         "Документация и финальная matrix (agent C + coordinator).",
+        "Маршрут по плану остановок и сверка с ним (agent A: Backend `route_offset_m`/`off_route`, `heading`, `GET /v1/routes` + consumer `/api/routes`, docs/api; agent B: слой маршрутов на обзоре, подсветка маршрута выбранного ТС, пройденное/впереди разными цветами и пунктиром, маркер и подпись «вне маршрута»).",
+        "Направление движения и понятные иконки (agent B вместе с W7, данные от agent A).",
+        "Доработки по независимому UI-review (agent B после W7/W11/W12): пересечения, иерархия, типографика, тексты по `artifacts/ui-review.md` (создаёт отдельный read-only review-агент; если файла нет — W13 заблокирован до него).",
         "Независимая финальная QA (agent D)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T13:25:33.659Z",
+      "last_event": "2026-09-27T13:54:00.810Z",
       "latest_status_note": {
-        "ts": "2026-09-27T13:25:33.659Z",
+        "ts": "2026-09-27T13:28:30.650Z",
         "event": "note",
         "actor": "manager",
-        "text": "Checkpoint 2026-09-27 по запросу пользователя (commit+push+merge в main для доступа коллеги): commits 9bd7c87 runtime, d78de11 UI, fb7620d docs, a5688cb system_probe. Готово и проверено на реальном стеке: W3, W4, W5, W6 (artifacts/ml-gate.md), W8; quality reviews A/B закрыты. Открыто: W7 road-first карта и иконки (agent B), W9 — лицензия иконок после W7 + финальная matrix, W10 независимый QA на новой build identity. Скриншоты live-2/3/7 перезаснять на идущем прогоне.",
+        "text": "Authorization (user, 2026-09-27): последующие проверенные этапы T-7 коммитить, пушить в origin/dev и сливать в main (fast-forward или merge) с push origin/main. Коллега получает доступ к репо: перед каждым merge — git fetch, проверить origin/main на чужие коммиты, при расхождении merge без force; force-push запрещён.",
         "from": null,
         "to": null,
         "source": "status_note"
