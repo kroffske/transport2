@@ -2,7 +2,7 @@ import {SEVERE_S, createIncidentStore, normalizeNote, observeSnapshot} from './i
 
 // Dispatcher event queue (UI v2 «Диспетчерская карта v2»): the incident episodes of incidents.js
 // sorted into reaction groups, with a reaction SLA, snooze, close with a reason, a reaction
-// checklist, bulk selection, J/K order, the attention bar and toasts. DOM-free and pure: every
+// checklist, bulk selection, J/K order and toasts. DOM-free and pure: every
 // exported function returns a new state and never mutates its argument, so the state is a plain
 // serialisable value that survives polling and a page reload (serialize/deserialize).
 //
@@ -90,7 +90,7 @@ const groupOf = (incident, ev) => (!isOpen(incident, ev) ? 'ended' : ev.wf === '
 const log = (incident, at, text) => { incident.history.push({at, kind: 'action', text}); };
 const nowOf = (state, dataNow) => dataSeconds(dataNow) ?? state.now_s;
 const wallOf = (state, wallS) => (Number.isFinite(wallS) ? wallS : state.wall_s);
-// `shown(tr_id)` limits the selectors (groups, J/K order, attention, toasts, group actions) to the
+// `shown(tr_id)` limits the selectors (groups, J/K order, toasts, group actions) to the
 // vehicles the dispatcher watches, i.e. the operator's routes; the queue itself keeps observing every
 // vehicle, so a hidden one is never «lost».
 const ALL = () => true;
@@ -339,7 +339,7 @@ function badgeOf(incident, ev, sla) {
   return timed(`реакция ${dur(sla.left_s)}`, sla.left_s < SLA_LOW_S ? 'sla_low' : 'sla', 'wall');
 }
 
-// Everything the list row, card, attention bar and toast need for one event.
+// Everything the list row, card and toast need for one event.
 export function eventView(state, id, wallS) {
   const incident = incidentOf(state, id);
   const ev = state.events[id];
@@ -482,38 +482,6 @@ export function nextQueueEvent(state, currentId, step, wallS, view = {}, shown =
     if (!needs.size || needs.has(id)) return id;
   }
   return currentId;
-}
-
-// ---- Attention bar (Q1): a summary, never a copy of the queue's actions ---------------------
-
-// «ещё 1 требует реакции», «ещё 2 требуют реакции».
-const needVerb = n => (n % 10 === 1 && n % 100 !== 11 ? 'требует' : 'требуют');
-const deadlineText = left => (left < 0 ? `просрочено ${dur(-left)}` : `ближайший срок ${dur(left)}`);
-
-// `openId`: the event whose card is open (null when none). Returns {kind, level, title, detail,
-// next}: kind «needs» — «Требуют реакции: 2 · ближайший срок 0:37»; «open» — «Открыто: ТС 134040 ·
-// ещё 1 требует реакции»; «calm» — «Предупреждений нет · в работе 1 · …». `next` offers
-// «Следующее J» (another event needs a reaction). The deadline counts real (screen) seconds.
-// Only events whose vehicle is a current warning count: a vehicle that lost its forecast is calm
-// here (user decision, T-7 W14); the queue still lists its event.
-export function attentionSummary(state, wallS, openId = null, shown = ALL) {
-  const g = groups(state, wallS, shown);
-  const open = openId ? eventView(state, openId, wallS) : null;
-  const needs = g.needs.filter(v => v.vehicle_state === 'warning');
-  const others = needs.filter(v => v.id !== openId);
-  const level = others.some(v => v.sla.over || v.severe) ? 'severe' : others.length ? 'warning' : 'normal';
-  if (open) {
-    return {kind: 'open', level, title: `Открыто: ТС ${open.tr_id}`,
-      detail: others.length ? `ещё ${others.length} ${needVerb(others.length)} реакции` : 'других событий, требующих реакции, нет',
-      next: others.length > 0};
-  }
-  if (needs.length) {
-    return {kind: 'needs', level, title: `${GROUP_TITLES.needs}: ${needs.length}`, detail: deadlineText(needs[0].sla.left_s), next: true};
-  }
-  const reminder = g.snoozed[0]?.snooze_until_text ?? null;
-  const calm = [g.counts.work ? `в работе ${g.counts.work}` : null, g.counts.snoozed ? `отложено ${g.counts.snoozed}` : null,
-    reminder ? `напоминание в ${reminder} (${CLOCK_TEXT.data})` : null].filter(Boolean);
-  return {kind: 'calm', level: 'normal', title: 'Предупреждений нет', detail: calm.join(' · '), next: false};
 }
 
 // Pending toasts, newest first, with their event views; the caller dismisses them by key.

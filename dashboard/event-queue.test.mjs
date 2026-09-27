@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {CLOSE_REASONS, RESOLVED_CLOSE_REASON, SLA_S, addNote, attentionSummary, clearSelection, close, createQueue,
+import {CLOSE_REASONS, RESOLVED_CLOSE_REASON, SLA_S, addNote, clearSelection, close, createQueue,
   dataSeconds, deserialize, dismissToast, dismissToasts, eventForVehicle, eventView, groupIds, groups, markEndedRead, markOpened, markRead,
   navOrder, nextEvent, nextQueueEvent, observe, pinFor, queueLayout, selectGroup, serialize, snooze, take, toastPlan, toastViews, toggleSelected, toggleStep,
   unsnooze, untake} from './event-queue.js';
@@ -175,30 +175,6 @@ test('J/K order: overdue first, then by SLA left, then «В работе», then
   assert.equal(nextEvent(q, null, +1, 120), a);
   assert.equal(nextEvent(q, null, -1, 120), e);
   assert.equal(nextEvent(createQueue('x'), null, 1), null);
-});
-
-test('attention bar is a summary: count and nearest deadline, or the open event and how many more (Q1)', () => {
-  let q = poll(createQueue('run-1'), [bus('A', 200)], 0);
-  q = poll(q, [bus('A', 200), bus('B', 250)], 30);
-  const a = only(q, 'A');
-  assert.deepEqual(attentionSummary(q, 53), {kind: 'needs', level: 'warning', title: 'Требуют реакции: 2', detail: 'ближайший срок 0:37', next: true});
-  assert.equal(attentionSummary(q, 102).detail, 'просрочено 0:12', 'an overdue deadline is said in words');
-  assert.equal(attentionSummary(q, 102).level, 'severe');
-  assert.deepEqual(attentionSummary(q, 53, a), {kind: 'open', level: 'warning', title: 'Открыто: ТС A', detail: 'ещё 1 требует реакции', next: true});
-  q = poll(q, [bus('A', 200), bus('B', 250), bus('C', 200), bus('D', 200)], 31);
-  assert.equal(attentionSummary(q, 53, a).detail, 'ещё 3 требуют реакции');
-  q = take(q, only(q, 'B'), at(40));
-  q = close(q, [only(q, 'C'), only(q, 'D')], CLOSE_REASONS[0], at(40));
-  assert.deepEqual(attentionSummary(q, 53, a), {kind: 'open', level: 'normal', title: 'Открыто: ТС A', detail: 'других событий, требующих реакции, нет', next: false});
-  q = snooze(q, a, 10, at(40));
-  assert.deepEqual(attentionSummary(q, 41), {kind: 'calm', level: 'normal', title: 'Предупреждений нет',
-    detail: 'в работе 1 · отложено 1 · напоминание в 07:12 (время данных)', next: false}); // data 07:02:12 + 10 min
-  assert.equal(attentionSummary(createQueue('x'), 0).detail, '', 'no events: «Предупреждений нет» alone');
-  // A vehicle that lost its forecast is calm in the bar; the queue still lists its event.
-  let n = poll(createQueue('run-2'), [bus('N', 200)], 0);
-  n = poll(n, [bus('N', 200, 'degraded')], 1);
-  assert.equal(groups(n).counts.needs, 1);
-  assert.deepEqual([attentionSummary(n, 1).kind, attentionSummary(n, 1).title], ['calm', 'Предупреждений нет']);
 });
 
 test('stable queue: the open event keeps its row after an action and regroups when the pin goes (Q6)', () => {
@@ -418,7 +394,7 @@ test('selectors show only the watched vehicles; the queue keeps observing all', 
   assert.equal(groups(q, 10, trId => trId === 'B').counts.selected, 0);
 });
 
-test('T-18 selectors respect the route scope too: layout, pin, J/K, attention summary and toast plan (T-14)', () => {
+test('T-18 selectors respect the route scope too: layout, pin, J/K and toast plan (T-14)', () => {
   let q = createQueue('scope-q');
   q = poll(q, [bus('A', 60), bus('B', 60)], 0);
   q = poll(q, [bus('A', 200), bus('B', 400)], 10);
@@ -430,9 +406,6 @@ test('T-18 selectors respect the route scope too: layout, pin, J/K, attention su
   assert.equal(pinFor(q, only(q, 'B'), 10, onlyA), null, 'a hidden event has no place in the shown queue');
   assert.equal(nextQueueEvent(q, null, 1, 10, {}, onlyA), only(q, 'A'));
   assert.equal(nextQueueEvent(q, only(q, 'A'), 1, 10, {}, onlyA), only(q, 'A'), 'J never reaches a hidden route');
-  const withVehicleState = observe(q, [bus('A', 200), bus('B', 400)], {dataNow: at(11), wallS: 11, fresh: true});
-  const summary = attentionSummary(withVehicleState, 11, null, onlyA);
-  assert.ok(!/: 2/.test(summary.title), `hidden B is not counted: ${summary.title}`);
   const plan = toastPlan(q, 10, {live: true}, onlyA);
   assert.ok([...plan.show, ...plan.drop.map(key => ({key}))].every(t => !t.event || t.event.tr_id === 'A'));
   assert.ok(plan.show.every(t => t.event.tr_id === 'A'));

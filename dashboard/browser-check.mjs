@@ -129,12 +129,11 @@ async function headerFits(page, label) {
       }
       const bar = document.querySelector('.topbar').getBoundingClientRect();
       const state = document.getElementById('run-state');
-      // v2: the attention bar and the map tools share the top of the map; neither may cover the other's buttons.
+      // The attention bar (system status) and the map tools share the top of the map; neither may cover the other.
       const att = document.getElementById('attention'), tools = document.querySelector('.map-tools');
       if (!att.hidden && tools) {
         const a = att.getBoundingClientRect(), t = tools.getBoundingClientRect();
         if (a.x < t.right && t.x < a.right && a.y < t.bottom && t.y < a.bottom) hits.push('attention×map-tools');
-        if ([...att.querySelectorAll('button, .sla')].some(e => e.getBoundingClientRect().right > a.right + 0.5)) hits.push('attention buttons cut');
       }
       return [...hits, ...parts.filter(p => p.r.right > bar.right + 0.5).map(p => `${p.name} outside`),
         ...(state.scrollWidth > state.clientWidth + 1 || !state.getClientRects().length ? ['run-state cut'] : [])];
@@ -289,11 +288,9 @@ try {
         .filter(h => !(h.ahead > 600 && h.ahead <= 900.001) || !(Math.abs(h.arrival) <= 1));
       check(horizonBad.length === 0, `horizon 10–15 min: for all ${forecasted.length} forecasts 600 < target_time_begin − last_success_at ≤ 900 s and predicted_arrival = target + prediction_s ±1 s (bad: ${JSON.stringify(horizonBad)})`);
     }
-    // Stable DOM on live polls: rows and the banner button stay the same nodes; a slow real click works.
+    // Stable DOM on live polls: rows stay the same nodes; a slow real click works.
     if (vehicles.length >= 2) {
       await survivesPolls(page, '#vehicles .vehicle', 'live list row');
-      if (await page.locator('#attention button').count()) await survivesPolls(page, '#attention button', 'live «Следующее J»');
-      else skipped.push('live: no warning banner button at this moment — its node check runs in regression only');
       const pick = await page.locator('#vehicles .vehicle').nth(1).getAttribute('data-id');
       await pressAcrossPoll(page, `#vehicles .vehicle[data-id="${pick}"]`);
       check(await cardTitle(page) === pick && await page.locator(`#vehicles .vehicle[data-id="${pick}"]`).getAttribute('aria-current') === 'true',
@@ -560,7 +557,7 @@ try {
     check((await page.locator('#vehicles .vehicle[data-id="900009"]').textContent()).includes('вне карты')
       && await page.locator('.vehicle-label[data-id="900009"]').count() === 0, 'valid GPS outside the data extent: listed «вне карты», not drawn');
     await survivesPolls(page, '#vehicles .vehicle[data-id="900002"]', 'list row');
-    await survivesPolls(page, '#attention button', '«Следующее J»');
+    check(await page.locator('#attention').isHidden(), 'an event needs a reaction: the attention bar stays hidden (events are in the toasts and the queue)');
     await pressAcrossPoll(page, '#vehicles .vehicle[data-id="900002"]');
     check(await cardTitle(page) === '900002', 'mouse down → poll → up on a list row selects the vehicle');
     // §L4: × hides the card, the selection and its ring stay; a click on the row shows it again; Esc deselects.
@@ -573,8 +570,9 @@ try {
     check(closed.open === 'false' && closed.row === 'true' && closed.ring === 1 && closed.summary === 1 && reopened === '900002'
       && await page.locator('#vehicles .vehicle[aria-current=true]').count() === 0 && await page.locator('.vehicle-label.is-selected').count() === 0,
     `× hides the card (column shows the shift summary) and keeps the selection; the row shows it again; Esc deselects (${JSON.stringify(closed)}, reopened ${reopened}, §L4)`);
-    await pressAcrossPoll(page, '#attention button');
-    check(await cardTitle(page) === '900001', 'mouse down → poll → up on «Следующее J» opens the card');
+    await page.keyboard.press('KeyJ');
+    await page.waitForTimeout(300);
+    check(await cardTitle(page) === '900001', 'J opens the event that needs a reaction');
     await survivesPolls(page, '#card-close', 'card close button');
     await page.locator('#shift-after-target').focus();
     await page.waitForTimeout(POLL_SPAN_MS);
@@ -673,6 +671,15 @@ try {
       if (reason === 'ml_unreachable_or_timeout') await shot(page, 'regression-4-ml-unreachable-1920.png');
     }
 
+    // A failed run: the attention bar says so (severe) and asks for a restart; running again hides it.
+    setSnapshot(RUN('run-A-0001', {state: 'failed'}), [a, b]);
+    await page.waitForFunction(() => document.getElementById('run').dataset.state === 'failed', null, {timeout: 8000});
+    const failedBar = await page.locator('#attention').textContent();
+    check(await page.locator('#attention').isVisible() && failedBar.includes('перезапустите прогон') && await page.locator('#attention').getAttribute('data-level') === 'severe',
+      `failed run: the attention bar says so, severe (${failedBar})`);
+    setSnapshot(RUN('run-A-0001'), [a, b]);
+    await page.waitForFunction(() => document.getElementById('attention').hidden, null, {timeout: 8000});
+
     // Backend offline: last snapshot, honest status, no substitution.
     state.status = 'offline';
     await page.waitForFunction(() => document.getElementById('data-status').textContent.includes('Backend недоступен · последний снимок'), null, {timeout: 6000});
@@ -700,7 +707,7 @@ try {
   }
 
   {
-    // W13 (ui-review §5): banner without repeats (L-5), one channel per event (E-1), a target
+    // W13 (ui-review §5): no event summary over the map (L-5), one channel per event (E-1), a target
     // after the data window (C-5), the run end as a normal end, not a failure (H-2).
     const w = bus('900001', center[0], center[1], {prediction_s: 200});
     const x = bus('900003', center[0] - 0.03, center[1] - 0.01, {prediction_s: 250});
@@ -712,17 +719,14 @@ try {
     state.route = {900001: routeOf(w), 900003: routeOf(x), 900004: routeOf(calm)};
     const page = await open({setup, allow: /\/api\/route\//});
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.waitForFunction(() => document.querySelector('#attention button'), null, {timeout: 8000});
+    await page.waitForFunction(() => document.querySelectorAll('#events-list .event[data-group=needs]').length === 2, null, {timeout: 8000});
     await headerFits(page, 'regression running');
-    check(/^Требуют реакции: 2 · (ближайший срок|просрочено) \d+:\d\d/.test((await page.locator('#attention .attention-text').textContent()).replace(/\s+/g, ' ')),
-      'banner: a summary «Требуют реакции: 2 · ближайший срок M:SS», no IDs, no actions but «Следующее J» (Q1)');
-    await page.locator('#attention [data-action=next-event]').click();
+    check(await page.locator('#attention').isHidden(), 'two events need a reaction: no summary over the map, the attention bar is hidden (events: toasts and the queue)');
+    await page.keyboard.press('KeyJ');
     await page.waitForTimeout(POLL_SPAN_MS);
     const first = await cardTitle(page);
-    const openBar = (await page.locator('#attention').innerText()).replace(/\s+/g, ' ');
-    check(['900001', '900003'].includes(first) && openBar.includes(`Открыто: ТС ${first}`) && openBar.includes('ещё 1 требует реакции')
-      && (await page.locator('#attention button').count()) === 1 && (await page.locator('#attention button').textContent()).startsWith('Следующее'),
-    `banner «Следующее J» opens ${first}; the banner then says it is open and how many more wait, never repeats the card's actions (Q1, L-5)`);
+    check(['900001', '900003'].includes(first) && await page.locator('#attention').isHidden(),
+      `J opens ${first}; the attention bar stays hidden with the card open (L-5)`);
     await w13Card(page, 'regression W13', `r:${first}`);
     // L-3: a manual pan stops following; «Следить за X» next to «Все ТС» turns it back on.
     const pane = await page.locator('#map-pane').boundingBox();
@@ -742,7 +746,7 @@ try {
       && await page.locator('#event-sla').textContent() === 'в работе', '«Взять в работу» → chip and badge «В работе», «Вернуть в новые» offered');
     await deselect(page);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
-    check(!(await page.locator('#attention').textContent()).includes(first), `${first} in work: not back in the banner for two polls (L-5)`);
+    check(await page.locator('#attention').isHidden(), `${first} in work: the attention bar stays hidden for two polls (L-5)`);
     // Two new events while 900001's card is open: at most two toasts, none for the open card, none «в норме».
     await page.locator(`#vehicles .vehicle[data-id="${first}"]`).click();
     setSnapshot(RUN('run-W13-0001'), [{...w, prediction_s: 400}, {...x, prediction_s: 420}, {...calm, prediction_s: 260}, late]);
@@ -779,6 +783,7 @@ try {
     `run completed: banner «Прогон завершён» (normal), list «прогон завершён», not «Устройство отключено», no toasts (H-2)`);
     check((await page.locator('.vehicle-label').allInnerTexts()).every(t => /^\S+$/.test(t.trim())), 'run completed: map labels are the ID only, no «нет прогноза» (H-2)');
     await shot(page, 'regression-w13-run-completed-1920.png');
+    await headerFits(page, 'regression run over'); // the bar is shown here: it must stay clear of the map tools
     // L-2: without a selection 16 rows fit the list without scrolling.
     await deselect(page);
     setSnapshot(RUN('run-W13-0001', {state: 'completed', progress: 1, dataset_time: '2026-01-06T08:30:00'}),
@@ -1018,9 +1023,9 @@ try {
     await page.waitForTimeout(POLL_SPAN_MS);
     const order = () => page.locator('#vehicles .vehicle').evaluateAll(rs => rs.map(r => r.dataset.id).join(','));
     const nodataCount = () => page.locator('[data-filter=nodata]').textContent().catch(() => '');
-    // Q1: the summary's deadline ticks every second; the title («Требуют реакции: N») is what must not change.
-    const bannerText = () => page.locator('#attention').evaluate(b => (b.querySelector('.attention-title') ?? b).textContent);
-    const before = {order: await order(), nodata: await nodataCount(), attention: await bannerText()};
+    // The «Требуют реакции» count of the queue tab; the attention bar carries no event count.
+    const needsCount = () => page.locator('#events-count').getAttribute('data-open');
+    const before = {order: await order(), nodata: await nodataCount(), needs: await needsCount()};
     await page.locator('#vehicles .vehicle[data-id="900022"]').click();
     setSnapshot(RUN('run-W14H-0001'), [held(w), held(n), z]);
     state.route = {900021: routeOf(held(w)), 900022: routeOf(held(n)), 900023: routeOf(z)};
@@ -1030,8 +1035,8 @@ try {
     check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'warning' && rowW.includes('+3:20') && rowW.includes('обновляется')
       && await page.locator('#vehicles .vehicle[data-id="900022"]').getAttribute('data-level') === 'normal' && rowN.includes('+0:40')
       && !/нет прогноза|устарел/i.test(rowW + rowN), `held forecast: same level and value, «обновляется», no «нет прогноза» (${rowW.replace(/\s+/g, ' ')} | ${rowN.replace(/\s+/g, ' ')})`);
-    check(await page.locator('.toast').count() === 0 && (await bannerText()) === before.attention && await nodataCount() === before.nodata,
-    'held forecast: no toast, banner and «Нет прогноза» count unchanged');
+    check(await page.locator('.toast').count() === 0 && (await needsCount()) === before.needs && await page.locator('#attention').isHidden()
+      && await nodataCount() === before.nodata, 'held forecast: no toast, «Требуют реакции» and «Нет прогноза» counts unchanged, attention bar hidden');
     check((await order()).split(',').filter(id => id !== '900022').join(',') === before.order.split(',').filter(id => id !== '900022').join(','), 'held forecast: the list does not re-sort');
     const headline = norm(await page.locator('#card .forecast').innerText());
     check(await page.locator('#card').getAttribute('data-level') === 'normal' && headline.includes('+40 с') && headline.includes('Прогноз для неё считается') && headline.includes('К новой цели не относится')
@@ -1046,16 +1051,15 @@ try {
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'nodata'
       && (await page.locator('#vehicles .vehicle[data-id="900021"]').textContent()).includes('Обновляется'), 'prediction_state none: no forecast (grey), reason pending → «Обновляется»');
-    // User decision: vehicles without a forecast are calm — no banner count, no alarm level.
+    // User decision: vehicles without a forecast are calm — no attention bar, no alarm level.
     setSnapshot(RUN('run-W14H-0001'), [n, z].map(v => ({...v, status: 'unavailable', reason: 'no_target_in_horizon', prediction_s: null, route_not_started: true}))
       .concat([{...w, status: 'degraded', reason: 'ml_unreachable_or_timeout', prediction_s: null}]));
     await page.waitForTimeout(2 * POLL_SPAN_MS);
-    const calmBanner = await page.locator('#attention').textContent();
     const calmRows = await page.locator('#vehicles .vehicle').allInnerTexts();
-    check(calmBanner === 'Предупреждений нет' && await page.locator('#attention').getAttribute('data-level') === 'normal'
+    check(await page.locator('#attention').isHidden()
       && calmRows.some(t => t.includes('Прогноз появится, когда ТС выйдет на маршрут')) && calmRows.some(t => t.includes('Прогноза пока нет'))
       && !calmRows.some(t => /нет прогноза/.test(t)) && await page.locator('.toast').count() === 0,
-    `no forecast is calm: banner «Предупреждений нет» without a count, rows by cause (${calmRows.map(t => t.replace(/\s+/g, ' ')).join(' | ')})`);
+    `no forecast is calm: attention bar hidden, rows by cause (${calmRows.map(t => t.replace(/\s+/g, ' ')).join(' | ')})`);
     await shot(page, 'regression-w14-no-forecast-calm-1920.png');
     await page.close();
   }
@@ -1146,7 +1150,7 @@ try {
     await page.close();
   }
 
-  // v2 reaction queue: «События» tab with groups, attention bar with SLA, toast «Новое событие»,
+  // v2 reaction queue: «События» tab with groups, no event summary over the map, toast «Новое событие»,
   // take / snooze / close with a reason, reaction steps, hotkeys, bulk actions, GPS mark, dimming.
   {
     const a = bus('900031', center[0], center[1], {prediction_s: 40});
@@ -1161,7 +1165,7 @@ try {
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForTimeout(POLL_SPAN_MS);
     check(await page.locator('#events-panel').isVisible() && (await page.locator('#events-list').textContent()).includes('Требуют реакции · 0')
-      && (await page.locator('#attention').textContent()) === 'Предупреждений нет', 'queue tab without events: «Требуют реакции · 0», calm bar');
+      && await page.locator('#attention').isHidden(), 'queue tab without events: «Требуют реакции · 0», attention bar hidden');
     // Three delays open after the first snapshot: new events, a toast «Новое событие» with SLA.
     setSnapshot(RUN('run-V2-0001'), [{...a, prediction_s: 330}, {...b, prediction_s: 200}, {...c, prediction_s: 150}, d, e]);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
@@ -1169,29 +1173,26 @@ try {
     check(await needs.count() === 3 && (await needs.first().textContent()).includes('реакция') && (await needs.first().locator('.sla').getAttribute('title')).includes('реальное время')
       && await page.locator('.toast').count() === 0,
     '3 new events in «Требуют реакции» with «реакция M:SS» (real time); no toast while their rows are visible in the queue (Q2, Q7)');
-    const bar = (await page.locator('#attention').innerText()).replace(/\s+/g, ' ');
-    check(bar.startsWith('Требуют реакции: 3 ·') && !bar.includes('900031') && await page.locator('#attention [data-action=take-event]').count() === 0
-      && await page.locator('#attention [data-action=next-event]').count() === 1 && await page.locator('#attention').getAttribute('data-level') === 'severe',
-    `attention bar: a summary with «Следующее J», no «Взять в работу» (Q1) (${bar})`);
-    // «Следующее» opens the most urgent event; W takes it: the row keeps its place with the badge «в работе» (Q6).
+    check(await page.locator('#attention').isHidden(), 'events need a reaction: the attention bar stays hidden, the queue lists them');
+    // J opens the most urgent event; W takes it: the row keeps its place with the badge «в работе» (Q6).
     const rowsBefore = await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.id));
-    await page.locator('#attention [data-action=next-event]').click();
+    await page.keyboard.press('KeyJ');
     await page.waitForTimeout(500);
-    check(await cardTitle(page) === '900031', '«Следующее J» opens the most urgent event');
+    check(await cardTitle(page) === '900031', 'J opens the most urgent event');
     await page.keyboard.press('KeyW');
     await page.waitForTimeout(300);
     const pinned = page.locator('#events-list .event.is-current');
     check(JSON.stringify(await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.id))) === JSON.stringify(rowsBefore)
       && await pinned.getAttribute('data-group') === 'work' && (await pinned.locator('.sla').textContent()) === 'в работе' && await pinned.getAttribute('aria-current') === 'true',
     'W on the open event: its row keeps its place, badge «в работе» (Q6)');
-    // Deselect (§L4: the first Esc closes the card, the second clears the selection): the row moves to «В работе»; the bar shows the others.
+    // Deselect (§L4: the first Esc closes the card, the second clears the selection): the row moves to «В работе».
     await page.locator('body').click({position: {x: 700, y: 600}}).catch(() => {});
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
-    check(await page.locator('#events-list .event[data-group=work]').count() === 1 && !(await page.locator('#attention').textContent()).includes('900031')
+    check(await page.locator('#events-list .event[data-group=work]').count() === 1 && await page.locator('#attention').isHidden()
       && (await page.locator('#events-list .event').evaluateAll(es => es.map(e => e.dataset.group))).join() === 'needs,needs,work',
-    'after deselect the taken event regroups to «В работе»; the bar shows the rest');
+    'after deselect the taken event regroups to «В работе»; the attention bar stays hidden');
     // J opens the first event of the queue order; S snoozes it 5 min (data time).
     await page.keyboard.press('KeyJ');
     await page.waitForTimeout(500);
@@ -1314,8 +1315,9 @@ try {
     state.route = {900001: routeOf(a)};
     const page = await open({...options, setup: async p => { await setup(p); if (options.setup) await options.setup(p); }});
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
-    await page.waitForSelector('#attention button', {timeout: 8000});
-    await page.locator('#attention button').first().click();
+    await page.waitForSelector('#events-list .event[data-group=needs]', {state: 'attached', timeout: 8000});
+    await page.keyboard.press('KeyJ');
+    await page.waitForSelector('#card h2', {timeout: 3000});
     await openSection(page, 'card-history');
     await page.locator('#contact-open').click();
     const draft = await page.locator('#contact-text').inputValue();
