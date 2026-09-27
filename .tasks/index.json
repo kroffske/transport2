@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T13:54:00.833Z",
+  "generated_at": "2026-09-27T14:12:38.835Z",
   "tasks": [
     {
       "id": "T-5",
@@ -87,11 +87,11 @@
         "Документация и финальная matrix (agent C + coordinator).",
         "Маршрут по плану остановок и сверка с ним (agent A: Backend `route_offset_m`/`off_route`, `heading`, `GET /v1/routes` + consumer `/api/routes`, docs/api; agent B: слой маршрутов на обзоре, подсветка маршрута выбранного ТС, пройденное/впереди разными цветами и пунктиром, маркер и подпись «вне маршрута»).",
         "Направление движения и понятные иконки (agent B вместе с W7, данные от agent A).",
-        "Доработки по независимому UI-review (agent B после W7/W11/W12): пересечения, иерархия, типографика, тексты по `artifacts/ui-review.md` (создаёт отдельный read-only review-агент; если файла нет — W13 заблокирован до него).",
+        "Доработки по независимому UI-review (agent B после W7/W11/W12): пересечения, иерархия, типографика, тексты по `artifacts/ui-review.md` (создаёт отдельный read-only review-агент; если файла нет — W13 заблокирован до него). Пункт review M-1 (слои по GPS `path`/`passed`) заменён решением пользователя «Слои выбранного ТС»: из M-1 берутся только стрелки направления на «впереди»; приёмка — `#map-pane[data-route-layers=\"route-passed,route-ahead\"]` при `on_route` и `\"route-dim,offroute-leader\"` при `off_route`.",
         "Независимая финальная QA (agent D)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T13:54:00.810Z",
+      "last_event": "2026-09-27T14:12:38.806Z",
       "latest_status_note": {
         "ts": "2026-09-27T13:28:30.650Z",
         "event": "note",
