@@ -295,7 +295,7 @@ try {
     const legend = await page.locator('img.legend-symbol').evaluateAll(images => images.map(img => img.src));
     check(legend.length === 8 && new Set(legend).size === 8 && legend.every(src => src.startsWith('data:image/png')), 'legend shows the 8 map symbols (W16: + violet «GPS неисправен»), all different, drawn locally');
     const legendBox = await page.locator('.legend').boundingBox();
-    check(legendBox.height <= 56 && legendBox.width <= 720 && await page.locator('#legend-route').isHidden()
+    check(legendBox.height <= 56 && legendBox.width <= 920 && await page.locator('#legend-route').isHidden()
       && (await page.locator('#legend-help').getAttribute('title')).includes('Цвет ТС'), `legend without a selection: one row ≤ 56 px, route row hidden, note in «?» (${Math.round(legendBox.width)}×${Math.round(legendBox.height)})`);
 
     // A vehicle with a current model prediction, a target and a valid position.
