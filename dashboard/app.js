@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {NOTE_MAX, UNMAPPED, acknowledge, addNote, assess, countByFilter, countByRoute, createIncidentStore, findIncident, incidentCounts,
   incidentForVehicle, markRead, newWarningIds, observeSnapshot, orderedIncidents, reopen, routeKeyOf, visibleRows} from './incidents.js';
 import {PHASES, ROUTE_CATALOG, createRun, isFinished, next, pause, phaseRows, scenarioSnapshot, start} from './scenario.js';
+import {placeLabels} from './map-labels.js';
 import './style.css';
 
 const $ = id => document.getElementById(id);
@@ -168,6 +169,8 @@ if (map) {
     renderMapObjects();
     if (pendingOverview && snapshotRows().length) overview(false);
   });
+  map.on('move', layoutLabels);
+  map.on('resize', layoutLabels);
   map.on('click', event => { const hit = hitTest(event.point); if (hit) choose(hit, false); });
   map.on('mousemove', event => {
     const hit = hitTest(event.point);
@@ -331,6 +334,7 @@ function renderMapObjects() {
   renderLabels(ordered);
   renderTargetLabel(drawable && chosen && targetOk(chosen) ? chosen : null);
   renderRoutes();
+  layoutLabels();
 }
 
 // The selected object's target, named by its diamond; only for a coordinate from the source.
@@ -369,7 +373,7 @@ function renderLabels(rows) {
       element.addEventListener('click', event => { event.stopPropagation(); choose(id, false); });
       element.addEventListener('mouseenter', () => setHovered(id));
       element.addEventListener('mouseleave', () => setHovered(null));
-      marker = new maplibregl.Marker({element, anchor: 'bottom', offset: [0, -14]})
+      marker = new maplibregl.Marker({element, anchor: 'center'})
         .setLngLat([Number(vehicle.lon), Number(vehicle.lat)]).addTo(map);
       labels.set(id, marker);
     }
@@ -381,6 +385,30 @@ function renderLabels(rows) {
     marker.setLngLat([Number(vehicle.lon), Number(vehicle.lat)]);
   }
   for (const [id, marker] of labels) if (!keep.has(id)) { marker.remove(); labels.delete(id); }
+}
+
+// Each label takes a free side of its dot (see map-labels.js); redone on every camera move because
+// label sizes are fixed in pixels while the distances between dots change with zoom.
+function layoutLabels() {
+  if (!map || !labels.size) return;
+  const box = (lngLat, element, [ax, ay], [ox, oy]) => { // ax/ay: anchor point as a fraction of the element
+    const p = map.project(lngLat);
+    const width = element.offsetWidth, height = element.offsetHeight;
+    return {x: p.x + ox - ax * width, y: p.y + oy - ay * height, width, height};
+  };
+  const obstacles = [...directionChips.values()].map(m => box(m.getLngLat(), m.getElement(), [1, 0.5], [-8, 0]));
+  if (targetLabel) obstacles.push(box(targetLabel.getLngLat(), targetLabel.getElement(), [0.5, targetSide === 'above' ? 1 : 0], [0, targetSide === 'above' ? -12 : 12]));
+  const canvas = map.getCanvas();
+  const placement = placeLabels([...labels].map(([id, marker]) => {
+    const p = map.project(marker.getLngLat());
+    const element = marker.getElement();
+    return {id, x: p.x, y: p.y, width: element.offsetWidth, height: element.offsetHeight, selected: id === selected};
+  }), {obstacles, area: {x: 0, y: 0, width: canvas.clientWidth, height: canvas.clientHeight}});
+  for (const [id, {placement: side, offset}] of placement) {
+    const marker = labels.get(id);
+    marker.setOffset(offset);
+    marker.getElement().dataset.placement = side;
+  }
 }
 
 function hitTest(point) {

@@ -6,6 +6,7 @@
 import {chromium} from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import {labelOffset} from './map-labels.js';
 
 const base = process.env.UI_URL || 'http://127.0.0.1:18882';
 const evidenceDir = process.env.UI_EVIDENCE_DIR;
@@ -23,6 +24,8 @@ async function open(viewport, url, {allowConsoleErrors = false, setup, context: 
   page.on('pageerror', e => failures.push(`pageerror: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error' && !allowConsoleErrors) failures.push(`console: ${m.text()}`); });
   page.on('request', req => { if (!req.url().startsWith(base) && !/^(data|blob):/.test(req.url())) failures.push(`external request: ${req.url()}`); });
+  // An error status (e.g. the browser's automatic /favicon.ico) is a failure unless the pass provokes errors on purpose.
+  page.on('response', res => { if (res.status() >= 400 && !allowConsoleErrors) failures.push(`HTTP ${res.status()}: ${res.url()}`); });
   if (setup) await setup(page);
   await page.goto(`${base}${url}`, {waitUntil: 'domcontentloaded', timeout: 30000});
   return page;
@@ -30,10 +33,25 @@ async function open(viewport, url, {allowConsoleErrors = false, setup, context: 
 const inside = (box, area) => box && box.x >= area.x - 1 && box.y >= area.y - 1
   && box.x + box.width <= area.x + area.width + 1 && box.y + box.height <= area.y + area.height + 1;
 const labelPoint = async (page, id) => {
-  // Labels are anchored 14 px above their Three.js dot.
-  const box = await page.locator(`.vehicle-label[data-id="${id}"]`).boundingBox();
-  return {x: box.x + box.width / 2, y: box.y + box.height + 14};
+  // A label sits on the free side of its Three.js dot named by data-placement (see map-labels.js).
+  const label = page.locator(`.vehicle-label[data-id="${id}"]`);
+  const box = await label.boundingBox();
+  const [dx, dy] = labelOffset(await label.getAttribute('data-placement'), box.width, box.height);
+  return {x: box.x + box.width / 2 - dx, y: box.y + box.height / 2 - dy};
 };
+// Every pair of visible vehicle labels that intersect, as «A/B w×h».
+const labelOverlaps = page => page.locator('.vehicle-label').evaluateAll(elements => {
+  const boxes = elements.map(el => ({id: el.dataset.id, r: el.getBoundingClientRect()}));
+  const found = [];
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const a = boxes[i].r, b = boxes[j].r;
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      if (w > 0 && h > 0) found.push(`${boxes[i].id}/${boxes[j].id} ${w}×${h}`);
+    }
+  }
+  return found;
+});
 const rows = page => page.locator('#vehicles .vehicle');
 const cardTitle = page => page.locator('#card h2').textContent();
 const incidentText = page => page.locator('#card .incident').textContent();
@@ -101,6 +119,7 @@ try {
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForTimeout(800);
     check(await page.locator('#mode-badge').textContent() === 'Демо-сценарий · значения заданы', 'demo: persistent mode label');
+    check((await page.locator('link[rel=icon]').getAttribute('href')).startsWith('data:image/svg+xml,'), 'demo: inline page icon, no /favicon.ico request');
     check(await rows(page).count() === 8, 'demo: 8 objects listed');
     check(await page.locator('.vehicle-label').count() === 7, 'demo: 7 located objects labelled on map (1 without GPS)');
     check((await page.locator('[data-filter]').allTextContents()).join('|') === 'Все 8|С предупреждениями 1|Нет данных 2', 'demo: filter counters');
@@ -357,6 +376,26 @@ try {
       'D06: the target name does not cover the selected object\'s label as it nears the target');
     check(runs[0][2] === 'unread: 2' && runs[0][4].startsWith('card: Д-104 · Активно · Новое') && runs[0][5].includes('В работе · notes 1 · Прототип · отправка не подключена')
       && runs[0][6].includes('resolved · В работе · toasts 0'), 'D06: the story reaches warning, card, handling with the prototype marker, and the end state');
+    await page.close();
+  }
+
+  // 1g. Label readability at 1920×1080, no interception: every phase of three Reset runs, after the map settles.
+  {
+    const page = await open({width: 1920, height: 1080}, '/?mode=demo');
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    const runs = [];
+    for (let i = 0; i < 3; i += 1) {
+      await page.locator('#scenario-reset').click();
+      const seen = [];
+      for (let phase = 1; phase <= 5; phase += 1) {
+        if (phase > 1) await page.locator('#scenario-next').click();
+        await page.waitForTimeout(900);
+        const found = await labelOverlaps(page);
+        seen.push(`${phase}:${await page.locator('.vehicle-label').count()}:${found.join(',') || 'none'}`);
+      }
+      runs.push(seen.join(' '));
+    }
+    check(runs.every(r => r === runs[0]) && runs[0].split(' ').every(p => p.endsWith(':none')), `labels: no two vehicle labels intersect in any phase of three runs (${runs[0]})`);
     await page.close();
   }
 
