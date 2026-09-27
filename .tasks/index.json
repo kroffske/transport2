@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T14:41:41.977Z",
+  "generated_at": "2026-09-27T14:55:32.734Z",
   "tasks": [
     {
       "id": "T-10",
@@ -167,30 +167,30 @@
     {
       "id": "T-8",
       "title": "Пакет сдачи формы и долговечные доказательства C1/C3",
-      "status": "planning",
+      "status": "planned",
       "type": "feature",
       "priority": "p0",
       "owner": "claude",
       "created_at": "2026-09-27T14:29:03.176Z",
-      "updated_at": "2026-09-27T14:39:49.652Z",
+      "updated_at": "2026-09-27T14:55:32.698Z",
       "stream": "T",
       "path": "T-8-2026-09-27-c1-c3",
       "work_items_total": 5,
       "work_items_done": 0,
       "work_items_remaining": [
         "C1 в форме (сейчас, до 18:30).",
-        "Таблица внешних файлов для README (сейчас, передать в T-7 W9 до 19:00).",
+        "Внешние файлы в README (сейчас, передать в T-7 W9 до 19:00).",
         "Актуальный PyDoc (черновик сейчас, повторная генерация на финальном коде до финального commit).",
         "Текст формы (полный черновик к 21:00, финал к 22:30).",
         "Проверка чистого clone (первое окно эксклюзивного стека после push финального product commit; не ждёт T-10)."
       ],
       "subtask_count": 0,
-      "last_event": "2026-09-27T14:41:41.904Z",
+      "last_event": "2026-09-27T14:55:32.715Z",
       "latest_status_note": {
-        "ts": "2026-09-27T14:39:49.670Z",
+        "ts": "2026-09-27T14:55:32.715Z",
         "event": "note",
         "actor": "manager",
-        "text": "Plan repaired per T8-plan-r1 + user decision 18:00 MSK (commit-only scope: no Release/public links/anon curl/secret scan). Single final_commit identity; PyDoc before final commit; form text in docs/submission-form.md (draft 21:00, final 22:30); README external-files table (7 paths+SHA, 3 model files suffice) -> T-7 W9 by 19:00, T-8 fallback at 21:00; W5 clean clone not gated on T-10. Next: new plan-review id by coordinator.",
+        "text": "Coordinator 18:55: W1–W3 accepted, W4 draft committed (see HEAD). PyDoc command gets a 3rd sed step stripping pydantic memory addresses (deterministic regen) — accepted. Open placeholders: <final_commit>, <CLEAN_CLONE_STATUS>, <T10_PERF…>, «Статус: ЧЕРНОВИК». W5 after final UI commit.",
         "from": null,
         "to": null,
         "source": "status_note"

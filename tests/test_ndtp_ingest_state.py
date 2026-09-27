@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import socket
 import struct
 from threading import Event
 import time
 
 import pytest
-from pathlib import Path
 
 from transport_backend import (ClockMapping, NDTPServer, RunPlan, RunRegistry, TelemetryState,
                                load_unit_mapping)

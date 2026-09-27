@@ -1,4 +1,4 @@
-# Tasks — 3 active, 0 waiting, 4 backlog, 4 archived
+# Tasks — 4 active, 0 waiting, 3 backlog, 4 archived
 
 ```text
 NEXT:    T-6 · T-6-2026-09-26-ndtp/task.md → D01 — основной экран и проверенный baseline.
@@ -12,14 +12,14 @@ REFRESH: locus task sync-index
 | T-5 | research | [Оптимизировать ML для score выше 0.70](T-5-2026-09-25-ml-score-0-70/task.md) | doing |  | codex | █░ 1/2<br>☐ Проверенный кандидат submission и вывод… | Локальная оптимизация завершена: выбран residual depth4/800 по CV (78.03 -> 76.… |
 | T-6 | feature | [Длительный поток NDTP и интерактивная карта задерж](T-6-2026-09-26-ndtp/task.md) | doing | p1 | codex | ░░░░░░░░ 0/8<br>☐ D01 — основной экран и проверенный base…<br>☐ D02A — повторяемый интерфейсный сценари…<br>+6 more… | Запущен native Pi workflow transport-live, run 20260926-163549-febd; task artif… |
 | T-7 | feature | [Единое демо: официальный эмулятор → ML → карта с м](T-7-2026-09-27-ml/task.md) | doing | p1 | claude | █████░░░░░ 7/13<br>☐ Road-first карта и символы (agent B, по…<br>☐ Документация и финальная matrix (agent …<br>+4 more… | User 2026-09-27 17:45: 5-second clarity check = designer subagent using gstack … |
+| T-8 | feature | [Пакет сдачи формы и долговечные доказательства C1/](T-8-2026-09-27-c1-c3/task.md) | planned | p0 | claude | ░░░░░ 0/5<br>☐ C1 в форме (сейчас, до 18:30).<br>☐ Внешние файлы в README (сейчас, передат…<br>+3 more… | Coordinator 18:55: W1–W3 accepted, W4 draft committed (see HEAD). PyDoc command… |
 
-### Open backlog (4)
+### Open backlog (3)
 
 | ID | Type | Title | Status | Pri | Owner | Progress | Note |
 |----|------|-------|--------|-----|-------|----------|------|
 | T-10 | feature | [Benchmark производительности и восстановления фина](T-10-2026-09-27-benchmark-c5/task.md) | planning | p1 | claude | ░░░░ 0/4<br>☐ Задержки и очереди на 10-мин прогоне ×5.<br>☐ Timed cold start ×3.<br>+2 more… |  |
 | T-11 | feature | [Pitch: история, deck, демо-сценарий, запись, Q&A, ](T-11-2026-09-27-pitch-deck-q-a-5/task.md) | planning | p1 | claude | ░░░░░░ 0/6<br>☐ История и таблица чисел (сейчас).<br>☐ Deck 8–10 слайдов.<br>+4 more… | User 2026-09-27 17:45: presentation is prepared and shown only at semifinal/fin… |
-| T-8 | feature | [Пакет сдачи формы и долговечные доказательства C1/](T-8-2026-09-27-c1-c3/task.md) | planning | p0 | claude | ░░░░░ 0/5<br>☐ C1 в форме (сейчас, до 18:30).<br>☐ Таблица внешних файлов для README (сейч…<br>+3 more… | Plan repaired per T8-plan-r1 + user decision 18:00 MSK (commit-only scope: no R… |
 | T-9 | research | [Раннее предупреждение: onset → первый алерт → lead](T-9-2026-09-27-onset-lead-time-c2/task.md) | planning | p1 | claude | ░░░░░ 0/5<br>☐ Spike источника окна (≤1 ч).<br>☐ Разметка инцидентов по D1 с тестом.<br>+3 more… | Coordinator 2026-09-27 18:00: plan review r1 = revise (PR-001 alert/target matc… |
 
 ### Recently closed (4)
@@ -33,4 +33,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 4 closed tasks total_
 
-_Generated: 2026-09-27T14:41:41.977Z_
+_Generated: 2026-09-27T14:55:32.734Z_

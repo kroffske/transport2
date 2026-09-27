@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {SELECTED_SIZE, VEHICLE_SIZE, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
+import {SELECTED_SIZE, VEHICLE_SIZE, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
 
 // Colour aside, every state a dispatcher must tell apart has its own shape (task T-7, W7).
 test('vehicle states differ without colour: badge, dashed border, «?», ring and size', () => {
@@ -12,6 +12,8 @@ test('vehicle states differ without colour: badge, dashed border, «?», ring an
     invalidGps: vehicleLook('normal', {gpsValid: false}),
     selected: vehicleLook('normal', {selected: true}),
     hovered: vehicleLook('normal', {hovered: true}),
+    offRoute: vehicleLook('normal', {offRoute: true}),
+    heading: headingLook(),
     target: targetLook(),
   };
   const shapes = Object.values(looks).map(shapeOf);
@@ -39,4 +41,12 @@ test('invalid GPS wins over the level mark; a stale vehicle keeps its dashed bor
   assert.equal(look.badge, '?');
   assert.equal(look.border, 'dashed');
   assert.equal(vehicleLook('severe', {gpsValid: false}).badge, '?');
+});
+
+test('off route is its own mark and combines with the level mark', () => {
+  const look = vehicleLook('warning', {offRoute: true});
+  assert.equal(look.badge, '!');
+  assert.equal(look.offRoute, true);
+  assert.notEqual(shapeOf(look), shapeOf(vehicleLook('warning')));
+  assert.equal(vehicleLook('normal', {offRoute: null}).offRoute, false, 'unknown (null) is not off route');
 });

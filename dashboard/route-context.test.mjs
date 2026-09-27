@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BASIS, MIN_STOP_GAP_PX, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
+import {BASIS, MIN_STOP_GAP_PX, offsetText, routeLayersFor, coordOk, durationText, labelledStops, lineParts, planText, shiftedText, signedDurationText, stopRows,
   thinStops, undrawnCount} from './route-context.js';
 
 const usable = {modelUsable: true, factUsable: true};
@@ -114,4 +114,19 @@ test('stops are thinned on screen: none closer than the gap to a kept stop or to
   assert.ok(xs.every(x => Math.abs(x - 45) >= MIN_STOP_GAP_PX), 'clear of the target');
   assert.deepEqual(kept, ['s0', 's3', 's6']);
   assert.equal(thinStops(points, {gap: 0}).length, 10, 'no thinning at gap 0');
+});
+
+test('route_line decides the selected-route layers; the UI never splits the line itself', () => {
+  const line = [[37.60, 55.70], [37.61, 55.71], [37.62, 55.72]];
+  const car = [37.605, 55.705];
+  assert.deepEqual(routeLayersFor({split_reason: 'on_route', line, passed: line.slice(0, 2), ahead: line.slice(1)}, car), ['route-passed', 'route-ahead']);
+  assert.deepEqual(routeLayersFor({split_reason: 'no_segment', line, passed: [], ahead: []}, car), ['route-dim']);
+  assert.deepEqual(routeLayersFor({split_reason: 'off_route', line, nearest: [37.61, 55.71]}, car), ['route-dim', 'offroute-leader']);
+  assert.deepEqual(routeLayersFor({split_reason: 'off_route', line: [], nearest: [37.61, 55.71]}, car), ['offroute-leader'], 'empty window: leader only');
+  assert.deepEqual(routeLayersFor({split_reason: 'off_route', line, nearest: [0, 0]}, car), ['route-dim'], 'no leader to 0/0');
+  assert.deepEqual(routeLayersFor({split_reason: 'no_position', line: []}, null), []);
+  assert.deepEqual(routeLayersFor(null, car), [], 'an older Backend without route_line draws no line');
+  assert.equal(offsetText(3440), '~3,4 км');
+  assert.equal(offsetText(410), '~410 м');
+  assert.equal(offsetText(null), null);
 });
