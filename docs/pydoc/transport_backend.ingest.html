@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Python: module transport_backend.ingest</title>
+</head><body>
+
+<table class="heading">
+<tr class="heading-text decor">
+<td class="title">&nbsp;<br><strong class="title"><a href="transport_backend.html" class="white">transport_backend</a>.ingest</strong></td>
+<td class="extra"><a href=".">index</a><br><a href="file:transport_backend/ingest.py">transport_backend/ingest.py</a></td></tr></table>
+    <p><span class="code">TCP&nbsp;NDTP&nbsp;server&nbsp;with&nbsp;bounded&nbsp;queue&nbsp;and&nbsp;explicit&nbsp;clock&nbsp;domains.<br>
+&nbsp;<br>
+``queue_limit``&nbsp;caps&nbsp;pending&nbsp;telemetry&nbsp;frames;&nbsp;a&nbsp;full&nbsp;queue&nbsp;drops&nbsp;the&nbsp;newest<br>
+frame&nbsp;and&nbsp;records&nbsp;its&nbsp;outcome.&nbsp;``max_clients``&nbsp;caps&nbsp;concurrent&nbsp;handler&nbsp;threads.<br>
+``max_frame_size``&nbsp;caps&nbsp;per-client&nbsp;framing&nbsp;memory.&nbsp;History/outcome&nbsp;limits&nbsp;and<br>
+stale&nbsp;threshold&nbsp;belong&nbsp;to&nbsp;TelemetryState.<br>
+``run``&nbsp;owns&nbsp;the&nbsp;clock&nbsp;domain:&nbsp;it&nbsp;is&nbsp;sampled&nbsp;at&nbsp;completed-frame&nbsp;ingest,&nbsp;before<br>
+queueing.&nbsp;While&nbsp;a&nbsp;simulation&nbsp;run&nbsp;is&nbsp;not&nbsp;registered,&nbsp;handshakes&nbsp;are&nbsp;accepted<br>
+but&nbsp;navigation&nbsp;frames&nbsp;are&nbsp;rejected&nbsp;as&nbsp;``rejected_no_run``&nbsp;(no&nbsp;reconnect&nbsp;storm,<br>
+no&nbsp;frame&nbsp;without&nbsp;a&nbsp;dataset&nbsp;time).&nbsp;``received_at_utc``&nbsp;always&nbsp;records&nbsp;host&nbsp;wall<br>
+time.</span></p>
+<p>
+<table class="section">
+<tr class="decor pkg-content-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Modules</strong></td></tr>
+    
+<tr><td class="decor pkg-content-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><table><tr><td class="multicolumn"><a href="socket.html">socket</a><br>
+</td><td class="multicolumn"></td><td class="multicolumn"></td><td class="multicolumn"></td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor index-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Classes</strong></td></tr>
+    
+<tr><td class="decor index-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl>
+<dt class="heading-text"><a href="builtins.html#object">builtins.object</a>
+</dt><dd>
+<dl>
+<dt class="heading-text"><a href="transport_backend.ingest.html#NDTPServer">NDTPServer</a>
+</dt></dl>
+</dd>
+</dl>
+ <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="NDTPServer">class <strong>NDTPServer</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#NDTPServer">NDTPServer</a>(state:&nbsp;'TelemetryState',&nbsp;*,&nbsp;run:&nbsp;'RunRegistry',&nbsp;host:&nbsp;'str'&nbsp;=&nbsp;'127.0.0.1',&nbsp;port:&nbsp;'int'&nbsp;=&nbsp;0,&nbsp;queue_limit:&nbsp;'int'&nbsp;=&nbsp;256,&nbsp;max_frame_size:&nbsp;'int'&nbsp;=&nbsp;65550,&nbsp;max_clients:&nbsp;'int'&nbsp;=&nbsp;64)<br>
+&nbsp;<br>
+<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="NDTPServer-__enter__"><strong>__enter__</strong></a>(self) -&gt; "'NDTPServer'"</dt></dl>
+
+<dl><dt><a name="NDTPServer-__exit__"><strong>__exit__</strong></a>(self, *_: 'object') -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="NDTPServer-__init__"><strong>__init__</strong></a>(self, state: 'TelemetryState', *, run: 'RunRegistry', host: 'str' = '127.0.0.1', port: 'int' = 0, queue_limit: 'int' = 256, max_frame_size: 'int' = 65550, max_clients: 'int' = 64)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="NDTPServer-close"><strong>close</strong></a>(self) -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="NDTPServer-counters"><strong>counters</strong></a>(self) -&gt; 'dict[str, int]'</dt></dl>
+
+<dl><dt><a name="NDTPServer-flush"><strong>flush</strong></a>(self) -&gt; 'None'</dt><dd><span class="code">Wait&nbsp;for&nbsp;already&nbsp;queued&nbsp;telemetry&nbsp;to&nbsp;reach&nbsp;state.</span></dd></dl>
+
+<dl><dt><a name="NDTPServer-start"><strong>start</strong></a>(self) -&gt; "'NDTPServer'"</dt></dl>
+
+<hr>
+Readonly properties defined here:<br>
+<dl><dt><strong>address</strong></dt>
+</dl>
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+</td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor functions-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Functions</strong></td></tr>
+    
+<tr><td class="decor functions-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt><a name="-Lock"><strong>Lock</strong></a> = allocate_lock(...)</dt><dd><span class="code">allocate_lock()&nbsp;-&gt;&nbsp;lock&nbsp;<a href="builtins.html#object">object</a><br>
+(allocate()&nbsp;is&nbsp;an&nbsp;obsolete&nbsp;synonym)<br>
+&nbsp;<br>
+Create&nbsp;a&nbsp;new&nbsp;lock&nbsp;<a href="builtins.html#object">object</a>.&nbsp;See&nbsp;help(type(threading.<a href="#-Lock">Lock</a>()))&nbsp;for<br>
+information&nbsp;about&nbsp;locks.</span></dd></dl>
+</td></tr></table>
+</body></html>

@@ -10,6 +10,24 @@
 
 Модель (`models/final/`, SHA-256 в `models/final/SHA256SUMS`) и карта (`consumer/map/moscow.pmtiles`, источник и SHA-256 — в `consumer/map/manifest.json`) лежат в репозитории. Один раз подготовить (не хранятся в Git): Docker, образ эмулятора и данные `data/validate/{traffic.csv,schedule_plan.csv}` из официальной раздачи.
 
+Вне Git только три файла официальной раздачи организаторов. Положить их по путям от корня репозитория:
+
+| Путь | Байт | SHA-256 |
+|---|---:|---|
+| `data/validate/traffic.csv` | 17117773 | `3c74bb9d3cc5e076a2e7f89de7e78fb103c350757d16c9d629de651ee09bf517` |
+| `data/validate/schedule_plan.csv` | 683160 | `c9b561743a5cb83616941b02b47c5aded89e75218d93c13a282a2e8c790787c8` |
+| `data/emulator/ndtp-telemetry-emulator.tar` | 134284800 | `89399e531f20a508554441f1491be5676a524fa14c05f6e10e48fd22d849a199` |
+
+Проверка: сохранить блок ниже в корне репозитория как `external.sha256` и выполнить `shasum -a 256 -c external.sha256` (Linux: `sha256sum -c external.sha256`). Ожидается три строки `OK`.
+
+```text
+3c74bb9d3cc5e076a2e7f89de7e78fb103c350757d16c9d629de651ee09bf517  data/validate/traffic.csv
+c9b561743a5cb83616941b02b47c5aded89e75218d93c13a282a2e8c790787c8  data/validate/schedule_plan.csv
+89399e531f20a508554441f1491be5676a524fa14c05f6e10e48fd22d849a199  data/emulator/ndtp-telemetry-emulator.tar
+```
+
+Файлы в репозитории проверяются так: модель — `cd models/final && shasum -a 256 -c SHA256SUMS`, карта — `shasum -a 256 consumer/map/moscow.pmtiles` сравнить с полем `sha256` в `consumer/map/manifest.json`.
+
 ```bash
 docker load -i data/emulator/ndtp-telemetry-emulator.tar
 ```

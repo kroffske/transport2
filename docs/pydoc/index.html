@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>transport2 — PyDoc</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid #ddd; vertical-align: top; }
+code, pre { font-family: ui-monospace, monospace; font-size: .9em; }
+pre { background: #f5f5f5; padding: .6rem; overflow-x: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>transport2 — PyDoc</h1>
+<p>Документация Python-модулей трёх сервисов демо: ML API, Backend и consumer. Файлы сгенерированы стандартным <code>pydoc -w</code> из кода этого commit. OpenAPI-спецификации сервисов лежат рядом, в <code>docs/api/</code>.</p>
+
+<h2>ML API (<code>transport_ml</code>, порт 8000)</h2>
+<table>
+<tr><th>Модуль</th><th>Назначение</th></tr>
+<tr><td><a href="transport_ml.final_model.html">transport_ml.final_model</a></td><td>Выбранная финальная модель и каноничный point-in-time инференс.</td></tr>
+<tr><td><a href="transport_ml.service.html">transport_ml.service</a></td><td>HTTP-граница финальной модели (FastAPI, <code>uvicorn transport_ml.service:app</code>).</td></tr>
+<tr><td><a href="transport_ml.data.html">transport_ml.data</a></td><td>Контракты данных; факты не попадают в расписание для признаков.</td></tr>
+<tr><td><a href="transport_ml.features.html">transport_ml.features</a></td><td>Одна реализация признаков для исторических батчей и онлайн-запросов.</td></tr>
+</table>
+
+<h2>Backend (<code>transport_backend</code>, порт 8001, NDTP 9201)</h2>
+<table>
+<tr><th>Модуль</th><th>Назначение</th></tr>
+<tr><td><a href="transport_backend.service.html">transport_backend.service</a></td><td>HTTP API Backend (FastAPI, <code>uvicorn transport_backend.service:app</code>).</td></tr>
+<tr><td><a href="transport_backend.orchestration.html">transport_backend.orchestration</a></td><td>Жизненный цикл прогноза поверх point-in-time состояния NDTP и плана.</td></tr>
+<tr><td><a href="transport_backend.run.html">transport_backend.run</a></td><td>Единственный владелец часов источника и демо-прогона.</td></tr>
+<tr><td><a href="transport_backend.ingest.html">transport_backend.ingest</a></td><td>TCP-сервер NDTP с ограниченной очередью и явными доменами времени.</td></tr>
+<tr><td><a href="transport_backend.ndtp.html">transport_backend.ndtp</a></td><td>Фрейминг NDTP и поднабор ячеек эмулятора фиксированной длины.</td></tr>
+<tr><td><a href="transport_backend.schedule.html">transport_backend.schedule</a></td><td>Плановые прибытия и консервативные наблюдения остановок только по GPS.</td></tr>
+<tr><td><a href="transport_backend.state.html">transport_backend.state</a></td><td>Ограниченное point-in-time состояние телеметрии одного процесса Backend.</td></tr>
+</table>
+
+<h2>Consumer (<code>consumer</code>, порт 8002)</h2>
+<table>
+<tr><th>Модуль</th><th>Назначение</th></tr>
+<tr><td><a href="consumer.service.html">consumer.service</a></td><td>Раздача диспетчерской карты, снимка ТС и маршрутного контекста из Backend.</td></tr>
+</table>
+
+<h2>OpenAPI</h2>
+<ul>
+<li><a href="../api/openapi.json">docs/api/openapi.json</a> — ML API (Transport Final Model API)</li>
+<li><a href="../api/backend-openapi.json">docs/api/backend-openapi.json</a> — Backend (Transport Backend API)</li>
+<li><a href="../api/consumer-openapi.json">docs/api/consumer-openapi.json</a> — consumer (Transport live consumer)</li>
+</ul>
+<p>После запуска стека по README Swagger UI доступен на <code>http://localhost:8000/docs</code>, <code>:8001/docs</code> и <code>:8002/docs</code>.</p>
+
+<h2>Как пересобрать</h2>
+<p>Из корня репозитория с установленным <code>requirements.txt</code>. Второй <code>sed</code> убирает абсолютные пути host, третий — адреса памяти в схемах pydantic, чтобы повторная генерация давала тот же файл.</p>
+<pre>cd docs/pydoc &amp;&amp; PYTHONPATH=../.. ../../.venv/bin/python -m pydoc -w transport_ml.final_model transport_ml.service transport_ml.data transport_ml.features transport_backend.service transport_backend.orchestration transport_backend.run transport_backend.ingest transport_backend.ndtp transport_backend.schedule transport_backend.state consumer.service
+sed -i '' "s#$(cd ../.. &amp;&amp; pwd)/##g" *.html
+sed -i '' -E "s#('ref': '[A-Za-z_][A-Za-z0-9_.]*):[0-9]+'#\1'#g" *.html</pre>
+<p>Ссылки <code>file:…</code> в заголовках модулей указывают путь исходника от корня репозитория.</p>
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Python: module consumer.service</title>
+</head><body>
+
+<table class="heading">
+<tr class="heading-text decor">
+<td class="title">&nbsp;<br><strong class="title"><a href="consumer.html" class="white">consumer</a>.service</strong></td>
+<td class="extra"><a href=".">index</a><br><a href="file:consumer/service.py">consumer/service.py</a></td></tr></table>
+    <p><span class="code">Serve&nbsp;a&nbsp;small&nbsp;live&nbsp;view&nbsp;of&nbsp;the&nbsp;Backend&nbsp;vehicle&nbsp;snapshot&nbsp;and&nbsp;route&nbsp;context.</span></p>
+<p>
+<table class="section">
+<tr class="decor pkg-content-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Modules</strong></td></tr>
+    
+<tr><td class="decor pkg-content-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><table><tr><td class="multicolumn"><a href="hashlib.html">hashlib</a><br>
+</td><td class="multicolumn"><a href="httpx.html">httpx</a><br>
+</td><td class="multicolumn"><a href="os.html">os</a><br>
+</td><td class="multicolumn"><a href="re.html">re</a><br>
+</td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor index-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Classes</strong></td></tr>
+    
+<tr><td class="decor index-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl>
+<dt class="heading-text"><a href="builtins.html#object">builtins.object</a>
+</dt><dd>
+<dl>
+<dt class="heading-text"><a href="consumer.service.html#RouteReader">RouteReader</a>
+</dt><dt class="heading-text"><a href="consumer.service.html#SnapshotReader">SnapshotReader</a>
+</dt></dl>
+</dd>
+</dl>
+ <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="RouteReader">class <strong>RouteReader</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#RouteReader">RouteReader</a>(backend_url:&nbsp;'str',&nbsp;timeout_s:&nbsp;'float')<br>
+&nbsp;<br>
+Proxy&nbsp;Backend&nbsp;route&nbsp;views&nbsp;without&nbsp;cache;&nbsp;a&nbsp;failure&nbsp;is&nbsp;reported&nbsp;as&nbsp;offline,&nbsp;not&nbsp;replaced.<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="RouteReader-__init__"><strong>__init__</strong></a>(self, backend_url: 'str', timeout_s: 'float')</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="RouteReader-read"><strong>read</strong></a>(self, tr_id: 'str') -&gt; 'tuple[int, dict[str, Any]]'</dt><dd><span class="code">One&nbsp;vehicle's&nbsp;route&nbsp;context&nbsp;(``/v1/route/{tr_id}``).</span></dd></dl>
+
+<dl><dt><a name="RouteReader-read_all"><strong>read_all</strong></a>(self) -&gt; 'tuple[int, dict[str, Any]]'</dt><dd><span class="code">Planned-stop&nbsp;lines&nbsp;of&nbsp;all&nbsp;run&nbsp;vehicles&nbsp;(``/v1/routes``).</span></dd></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+</td></tr></table> <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="SnapshotReader">class <strong>SnapshotReader</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#SnapshotReader">SnapshotReader</a>(backend_url:&nbsp;'str',&nbsp;timeout_s:&nbsp;'float')<br>
+&nbsp;<br>
+Own&nbsp;the&nbsp;last&nbsp;successful&nbsp;Backend&nbsp;response&nbsp;and&nbsp;its&nbsp;retrieval&nbsp;time.<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="SnapshotReader-__init__"><strong>__init__</strong></a>(self, backend_url: 'str', timeout_s: 'float')</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="SnapshotReader-read"><strong>read</strong></a>(self) -&gt; 'dict[str, Any]'</dt></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+</td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor functions-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Functions</strong></td></tr>
+    
+<tr><td class="decor functions-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt><a name="-Lock"><strong>Lock</strong></a> = allocate_lock(...)</dt><dd><span class="code">allocate_lock()&nbsp;-&gt;&nbsp;lock&nbsp;<a href="builtins.html#object">object</a><br>
+(allocate()&nbsp;is&nbsp;an&nbsp;obsolete&nbsp;synonym)<br>
+&nbsp;<br>
+Create&nbsp;a&nbsp;new&nbsp;lock&nbsp;<a href="builtins.html#object">object</a>.&nbsp;See&nbsp;help(type(threading.<a href="#-Lock">Lock</a>()))&nbsp;for<br>
+information&nbsp;about&nbsp;locks.</span></dd></dl>
+ <dl><dt><a name="-build_identity"><strong>build_identity</strong></a>(root: 'Path', source_commit: 'str | None') -&gt; 'dict[str, Any]'</dt><dd><span class="code">Served-file&nbsp;hashes&nbsp;plus&nbsp;the&nbsp;T-6&nbsp;build&nbsp;identity&nbsp;(m2.md&nbsp;recipe,&nbsp;same&nbsp;relative&nbsp;paths).<br>
+&nbsp;<br>
+``dashboard_bundle_sha256``&nbsp;hashes&nbsp;the&nbsp;listing&nbsp;of&nbsp;the&nbsp;three&nbsp;dashboard&nbsp;build<br>
+outputs;&nbsp;``consumer_static_sha256``&nbsp;hashes&nbsp;the&nbsp;listing&nbsp;of&nbsp;``index.html``&nbsp;and<br>
+every&nbsp;file&nbsp;in&nbsp;``static/``&nbsp;sorted&nbsp;by&nbsp;path.&nbsp;``source_commit``&nbsp;comes&nbsp;from&nbsp;the<br>
+image&nbsp;build&nbsp;argument;&nbsp;without&nbsp;it&nbsp;the&nbsp;answer&nbsp;is&nbsp;``unknown``,&nbsp;never&nbsp;a&nbsp;guess.</span></dd></dl>
+ <dl><dt><a name="-create_app"><strong>create_app</strong></a>(backend_url: 'str | None' = None, timeout_s: 'float | None' = None, source_commit: 'str | None' = None) -&gt; 'FastAPI'</dt></dl>
+ <dl><dt><a name="-monotonic"><strong>monotonic</strong></a>(...)</dt><dd><span class="code"><a href="#-monotonic">monotonic</a>()&nbsp;-&gt;&nbsp;float<br>
+&nbsp;<br>
+Monotonic&nbsp;clock,&nbsp;cannot&nbsp;go&nbsp;backward.</span></dd></dl>
+</td></tr></table><p>
+<table class="section">
+<tr class="decor data-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Data</strong></td></tr>
+    
+<tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><strong>ASSETS</strong> = PosixPath('consumer/static')<br>
+<strong>BUILD_FILES</strong> = ('index.html', 'static/app.js', 'static/app.css', 'static/map-worker.js')<br>
+<strong>Callable</strong> = typing.Callable<br>
+<strong>DASHBOARD_BUNDLE</strong> = ('static/app.css', 'static/app.js', 'static/map-worker.js')<br>
+<strong>INDEX</strong> = PosixPath('consumer/index.html')<br>
+<strong>MAP</strong> = PosixPath('consumer/map')<br>
+<strong>SCHEMA_VERSION</strong> = 'transport.backend-vehicles.v1'<br>
+<strong>TR_ID</strong> = re.compile('^[0-9A-Za-z_-]{1,64}$')<br>
+<strong>app</strong> = &lt;fastapi.applications.FastAPI object&gt;</td></tr></table>
+</body></html>

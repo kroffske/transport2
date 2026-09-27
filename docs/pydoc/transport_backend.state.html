@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Python: module transport_backend.state</title>
+</head><body>
+
+<table class="heading">
+<tr class="heading-text decor">
+<td class="title">&nbsp;<br><strong class="title"><a href="transport_backend.html" class="white">transport_backend</a>.state</strong></td>
+<td class="extra"><a href=".">index</a><br><a href="file:transport_backend/state.py">transport_backend/state.py</a></td></tr></table>
+    <p><span class="code">Bounded,&nbsp;point-in-time&nbsp;telemetry&nbsp;state&nbsp;for&nbsp;one&nbsp;Backend&nbsp;process.<br>
+&nbsp;<br>
+``history_limit``&nbsp;bounds&nbsp;records&nbsp;and&nbsp;duplicate&nbsp;identities&nbsp;per&nbsp;mapped&nbsp;vehicle.<br>
+``outcome_limit``&nbsp;bounds&nbsp;the&nbsp;frame&nbsp;outcome&nbsp;journal&nbsp;used&nbsp;for&nbsp;replay&nbsp;acknowledgments.<br>
+``stale_after_s``&nbsp;is&nbsp;the&nbsp;maximum&nbsp;age&nbsp;of&nbsp;the&nbsp;latest&nbsp;valid&nbsp;GPS&nbsp;event.<br>
+``reconnect_grace_s``&nbsp;keeps&nbsp;a&nbsp;unit&nbsp;connected&nbsp;for&nbsp;that&nbsp;many&nbsp;host&nbsp;monotonic<br>
+seconds&nbsp;after&nbsp;its&nbsp;last&nbsp;session&nbsp;closed:&nbsp;the&nbsp;official&nbsp;emulator&nbsp;reopens&nbsp;every&nbsp;TCP<br>
+session&nbsp;on&nbsp;each&nbsp;configuration&nbsp;POST.&nbsp;``connections``/``disconnects``&nbsp;still&nbsp;count<br>
+every&nbsp;real&nbsp;session.&nbsp;Counters<br>
+``accepted``,&nbsp;``dropped``,&nbsp;and&nbsp;``errors``&nbsp;include&nbsp;reason-specific&nbsp;counterparts.<br>
+No&nbsp;old&nbsp;snapshot&nbsp;is&nbsp;mutated:&nbsp;an&nbsp;as-of&nbsp;query&nbsp;filters&nbsp;both&nbsp;event&nbsp;and&nbsp;receive&nbsp;time.</span></p>
+<p>
+<table class="section">
+<tr class="decor pkg-content-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Modules</strong></td></tr>
+    
+<tr><td class="decor pkg-content-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><table><tr><td class="multicolumn"><a href="csv.html">csv</a><br>
+</td><td class="multicolumn"></td><td class="multicolumn"></td><td class="multicolumn"></td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor index-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Classes</strong></td></tr>
+    
+<tr><td class="decor index-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl>
+<dt class="heading-text"><a href="builtins.html#object">builtins.object</a>
+</dt><dd>
+<dl>
+<dt class="heading-text"><a href="transport_backend.state.html#ClockMapping">ClockMapping</a>
+</dt><dt class="heading-text"><a href="transport_backend.state.html#Telemetry">Telemetry</a>
+</dt><dt class="heading-text"><a href="transport_backend.state.html#TelemetryState">TelemetryState</a>
+</dt></dl>
+</dd>
+</dl>
+ <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="ClockMapping">class <strong>ClockMapping</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#ClockMapping">ClockMapping</a>(origin_epoch:&nbsp;'int',&nbsp;origin_wall:&nbsp;'datetime',&nbsp;rate:&nbsp;'int'&nbsp;=&nbsp;1)&nbsp;-&amp;gt;&nbsp;None<br>
+&nbsp;<br>
+Synthetic&nbsp;epoch&nbsp;-&gt;&nbsp;naive&nbsp;dataset&nbsp;wall&nbsp;clock&nbsp;mapping,&nbsp;reversible&nbsp;at&nbsp;rate&nbsp;1.<br>
+&nbsp;<br>
+``origin_epoch``&nbsp;is&nbsp;a&nbsp;synthetic&nbsp;Unix&nbsp;second,&nbsp;not&nbsp;a&nbsp;timezone&nbsp;assertion.<br>
+``origin_wall``&nbsp;is&nbsp;a&nbsp;naive&nbsp;dataset&nbsp;timestamp.&nbsp;``rate``&nbsp;is&nbsp;how&nbsp;many&nbsp;dataset<br>
+seconds&nbsp;pass&nbsp;per&nbsp;epoch&nbsp;second&nbsp;(a&nbsp;simulation&nbsp;speedup);&nbsp;at&nbsp;``rate&nbsp;!=&nbsp;1``&nbsp;the<br>
+wire&nbsp;second&nbsp;is&nbsp;coarser&nbsp;than&nbsp;a&nbsp;dataset&nbsp;second,&nbsp;so&nbsp;``to_epoch``&nbsp;is&nbsp;refused.<br>
+The&nbsp;caller's&nbsp;replay&nbsp;clock&nbsp;controls&nbsp;receive&nbsp;availability&nbsp;independently&nbsp;of<br>
+host&nbsp;wall&nbsp;time.<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="ClockMapping-__delattr__"><strong>__delattr__</strong></a>(self, name)</dt><dd><span class="code">Implement&nbsp;delattr(self,&nbsp;name).</span></dd></dl>
+
+<dl><dt><a name="ClockMapping-__eq__"><strong>__eq__</strong></a>(self, other)</dt><dd><span class="code">Return&nbsp;self==value.</span></dd></dl>
+
+<dl><dt><a name="ClockMapping-__hash__"><strong>__hash__</strong></a>(self)</dt><dd><span class="code">Return&nbsp;hash(self).</span></dd></dl>
+
+<dl><dt><a name="ClockMapping-__init__"><strong>__init__</strong></a>(self, origin_epoch: 'int', origin_wall: 'datetime', rate: 'int' = 1) -&gt; None</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="ClockMapping-__post_init__"><strong>__post_init__</strong></a>(self) -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="ClockMapping-__repr__"><strong>__repr__</strong></a>(self)</dt><dd><span class="code">Return&nbsp;repr(self).</span></dd></dl>
+
+<dl><dt><a name="ClockMapping-__setattr__"><strong>__setattr__</strong></a>(self, name, value)</dt><dd><span class="code">Implement&nbsp;setattr(self,&nbsp;name,&nbsp;value).</span></dd></dl>
+
+<dl><dt><a name="ClockMapping-from_epoch"><strong>from_epoch</strong></a>(self, seconds: 'float') -&gt; 'datetime'</dt></dl>
+
+<dl><dt><a name="ClockMapping-to_epoch"><strong>to_epoch</strong></a>(self, wall: 'datetime') -&gt; 'int'</dt></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+<hr>
+Data and other attributes defined here:<br>
+<dl><dt><strong>__annotations__</strong> = {'origin_epoch': 'int', 'origin_wall': 'datetime', 'rate': 'int'}</dl>
+
+<dl><dt><strong>__dataclass_fields__</strong> = {'origin_epoch': Field(name='origin_epoch',type='int',default=&lt;da...appingproxy({}),kw_only=False,_field_type=_FIELD), 'origin_wall': Field(name='origin_wall',type='datetime',default...appingproxy({}),kw_only=False,_field_type=_FIELD), 'rate': Field(name='rate',type='int',default=1,default_f...appingproxy({}),kw_only=False,_field_type=_FIELD)}</dl>
+
+<dl><dt><strong>__dataclass_params__</strong> = _DataclassParams(init=True,repr=True,eq=True,ord...rue,kw_only=False,slots=False,weakref_slot=False)</dl>
+
+<dl><dt><strong>__match_args__</strong> = ('origin_epoch', 'origin_wall', 'rate')</dl>
+
+<dl><dt><strong>rate</strong> = 1</dl>
+
+</td></tr></table> <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="Telemetry">class <strong>Telemetry</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#Telemetry">Telemetry</a>(unit_id:&nbsp;'int',&nbsp;tr_id:&nbsp;'str',&nbsp;event_time:&nbsp;'str',&nbsp;receive_time:&nbsp;'str',&nbsp;location_valid:&nbsp;'bool',&nbsp;lon:&nbsp;'float',&nbsp;lat:&nbsp;'float',&nbsp;speed:&nbsp;'float',&nbsp;heading:&nbsp;'float',&nbsp;alt:&nbsp;'float',&nbsp;packet_id:&nbsp;'str',&nbsp;session_id:&nbsp;'str',&nbsp;request_id:&nbsp;'int',&nbsp;source_clock:&nbsp;'str',&nbsp;frame_id:&nbsp;'str',&nbsp;received_at_utc:&nbsp;'str',&nbsp;event_at_utc:&nbsp;'str&nbsp;|&nbsp;None'&nbsp;=&nbsp;None)&nbsp;-&amp;gt;&nbsp;None<br>
+&nbsp;<br>
+<a href="#Telemetry">Telemetry</a>(unit_id:&nbsp;'int',&nbsp;tr_id:&nbsp;'str',&nbsp;event_time:&nbsp;'str',&nbsp;receive_time:&nbsp;'str',&nbsp;location_valid:&nbsp;'bool',&nbsp;lon:&nbsp;'float',&nbsp;lat:&nbsp;'float',&nbsp;speed:&nbsp;'float',&nbsp;heading:&nbsp;'float',&nbsp;alt:&nbsp;'float',&nbsp;packet_id:&nbsp;'str',&nbsp;session_id:&nbsp;'str',&nbsp;request_id:&nbsp;'int',&nbsp;source_clock:&nbsp;'str',&nbsp;frame_id:&nbsp;'str',&nbsp;received_at_utc:&nbsp;'str',&nbsp;event_at_utc:&nbsp;'str&nbsp;|&nbsp;None'&nbsp;=&nbsp;None)<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="Telemetry-__delattr__"><strong>__delattr__</strong></a>(self, name)</dt><dd><span class="code">Implement&nbsp;delattr(self,&nbsp;name).</span></dd></dl>
+
+<dl><dt><a name="Telemetry-__eq__"><strong>__eq__</strong></a>(self, other)</dt><dd><span class="code">Return&nbsp;self==value.</span></dd></dl>
+
+<dl><dt><a name="Telemetry-__hash__"><strong>__hash__</strong></a>(self)</dt><dd><span class="code">Return&nbsp;hash(self).</span></dd></dl>
+
+<dl><dt><a name="Telemetry-__init__"><strong>__init__</strong></a>(self, unit_id: 'int', tr_id: 'str', event_time: 'str', receive_time: 'str', location_valid: 'bool', lon: 'float', lat: 'float', speed: 'float', heading: 'float', alt: 'float', packet_id: 'str', session_id: 'str', request_id: 'int', source_clock: 'str', frame_id: 'str', received_at_utc: 'str', event_at_utc: 'str | None' = None) -&gt; None</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="Telemetry-__repr__"><strong>__repr__</strong></a>(self)</dt><dd><span class="code">Return&nbsp;repr(self).</span></dd></dl>
+
+<dl><dt><a name="Telemetry-__setattr__"><strong>__setattr__</strong></a>(self, name, value)</dt><dd><span class="code">Implement&nbsp;setattr(self,&nbsp;name,&nbsp;value).</span></dd></dl>
+
+<dl><dt><a name="Telemetry-as_dict"><strong>as_dict</strong></a>(self) -&gt; 'dict[str, object]'</dt></dl>
+
+<dl><dt><a name="Telemetry-traffic_row"><strong>traffic_row</strong></a>(self) -&gt; 'dict[str, object]'</dt><dd><span class="code">Rows&nbsp;accepted&nbsp;by&nbsp;transport_ml.data.TRAFFIC_COLUMNS.</span></dd></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+<hr>
+Data and other attributes defined here:<br>
+<dl><dt><strong>__annotations__</strong> = {'alt': 'float', 'event_at_utc': 'str | None', 'event_time': 'str', 'frame_id': 'str', 'heading': 'float', 'lat': 'float', 'location_valid': 'bool', 'lon': 'float', 'packet_id': 'str', 'receive_time': 'str', ...}</dl>
+
+<dl><dt><strong>__dataclass_fields__</strong> = {'alt': Field(name='alt',type='float',default=&lt;dataclass...appingproxy({}),kw_only=False,_field_type=_FIELD), 'event_at_utc': Field(name='event_at_utc',type='str | None',defa...appingproxy({}),kw_only=False,_field_type=_FIELD), 'event_time': Field(name='event_time',type='str',default=&lt;data...appingproxy({}),kw_only=False,_field_type=_FIELD), 'frame_id': Field(name='frame_id',type='str',default=&lt;datacl...appingproxy({}),kw_only=False,_field_type=_FIELD), 'heading': Field(name='heading',type='float',default=&lt;datac...appingproxy({}),kw_only=False,_field_type=_FIELD), 'lat': Field(name='lat',type='float',default=&lt;dataclass...appingproxy({}),kw_only=False,_field_type=_FIELD), 'location_valid': Field(name='location_valid',type='bool',default=...appingproxy({}),kw_only=False,_field_type=_FIELD), 'lon': Field(name='lon',type='float',default=&lt;dataclass...appingproxy({}),kw_only=False,_field_type=_FIELD), 'packet_id': Field(name='packet_id',type='str',default=&lt;datac...appingproxy({}),kw_only=False,_field_type=_FIELD), 'receive_time': Field(name='receive_time',type='str',default=&lt;da...appingproxy({}),kw_only=False,_field_type=_FIELD), ...}</dl>
+
+<dl><dt><strong>__dataclass_params__</strong> = _DataclassParams(init=True,repr=True,eq=True,ord...rue,kw_only=False,slots=False,weakref_slot=False)</dl>
+
+<dl><dt><strong>__match_args__</strong> = ('unit_id', 'tr_id', 'event_time', 'receive_time', 'location_valid', 'lon', 'lat', 'speed', 'heading', 'alt', 'packet_id', 'session_id', 'request_id', 'source_clock', 'frame_id', 'received_at_utc', 'event_at_utc')</dl>
+
+<dl><dt><strong>event_at_utc</strong> = None</dl>
+
+</td></tr></table> <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="TelemetryState">class <strong>TelemetryState</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#TelemetryState">TelemetryState</a>(unit_mapping:&nbsp;'Mapping[int,&nbsp;str]',&nbsp;*,&nbsp;history_limit:&nbsp;'int'&nbsp;=&nbsp;4096,&nbsp;outcome_limit:&nbsp;'int'&nbsp;=&nbsp;1024,&nbsp;stale_after_s:&nbsp;'float'&nbsp;=&nbsp;45.0,&nbsp;source_clock:&nbsp;'str'&nbsp;=&nbsp;'utc',&nbsp;reconnect_grace_s:&nbsp;'float'&nbsp;=&nbsp;3.0,&nbsp;wall:&nbsp;'Callable[[],&nbsp;float]'&nbsp;=&nbsp;&amp;lt;built-in&nbsp;function&nbsp;monotonic&amp;gt;)<br>
+&nbsp;<br>
+<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="TelemetryState-__init__"><strong>__init__</strong></a>(self, unit_mapping: 'Mapping[int, str]', *, history_limit: 'int' = 4096, outcome_limit: 'int' = 1024, stale_after_s: 'float' = 45.0, source_clock: 'str' = 'utc', reconnect_grace_s: 'float' = 3.0, wall: 'Callable[[], float]' = &lt;built-in function monotonic&gt;)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="TelemetryState-accept"><strong>accept</strong></a>(self, record: 'Telemetry') -&gt; 'bool'</dt></dl>
+
+<dl><dt><a name="TelemetryState-connected"><strong>connected</strong></a>(self, unit_id: 'int', session_id: 'str') -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="TelemetryState-count"><strong>count</strong></a>(self, name: 'str', amount: 'int' = 1) -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="TelemetryState-counters"><strong>counters</strong></a>(self) -&gt; 'dict[str, int]'</dt></dl>
+
+<dl><dt><a name="TelemetryState-disconnected"><strong>disconnected</strong></a>(self, unit_id: 'int', session_id: 'str') -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="TelemetryState-history"><strong>history</strong></a>(self, tr_id: 'str', at: 'datetime', *, window_s: 'float | None' = None) -&gt; 'list[dict[str, object]]'</dt><dd><span class="code">Latest&nbsp;received&nbsp;correction&nbsp;per&nbsp;event,&nbsp;with&nbsp;event/receive&nbsp;&lt;=&nbsp;at.</span></dd></dl>
+
+<dl><dt><a name="TelemetryState-ingest_readback"><strong>ingest_readback</strong></a>(self, since_revision: 'int' = 0) -&gt; 'dict[str, object]'</dt><dd><span class="code">Bounded&nbsp;ack&nbsp;journal&nbsp;for&nbsp;lockstep&nbsp;replay.<br>
+&nbsp;<br>
+Match&nbsp;unit/request/session/frame&nbsp;and&nbsp;``outcome``&nbsp;in&nbsp;``outcomes``.&nbsp;If<br>
+``outcome_gap``&nbsp;is&nbsp;true,&nbsp;requested&nbsp;entries&nbsp;were&nbsp;evicted:&nbsp;fail&nbsp;replay<br>
+rather&nbsp;than&nbsp;infer&nbsp;success&nbsp;from&nbsp;a&nbsp;newer&nbsp;revision.&nbsp;Accepted&nbsp;revision&nbsp;rises<br>
+only&nbsp;for&nbsp;new&nbsp;telemetry;&nbsp;processed&nbsp;revision&nbsp;includes&nbsp;duplicate&nbsp;and&nbsp;queue<br>
+drops.&nbsp;A&nbsp;sender&nbsp;must&nbsp;check&nbsp;its&nbsp;own&nbsp;frame's&nbsp;outcome,&nbsp;not&nbsp;just&nbsp;a&nbsp;revision.</span></dd></dl>
+
+<dl><dt><a name="TelemetryState-mark_processed"><strong>mark_processed</strong></a>(self, record: 'Telemetry', outcome: 'str') -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="TelemetryState-observe_queue_depth"><strong>observe_queue_depth</strong></a>(self, depth: 'int') -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="TelemetryState-snapshot"><strong>snapshot</strong></a>(self, tr_id: 'str', at: 'datetime') -&gt; 'dict[str, object]'</dt></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+</td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor functions-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Functions</strong></td></tr>
+    
+<tr><td class="decor functions-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt><a name="-load_unit_mapping"><strong>load_unit_mapping</strong></a>(paths: 'Iterable[str | Path]') -&gt; 'dict[int, str]'</dt><dd><span class="code">Build&nbsp;and&nbsp;validate&nbsp;an&nbsp;explicit&nbsp;unit_id&nbsp;-&gt;&nbsp;tr_id&nbsp;mapping&nbsp;from&nbsp;traffic&nbsp;CSVs.</span></dd></dl>
+ <dl><dt><a name="-monotonic"><strong>monotonic</strong></a>(...)</dt><dd><span class="code"><a href="#-monotonic">monotonic</a>()&nbsp;-&gt;&nbsp;float<br>
+&nbsp;<br>
+Monotonic&nbsp;clock,&nbsp;cannot&nbsp;go&nbsp;backward.</span></dd></dl>
+ <dl><dt><a name="-parse_time"><strong>parse_time</strong></a>(value: 'str') -&gt; 'datetime'</dt></dl>
+ <dl><dt><a name="-time_text"><strong>time_text</strong></a>(value: 'datetime') -&gt; 'str'</dt></dl>
+ <dl><dt><a name="-wire_event_time"><strong>wire_event_time</strong></a>(seconds: 'int', mapping: 'ClockMapping | None') -&gt; 'datetime'</dt></dl>
+</td></tr></table><p>
+<table class="section">
+<tr class="decor data-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Data</strong></td></tr>
+    
+<tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><strong>Callable</strong> = typing.Callable<br>
+<strong>Iterable</strong> = typing.Iterable<br>
+<strong>Mapping</strong> = typing.Mapping<br>
+<strong>TIME_FORMAT</strong> = '%Y-%m-%d %H:%M:%S.%f'</td></tr></table>
+</body></html>

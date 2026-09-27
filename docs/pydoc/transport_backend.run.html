@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Python: module transport_backend.run</title>
+</head><body>
+
+<table class="heading">
+<tr class="heading-text decor">
+<td class="title">&nbsp;<br><strong class="title"><a href="transport_backend.html" class="white">transport_backend</a>.run</strong></td>
+<td class="extra"><a href=".">index</a><br><a href="file:transport_backend/run.py">transport_backend/run.py</a></td></tr></table>
+    <p><span class="code">The&nbsp;single&nbsp;owner&nbsp;of&nbsp;the&nbsp;Backend&nbsp;source&nbsp;clock&nbsp;and&nbsp;of&nbsp;the&nbsp;demo&nbsp;run.<br>
+&nbsp;<br>
+In&nbsp;``SOURCE_CLOCK=simulation``&nbsp;the&nbsp;process&nbsp;starts&nbsp;in&nbsp;``waiting_driver``&nbsp;without<br>
+a&nbsp;clock&nbsp;mapping.&nbsp;The&nbsp;emulator&nbsp;driver&nbsp;registers&nbsp;exactly&nbsp;one&nbsp;run&nbsp;per&nbsp;process<br>
+(``POST&nbsp;/v1/run``);&nbsp;only&nbsp;then&nbsp;does&nbsp;the&nbsp;dataset&nbsp;clock&nbsp;start,&nbsp;at<br>
+``dataset_start``&nbsp;and&nbsp;``speedup``&nbsp;dataset&nbsp;seconds&nbsp;per&nbsp;wall&nbsp;second.&nbsp;Until<br>
+registration&nbsp;``clock()``&nbsp;is&nbsp;``None``:&nbsp;NDTP&nbsp;navigation&nbsp;frames&nbsp;are&nbsp;rejected,<br>
+ticks&nbsp;and&nbsp;snapshots&nbsp;never&nbsp;consult&nbsp;the&nbsp;schedule.&nbsp;A&nbsp;second&nbsp;registration&nbsp;is&nbsp;a<br>
+conflict,&nbsp;so&nbsp;a&nbsp;second&nbsp;driver&nbsp;cannot&nbsp;silently&nbsp;take&nbsp;over&nbsp;the&nbsp;emulator.<br>
+&nbsp;<br>
+Lifecycle:&nbsp;``waiting_driver&nbsp;-&gt;&nbsp;starting&nbsp;-&gt;&nbsp;running&nbsp;-&gt;&nbsp;completed&nbsp;|&nbsp;failed&nbsp;|<br>
+stalled``.&nbsp;``completed``/``failed``&nbsp;are&nbsp;reported&nbsp;by&nbsp;the&nbsp;driver&nbsp;and&nbsp;final;<br>
+``running``&nbsp;means&nbsp;an&nbsp;accepted&nbsp;frame&nbsp;arrived&nbsp;within&nbsp;``stall_after_s``&nbsp;wall<br>
+seconds;&nbsp;otherwise&nbsp;the&nbsp;run&nbsp;is&nbsp;``stalled``&nbsp;(also&nbsp;from&nbsp;``starting``).<br>
+&nbsp;<br>
+Replay&nbsp;(``dataset_wall``)&nbsp;and&nbsp;live&nbsp;``utc``&nbsp;clocks&nbsp;are&nbsp;owned&nbsp;by&nbsp;their&nbsp;caller;<br>
+the&nbsp;registry&nbsp;only&nbsp;exposes&nbsp;them,&nbsp;has&nbsp;no&nbsp;run&nbsp;and&nbsp;serves&nbsp;every&nbsp;mapped&nbsp;vehicle.</span></p>
+<p>
+<table class="section">
+<tr class="decor pkg-content-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Modules</strong></td></tr>
+    
+<tr><td class="decor pkg-content-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><table><tr><td class="multicolumn"><a href="math.html">math</a><br>
+</td><td class="multicolumn"><a href="secrets.html">secrets</a><br>
+</td><td class="multicolumn"></td><td class="multicolumn"></td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor index-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Classes</strong></td></tr>
+    
+<tr><td class="decor index-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl>
+<dt class="heading-text"><a href="builtins.html#LookupError">builtins.LookupError</a>(<a href="builtins.html#Exception">builtins.Exception</a>)
+</dt><dd>
+<dl>
+<dt class="heading-text"><a href="transport_backend.run.html#RunNotFound">RunNotFound</a>
+</dt></dl>
+</dd>
+<dt class="heading-text"><a href="builtins.html#RuntimeError">builtins.RuntimeError</a>(<a href="builtins.html#Exception">builtins.Exception</a>)
+</dt><dd>
+<dl>
+<dt class="heading-text"><a href="transport_backend.run.html#RunConflict">RunConflict</a>
+</dt></dl>
+</dd>
+<dt class="heading-text"><a href="builtins.html#object">builtins.object</a>
+</dt><dd>
+<dl>
+<dt class="heading-text"><a href="transport_backend.run.html#RunPlan">RunPlan</a>
+</dt><dt class="heading-text"><a href="transport_backend.run.html#RunRegistry">RunRegistry</a>
+</dt></dl>
+</dd>
+</dl>
+ <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="RunConflict">class <strong>RunConflict</strong></a>(<a href="builtins.html#RuntimeError">builtins.RuntimeError</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#RunConflict">RunConflict</a>(detail:&nbsp;'str',&nbsp;run_id:&nbsp;'str&nbsp;|&nbsp;None')<br>
+&nbsp;<br>
+The&nbsp;request&nbsp;contradicts&nbsp;the&nbsp;registered&nbsp;run&nbsp;(second&nbsp;driver,&nbsp;final&nbsp;state).<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt>Method resolution order:</dt>
+<dd><a href="transport_backend.run.html#RunConflict">RunConflict</a></dd>
+<dd><a href="builtins.html#RuntimeError">builtins.RuntimeError</a></dd>
+<dd><a href="builtins.html#Exception">builtins.Exception</a></dd>
+<dd><a href="builtins.html#BaseException">builtins.BaseException</a></dd>
+<dd><a href="builtins.html#object">builtins.object</a></dd>
+</dl>
+<hr>
+Methods defined here:<br>
+<dl><dt><a name="RunConflict-__init__"><strong>__init__</strong></a>(self, detail: 'str', run_id: 'str | None')</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+<hr>
+Static methods inherited from <a href="builtins.html#RuntimeError">builtins.RuntimeError</a>:<br>
+<dl><dt><a name="RunConflict-__new__"><strong>__new__</strong></a>(*args, **kwargs)<span class="grey"><span class="heading-text"> class method of <a href="builtins.html#RuntimeError">builtins.RuntimeError</a></span></span></dt><dd><span class="code">Create&nbsp;and&nbsp;return&nbsp;a&nbsp;new&nbsp;<a href="builtins.html#object">object</a>.&nbsp;&nbsp;See&nbsp;help(type)&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<hr>
+Methods inherited from <a href="builtins.html#BaseException">builtins.BaseException</a>:<br>
+<dl><dt><a name="RunConflict-__getattribute__"><strong>__getattribute__</strong></a>(self, name, /)</dt><dd><span class="code">Return&nbsp;getattr(self,&nbsp;name).</span></dd></dl>
+
+<dl><dt><a name="RunConflict-__reduce__"><strong>__reduce__</strong></a>(...)</dt><dd><span class="code">Helper&nbsp;for&nbsp;pickle.</span></dd></dl>
+
+<dl><dt><a name="RunConflict-__repr__"><strong>__repr__</strong></a>(self, /)</dt><dd><span class="code">Return&nbsp;repr(self).</span></dd></dl>
+
+<dl><dt><a name="RunConflict-__setstate__"><strong>__setstate__</strong></a>(...)</dt></dl>
+
+<dl><dt><a name="RunConflict-__str__"><strong>__str__</strong></a>(self, /)</dt><dd><span class="code">Return&nbsp;str(self).</span></dd></dl>
+
+<dl><dt><a name="RunConflict-add_note"><strong>add_note</strong></a>(...)</dt><dd><span class="code">Exception.<a href="#RunConflict-add_note">add_note</a>(note)&nbsp;--<br>
+add&nbsp;a&nbsp;note&nbsp;to&nbsp;the&nbsp;exception</span></dd></dl>
+
+<dl><dt><a name="RunConflict-with_traceback"><strong>with_traceback</strong></a>(...)</dt><dd><span class="code">Exception.<a href="#RunConflict-with_traceback">with_traceback</a>(tb)&nbsp;--<br>
+set&nbsp;self.<strong>__traceback__</strong>&nbsp;to&nbsp;tb&nbsp;and&nbsp;return&nbsp;self.</span></dd></dl>
+
+<hr>
+Data descriptors inherited from <a href="builtins.html#BaseException">builtins.BaseException</a>:<br>
+<dl><dt><strong>__cause__</strong></dt>
+<dd><span class="code">exception&nbsp;cause</span></dd>
+</dl>
+<dl><dt><strong>__context__</strong></dt>
+<dd><span class="code">exception&nbsp;context</span></dd>
+</dl>
+<dl><dt><strong>__dict__</strong></dt>
+</dl>
+<dl><dt><strong>__suppress_context__</strong></dt>
+</dl>
+<dl><dt><strong>__traceback__</strong></dt>
+</dl>
+<dl><dt><strong>args</strong></dt>
+</dl>
+</td></tr></table> <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="RunNotFound">class <strong>RunNotFound</strong></a>(<a href="builtins.html#LookupError">builtins.LookupError</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code">No&nbsp;registered&nbsp;run&nbsp;has&nbsp;this&nbsp;ID.<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt>Method resolution order:</dt>
+<dd><a href="transport_backend.run.html#RunNotFound">RunNotFound</a></dd>
+<dd><a href="builtins.html#LookupError">builtins.LookupError</a></dd>
+<dd><a href="builtins.html#Exception">builtins.Exception</a></dd>
+<dd><a href="builtins.html#BaseException">builtins.BaseException</a></dd>
+<dd><a href="builtins.html#object">builtins.object</a></dd>
+</dl>
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+<hr>
+Methods inherited from <a href="builtins.html#LookupError">builtins.LookupError</a>:<br>
+<dl><dt><a name="RunNotFound-__init__"><strong>__init__</strong></a>(self, /, *args, **kwargs)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<hr>
+Static methods inherited from <a href="builtins.html#LookupError">builtins.LookupError</a>:<br>
+<dl><dt><a name="RunNotFound-__new__"><strong>__new__</strong></a>(*args, **kwargs)<span class="grey"><span class="heading-text"> class method of <a href="builtins.html#LookupError">builtins.LookupError</a></span></span></dt><dd><span class="code">Create&nbsp;and&nbsp;return&nbsp;a&nbsp;new&nbsp;<a href="builtins.html#object">object</a>.&nbsp;&nbsp;See&nbsp;help(type)&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<hr>
+Methods inherited from <a href="builtins.html#BaseException">builtins.BaseException</a>:<br>
+<dl><dt><a name="RunNotFound-__getattribute__"><strong>__getattribute__</strong></a>(self, name, /)</dt><dd><span class="code">Return&nbsp;getattr(self,&nbsp;name).</span></dd></dl>
+
+<dl><dt><a name="RunNotFound-__reduce__"><strong>__reduce__</strong></a>(...)</dt><dd><span class="code">Helper&nbsp;for&nbsp;pickle.</span></dd></dl>
+
+<dl><dt><a name="RunNotFound-__repr__"><strong>__repr__</strong></a>(self, /)</dt><dd><span class="code">Return&nbsp;repr(self).</span></dd></dl>
+
+<dl><dt><a name="RunNotFound-__setstate__"><strong>__setstate__</strong></a>(...)</dt></dl>
+
+<dl><dt><a name="RunNotFound-__str__"><strong>__str__</strong></a>(self, /)</dt><dd><span class="code">Return&nbsp;str(self).</span></dd></dl>
+
+<dl><dt><a name="RunNotFound-add_note"><strong>add_note</strong></a>(...)</dt><dd><span class="code">Exception.<a href="#RunNotFound-add_note">add_note</a>(note)&nbsp;--<br>
+add&nbsp;a&nbsp;note&nbsp;to&nbsp;the&nbsp;exception</span></dd></dl>
+
+<dl><dt><a name="RunNotFound-with_traceback"><strong>with_traceback</strong></a>(...)</dt><dd><span class="code">Exception.<a href="#RunNotFound-with_traceback">with_traceback</a>(tb)&nbsp;--<br>
+set&nbsp;self.<strong>__traceback__</strong>&nbsp;to&nbsp;tb&nbsp;and&nbsp;return&nbsp;self.</span></dd></dl>
+
+<hr>
+Data descriptors inherited from <a href="builtins.html#BaseException">builtins.BaseException</a>:<br>
+<dl><dt><strong>__cause__</strong></dt>
+<dd><span class="code">exception&nbsp;cause</span></dd>
+</dl>
+<dl><dt><strong>__context__</strong></dt>
+<dd><span class="code">exception&nbsp;context</span></dd>
+</dl>
+<dl><dt><strong>__dict__</strong></dt>
+</dl>
+<dl><dt><strong>__suppress_context__</strong></dt>
+</dl>
+<dl><dt><strong>__traceback__</strong></dt>
+</dl>
+<dl><dt><strong>args</strong></dt>
+</dl>
+</td></tr></table> <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="RunPlan">class <strong>RunPlan</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#RunPlan">RunPlan</a>(dataset_start:&nbsp;'datetime',&nbsp;dataset_end:&nbsp;'datetime',&nbsp;speedup:&nbsp;'int',&nbsp;post_period_s:&nbsp;'float',&nbsp;units:&nbsp;'tuple[int,&nbsp;...]',&nbsp;path:&nbsp;'Mapping[int,&nbsp;tuple[tuple[float,&nbsp;float],&nbsp;...]]'&nbsp;=&nbsp;&amp;lt;factory&amp;gt;)&nbsp;-&amp;gt;&nbsp;None<br>
+&nbsp;<br>
+What&nbsp;the&nbsp;driver&nbsp;will&nbsp;feed:&nbsp;window,&nbsp;pace,&nbsp;vehicles&nbsp;and&nbsp;display-only&nbsp;path.<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="RunPlan-__delattr__"><strong>__delattr__</strong></a>(self, name)</dt><dd><span class="code">Implement&nbsp;delattr(self,&nbsp;name).</span></dd></dl>
+
+<dl><dt><a name="RunPlan-__eq__"><strong>__eq__</strong></a>(self, other)</dt><dd><span class="code">Return&nbsp;self==value.</span></dd></dl>
+
+<dl><dt><a name="RunPlan-__hash__"><strong>__hash__</strong></a>(self)</dt><dd><span class="code">Return&nbsp;hash(self).</span></dd></dl>
+
+<dl><dt><a name="RunPlan-__init__"><strong>__init__</strong></a>(self, dataset_start: 'datetime', dataset_end: 'datetime', speedup: 'int', post_period_s: 'float', units: 'tuple[int, ...]', path: 'Mapping[int, tuple[tuple[float, float], ...]]' = &lt;factory&gt;) -&gt; None</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="RunPlan-__repr__"><strong>__repr__</strong></a>(self)</dt><dd><span class="code">Return&nbsp;repr(self).</span></dd></dl>
+
+<dl><dt><a name="RunPlan-__setattr__"><strong>__setattr__</strong></a>(self, name, value)</dt><dd><span class="code">Implement&nbsp;setattr(self,&nbsp;name,&nbsp;value).</span></dd></dl>
+
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+<hr>
+Data and other attributes defined here:<br>
+<dl><dt><strong>__annotations__</strong> = {'dataset_end': 'datetime', 'dataset_start': 'datetime', 'path': 'Mapping[int, tuple[tuple[float, float], ...]]', 'post_period_s': 'float', 'speedup': 'int', 'units': 'tuple[int, ...]'}</dl>
+
+<dl><dt><strong>__dataclass_fields__</strong> = {'dataset_end': Field(name='dataset_end',type='datetime',default...appingproxy({}),kw_only=False,_field_type=_FIELD), 'dataset_start': Field(name='dataset_start',type='datetime',defau...appingproxy({}),kw_only=False,_field_type=_FIELD), 'path': Field(name='path',type='Mapping[int, tuple[tuple...appingproxy({}),kw_only=False,_field_type=_FIELD), 'post_period_s': Field(name='post_period_s',type='float',default=...appingproxy({}),kw_only=False,_field_type=_FIELD), 'speedup': Field(name='speedup',type='int',default=&lt;datacla...appingproxy({}),kw_only=False,_field_type=_FIELD), 'units': Field(name='units',type='tuple[int, ...]',defaul...appingproxy({}),kw_only=False,_field_type=_FIELD)}</dl>
+
+<dl><dt><strong>__dataclass_params__</strong> = _DataclassParams(init=True,repr=True,eq=True,ord...rue,kw_only=False,slots=False,weakref_slot=False)</dl>
+
+<dl><dt><strong>__match_args__</strong> = ('dataset_start', 'dataset_end', 'speedup', 'post_period_s', 'units', 'path')</dl>
+
+</td></tr></table> <p>
+<table class="section">
+<tr class="decor title-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><a name="RunRegistry">class <strong>RunRegistry</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
+    
+<tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#RunRegistry">RunRegistry</a>(source_clock:&nbsp;'str',&nbsp;unit_mapping:&nbsp;'Mapping[int,&nbsp;str]',&nbsp;*,&nbsp;mapping:&nbsp;'ClockMapping&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;clock:&nbsp;'Callable[[],&nbsp;datetime]&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;wall:&nbsp;'Callable[[],&nbsp;float]'&nbsp;=&nbsp;&amp;lt;built-in&nbsp;function&nbsp;time&amp;gt;,&nbsp;stall_after_s:&nbsp;'float'&nbsp;=&nbsp;30.0)<br>
+&nbsp;<br>
+<br>&nbsp;</span></td></tr>
+<tr><td>&nbsp;</td>
+<td class="singlecolumn">Methods defined here:<br>
+<dl><dt><a name="RunRegistry-__init__"><strong>__init__</strong></a>(self, source_clock: 'str', unit_mapping: 'Mapping[int, str]', *, mapping: 'ClockMapping | None' = None, clock: 'Callable[[], datetime] | None' = None, wall: 'Callable[[], float]' = &lt;built-in function time&gt;, stall_after_s: 'float' = 30.0)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+
+<dl><dt><a name="RunRegistry-clock"><strong>clock</strong></a>(self) -&gt; 'datetime | None'</dt><dd><span class="code">Current&nbsp;source&nbsp;time,&nbsp;or&nbsp;``None``&nbsp;while&nbsp;a&nbsp;simulation&nbsp;run&nbsp;is&nbsp;not&nbsp;registered.</span></dd></dl>
+
+<dl><dt><a name="RunRegistry-frame_accepted"><strong>frame_accepted</strong></a>(self) -&gt; 'None'</dt></dl>
+
+<dl><dt><a name="RunRegistry-ingest_sample"><strong>ingest_sample</strong></a>(self) -&gt; 'tuple[ClockMapping | None, datetime | None]'</dt><dd><span class="code">Mapping&nbsp;and&nbsp;receive&nbsp;time&nbsp;sampled&nbsp;together&nbsp;at&nbsp;one&nbsp;ingestion&nbsp;boundary.</span></dd></dl>
+
+<dl><dt><a name="RunRegistry-mapping_readback"><strong>mapping_readback</strong></a>(self) -&gt; 'dict | None'</dt></dl>
+
+<dl><dt><a name="RunRegistry-path"><strong>path</strong></a>(self, unit_id: 'int') -&gt; 'list[list[float]]'</dt></dl>
+
+<dl><dt><a name="RunRegistry-readback"><strong>readback</strong></a>(self, dataset_time: 'datetime | None' = None) -&gt; 'dict | None'</dt><dd><span class="code">Run&nbsp;envelope;&nbsp;``dataset_time``&nbsp;lets&nbsp;a&nbsp;snapshot&nbsp;report&nbsp;its&nbsp;own&nbsp;clock&nbsp;sample.</span></dd></dl>
+
+<dl><dt><a name="RunRegistry-register"><strong>register</strong></a>(self, plan: 'RunPlan') -&gt; 'dict'</dt></dl>
+
+<dl><dt><a name="RunRegistry-report"><strong>report</strong></a>(self, run_id: 'str', state: 'str', *, thinned_ratio: 'float', repeat_ratio: 'float', counters: 'Mapping[str, int] | None' = None, reason: 'str | None' = None) -&gt; 'dict'</dt></dl>
+
+<dl><dt><a name="RunRegistry-vehicles"><strong>vehicles</strong></a>(self) -&gt; 'list[tuple[int, str]]'</dt><dd><span class="code">(unit_id,&nbsp;tr_id)&nbsp;served&nbsp;by&nbsp;snapshots:&nbsp;the&nbsp;run's&nbsp;units,&nbsp;or&nbsp;all&nbsp;outside&nbsp;simulation.</span></dd></dl>
+
+<hr>
+Readonly properties defined here:<br>
+<dl><dt><strong>mapping</strong></dt>
+</dl>
+<dl><dt><strong>run_id</strong></dt>
+</dl>
+<hr>
+Data descriptors defined here:<br>
+<dl><dt><strong>__dict__</strong></dt>
+<dd><span class="code">dictionary&nbsp;for&nbsp;instance&nbsp;variables</span></dd>
+</dl>
+<dl><dt><strong>__weakref__</strong></dt>
+<dd><span class="code">list&nbsp;of&nbsp;weak&nbsp;references&nbsp;to&nbsp;the&nbsp;object</span></dd>
+</dl>
+</td></tr></table></td></tr></table><p>
+<table class="section">
+<tr class="decor functions-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Functions</strong></td></tr>
+    
+<tr><td class="decor functions-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><dl><dt><a name="-time"><strong>time</strong></a>(...)</dt><dd><span class="code"><a href="#-time">time</a>()&nbsp;-&gt;&nbsp;floating-point&nbsp;number<br>
+&nbsp;<br>
+Return&nbsp;the&nbsp;current&nbsp;time&nbsp;in&nbsp;seconds&nbsp;since&nbsp;the&nbsp;Epoch.<br>
+Fractions&nbsp;of&nbsp;a&nbsp;second&nbsp;may&nbsp;be&nbsp;present&nbsp;if&nbsp;the&nbsp;system&nbsp;clock&nbsp;provides&nbsp;them.</span></dd></dl>
+</td></tr></table><p>
+<table class="section">
+<tr class="decor data-decor heading-text">
+<td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Data</strong></td></tr>
+    
+<tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
+<td class="singlecolumn"><strong>Callable</strong> = typing.Callable<br>
+<strong>DRIVER_STATES</strong> = ('running', 'completed', 'failed')<br>
+<strong>FINAL_STATES</strong> = ('completed', 'failed')<br>
+<strong>MAX_POST_PERIOD_S</strong> = 5.0<br>
+<strong>MAX_SPEEDUP</strong> = 100<br>
+<strong>Mapping</strong> = typing.Mapping<br>
+<strong>RUN_SOURCE</strong> = 'official_emulator'</td></tr></table>
+</body></html>
