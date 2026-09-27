@@ -19,6 +19,7 @@ from transport_backend.ingest import NDTPServer
 from transport_backend.orchestration import ModelClient, ModelFailure, Orchestrator
 from transport_backend.schedule import Schedule
 from transport_backend.service import ReplayClock, create_app
+from transport_backend.run import RunRegistry
 from transport_backend.state import ClockMapping, Telemetry, TelemetryState
 from transport_ml.data import read_plan
 
@@ -36,6 +37,17 @@ def running_flow():
     yield create
     for flow in flows:
         flow.close()
+
+
+def _replay_run(state, clock):
+    """Caller-owned dataset_wall clock, wired the way the service wires replay."""
+    return RunRegistry("dataset_wall", state.unit_mapping,
+                       mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)), clock=clock)
+
+
+def _current(row):
+    """Normal and computed on the vehicle's full current context."""
+    return row["status"] == "normal" and not row["prediction_updating"]
 
 
 def _wait_vehicle(flow, predicate):
@@ -149,8 +161,7 @@ def test_bounded_worker_coalesces_captures_source_inputs_and_discards_old_target
     for unit in (1, 2, 3):
         state.connected(unit, "s")
     now = [datetime(2026, 1, 6, 0, 1)]
-    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
-                        clock=lambda: now[0])
+    server = NDTPServer(state, run=_replay_run(state, lambda: now[0]))
 
     class SlowModel(_Model):
         def __init__(self):
@@ -163,7 +174,7 @@ def test_bounded_worker_coalesces_captures_source_inputs_and_discards_old_target
             return super().predict(request)
 
     model = SlowModel()
-    flow = running_flow(state, server, schedule, lambda: now[0], model,
+    flow = running_flow(state, server, schedule, model,
                         predict_interval_s=10, queue_limit=1)
     try:
         assert state.accept(_record())
@@ -209,7 +220,7 @@ def test_bounded_worker_coalesces_captures_source_inputs_and_discards_old_target
         assert state.accept(_record(event="2026-01-06 00:03:01", receive="2026-01-06 00:03:01",
                                     lon=37.05, speed=20.0, request_id=6))
         now[0] = datetime(2026, 1, 6, 0, 3, 2)
-        recovered = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+        recovered = _wait_vehicle(flow, _current)
         assert recovered["target_stop_id"] == "s3"
         assert recovered["prediction_input_frame_id"] == "6"
     finally:
@@ -227,8 +238,7 @@ def test_previously_received_future_event_versions_full_context_and_requeues_aft
     assert state.accept(b)
     assert state.accept(a)
     now = [datetime(2026, 1, 6, 0, 1)]
-    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
-                        clock=lambda: now[0])
+    server = NDTPServer(state, run=_replay_run(state, lambda: now[0]))
 
     class GatedModel(_Model):
         def __init__(self):
@@ -244,7 +254,7 @@ def test_previously_received_future_event_versions_full_context_and_requeues_aft
             return response
 
     model = GatedModel()
-    flow = running_flow(state, server, Schedule(read_plan(path)), lambda: now[0], model,
+    flow = running_flow(state, server, Schedule(read_plan(path)), model,
                         predict_interval_s=60, queue_limit=1)
     try:
         initial = flow.snapshot()["vehicles"][0]
@@ -260,13 +270,16 @@ def test_previously_received_future_event_versions_full_context_and_requeues_aft
         assert stale["input_frame_id"] == a.frame_id  # max-received identity did not change
         assert stale["input_context_revision"] > initial["input_context_revision"]
         assert stale["prediction_context_revision"] == initial["input_context_revision"]
-        assert stale["status"] == "degraded"
+        # T-7: a same-target success younger than fresh_s stays normal, flagged as
+        # updating; the completion on the older context still raises no alert.
+        assert stale["status"] == "normal"
+        assert stale["prediction_updating"] is True
         assert stale["alert"] is None
         assert stale["last_success_at"] == "2026-01-06T00:01:00"
         assert model.requests[1]["point"]["T"] == "2026-01-06T00:01:20"
         assert {r["event_time"] for r in model.requests[1]["telemetry"]} == {a.event_time, b.event_time}
         model.release[1].set()
-        fresh = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+        fresh = _wait_vehicle(flow, _current)
         assert fresh["prediction_context_revision"] == fresh["input_context_revision"]
         assert fresh["last_success_at"] == "2026-01-06T00:01:20"
         assert fresh["alert"]["emitted_at"] == "2026-01-06T00:01:20"
@@ -287,11 +300,10 @@ def test_invalid_correction_revokes_stop_confidence_until_new_confirmed_observat
     first_input = _record()
     assert state.accept(first_input)
     now = [datetime(2026, 1, 6, 0, 1)]
-    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
-                        clock=lambda: now[0])
+    server = NDTPServer(state, run=_replay_run(state, lambda: now[0]))
     model = _Model()
-    flow = running_flow(state, server, schedule, lambda: now[0], model, predict_interval_s=10)
-    first = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    flow = running_flow(state, server, schedule, model, predict_interval_s=10)
+    first = _wait_vehicle(flow, _current)
     assert first["cur_dev_s"] == 30.0
     correction = replace(first_input, location_valid=False, receive_time="2026-01-06 00:01:02",
                          frame_id="invalid:3", request_id=3, received_at_utc="2026-01-06 00:01:02")
@@ -314,7 +326,7 @@ def test_invalid_correction_revokes_stop_confidence_until_new_confirmed_observat
     assert state.accept(_record(event="2026-01-06 00:01:20", receive="2026-01-06 00:01:21",
                                 request_id=5))
     now[0] = datetime(2026, 1, 6, 0, 1, 21)
-    confirmed = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    confirmed = _wait_vehicle(flow, _current)
     assert confirmed["cur_dev_s"] == 80.0
     assert model.requests[-1]["point"]["cur_dev_s"] == 80.0
     assert first["cur_dev_s"] == 30.0 and first["status"] == "normal"
@@ -324,18 +336,18 @@ def test_prediction_uses_only_available_fields_and_outage_retains_last_success(t
     path = tmp_path / "schedule_plan.csv"
     _plan(path)
     schedule = Schedule(read_plan(path))
-    state = TelemetryState({1: "v"}, source_clock="dataset_wall")
+    # No reconnect grace: this test observes a real disconnect immediately.
+    state = TelemetryState({1: "v"}, source_clock="dataset_wall", reconnect_grace_s=0)
     state.connected(1, "s")
     assert state.accept(_record())
     # This correction has a past event but has not been received at prediction T.
     assert state.accept(_record(event="2026-01-06 00:00:40",
                                 receive="2026-01-06 00:02:30", lon=37.001, request_id=3))
     clock = ReplayClock(datetime(2026, 1, 6, 0, 1))
-    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
-                        clock=clock.now)
+    server = NDTPServer(state, run=_replay_run(state, clock.now))
     model = _Model()
-    flow = running_flow(state, server, schedule, clock.now, model, predict_interval_s=10)
-    first = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    flow = running_flow(state, server, schedule, model, predict_interval_s=10)
+    first = _wait_vehicle(flow, _current)
     assert first["status"] == "normal"
     assert first["cur_dev_s"] == 30.0
     assert first["cur_dev_source"] == "computed_stop"
@@ -375,7 +387,7 @@ def test_prediction_uses_only_available_fields_and_outage_retains_last_success(t
                                 receive="2026-01-06 00:01:20", lon=37.06,
                                 speed=20.0, request_id=5))
     clock.advance(datetime(2026, 1, 6, 0, 1, 21), 1, 5, "s", 1)
-    recovered = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    recovered = _wait_vehicle(flow, _current)
     assert recovered["status"] == "normal"
     assert recovered["last_success_at"] != first["last_success_at"]
     assert recovered["alert"] == first["alert"]  # cooldown prevents repeat signal
@@ -395,14 +407,13 @@ def test_frame_correlation_and_wall_publication_survive_polling_and_ml_outage(tm
     assert state.accept(first_input)
     assert state.accept(correction)
     clock = ReplayClock(datetime(2026, 1, 6, 0, 1))
-    server = NDTPServer(state, mapping=ClockMapping(1_700_000_000, datetime(2026, 1, 6)),
-                        clock=clock.now)
+    server = NDTPServer(state, run=_replay_run(state, clock.now))
     model = _Model()
-    flow = running_flow(state, server, Schedule(read_plan(path)), clock.now, model,
+    flow = running_flow(state, server, Schedule(read_plan(path)), model,
                         predict_interval_s=10)
     wall_ns = count(1_790_417_000_000_000_001)
     monkeypatch.setattr("transport_backend.orchestration.time_ns", lambda: next(wall_ns))
-    first = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    first = _wait_vehicle(flow, _current)
     assert first["input_frame_id"] == correction.frame_id
     assert first["input_request_id"] == correction.request_id
     assert first["input_session_id"] == correction.session_id
@@ -437,7 +448,7 @@ def test_frame_correlation_and_wall_publication_survive_polling_and_ml_outage(tm
     clock.acknowledge([{"revision": 1, "unit_id": 1, "request_id": 4, "outcome": "accepted", "session_id": "s"}])
     clock.advance(datetime(2026, 1, 6, 0, 1, 40), 1, 5, "s", 1)
     model.fail = False
-    recovered = _wait_vehicle(flow, lambda row: row["status"] == "normal")
+    recovered = _wait_vehicle(flow, _current)
     assert recovered["status"] == "normal"
     assert recovered["prediction_input_frame_id"] == recovery_input.frame_id
     assert recovered["prediction_published_unix_ns"] == recovered["published_unix_ns"]
@@ -454,7 +465,8 @@ def test_replay_clock_socket_ack_duplicate_and_rejects_concurrent_step(tmp_path)
     with TestClient(api) as client:
         ready = client.get("/ready").json()
         assert ready["clock_mapping"] == {"dataset_origin": "2026-01-06T00:00:00",
-                                           "epoch_origin": 1_700_000_000}
+                                           "epoch_origin": 1_700_000_000, "rate": 1}
+        assert ready["run"] is None  # replay has no emulator run
         before_frame_ns = time.time_ns()
         with socket.create_connection((ready["ndtp_host"], ready["ndtp_port"])) as sock:
             sock.sendall(handshake(1))

@@ -3,6 +3,7 @@
 Publication timestamps use host Unix wall-clock nanoseconds, independent of
 the dataset replay clock. Input identity names the latest available received
 frame; prediction identity and publication time belong to its saved success.
+The source clock and the set of served vehicles belong to ``server.run``.
 """
 
 from __future__ import annotations
@@ -13,17 +14,27 @@ import math
 import logging
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
-from threading import Condition, RLock, Thread
+from threading import Condition, Event, RLock, Thread
 from time import time_ns
-from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 from transport_ml.data import TRAFFIC_COLUMNS
 
 from .ingest import NDTPServer
-from .schedule import Schedule
+from .schedule import Arrival, Schedule
 from .state import TelemetryState
+
+# Display area of the bundled basemap (consumer/map/manifest.json "coverage").
+MAP_BBOX = (37.25, 55.50, 38.00, 56.00)
+ROUTE_STOP_LIMIT = 40
+ROUTE_BEFORE_NOW = timedelta(minutes=5)
+ROUTE_AFTER_TARGET = timedelta(minutes=15)
+ROUTE_AFTER_NOW_NO_TARGET = timedelta(minutes=30)
+
+
+class RouteUnavailable(LookupError):
+    """The vehicle is not part of the current run or has no evaluated row yet."""
 
 
 class ModelFailure(RuntimeError):
@@ -98,23 +109,34 @@ class Orchestrator:
     One active request and at most ``queue_limit`` pending vehicles exist.
     Replacing a pending vehicle coalesces its older request. Each job captures
     source T, target and past-only inputs before the worker sees it.
+    With ``tick_interval_s`` an own wall-clock tick evaluates the run's
+    vehicles, so predictions do not depend on anyone polling the snapshot.
+    A success for the current target stays ``normal`` while its dataset age is
+    at most ``fresh_s`` (1.5 x ``predict_interval_s``); newer input then only
+    sets ``prediction_updating``.
     """
 
     def __init__(self, state: TelemetryState, server: NDTPServer, schedule: Schedule,
-                 clock: Callable[[], datetime], model: ModelClient,
-                 *, predict_interval_s: float = 60.0, alert_cooldown_s: float = 300.0,
-                 queue_limit: int = 32):
+                 model: ModelClient, *, predict_interval_s: float = 60.0,
+                 alert_cooldown_s: float = 300.0, queue_limit: int = 32,
+                 tick_interval_s: float | None = None):
         if (not math.isfinite(predict_interval_s) or not math.isfinite(alert_cooldown_s)
                 or predict_interval_s <= 0 or alert_cooldown_s <= 0 or queue_limit < 1):
             raise ValueError("prediction interval/cooldown must be finite and positive; queue_limit >= 1")
+        if tick_interval_s is not None and (not math.isfinite(tick_interval_s) or tick_interval_s <= 0):
+            raise ValueError("tick_interval_s must be finite and positive")
         self.state, self.server, self.schedule = state, server, schedule
-        self.clock, self.model = clock, model
+        self.run, self.model = server.run, model
         self.predict_interval_s = predict_interval_s
+        self.fresh_s = 1.5 * predict_interval_s
+        self.tick_interval_s = tick_interval_s
         self.alert_cooldown_s = alert_cooldown_s
         self.queue_limit = queue_limit
         self._lock = RLock()
         self._condition = Condition(self._lock)
         self._worker: Thread | None = None
+        self._ticker: Thread | None = None
+        self._tick_stop = Event()
         self._stopping = False
         self._jobs: OrderedDict[str, PredictionJob] = OrderedDict()
         self._active: PredictionJob | None = None
@@ -130,6 +152,7 @@ class Orchestrator:
         self._last_alert: dict[tuple[str, str], datetime] = {}
         self._alerts: dict[str, dict] = {}
         self._rows: dict[str, dict] = {}
+        self._row_times: dict[str, datetime] = {}
         self._revision = 0
         self._seen_accepted = 0
 
@@ -139,9 +162,15 @@ class Orchestrator:
                 raise RuntimeError("prediction worker already started")
             self._worker = Thread(target=self._run, name="backend-ml", daemon=True)
             self._worker.start()
+            if self.tick_interval_s is not None:
+                self._ticker = Thread(target=self._tick_loop, name="backend-tick", daemon=True)
+                self._ticker.start()
         return self
 
     def close(self) -> None:
+        self._tick_stop.set()
+        if self._ticker is not None:
+            self._ticker.join(timeout=10)
         with self._condition:
             self._stopping = True
             self._counters["ml_canceled_on_close"] += len(self._jobs)
@@ -161,15 +190,38 @@ class Orchestrator:
     def on_ingest(self, unit_id: int) -> None:
         """Publish accepted state and enqueue captured work without waiting for ML."""
         with self._lock:
+            now = self.run.clock()
+            if now is None:
+                return
             self._observe_accepted(self.state.counters().get("accepted", 0))
-            self._update_row(unit_id, self.state.unit_mapping[unit_id], self.clock())
+            self._update_row(unit_id, self.state.unit_mapping[unit_id], now)
+
+    def tick(self) -> None:
+        """Evaluate every run vehicle at one clock sample, enqueueing due predictions."""
+        with self._lock:
+            now = self.run.clock()
+            if now is None:
+                return
+            self._observe_accepted(self.server.counters().get("accepted", 0))
+            for unit, tr_id in self.run.vehicles():
+                self._update_row(unit, tr_id, now)
+
+    def _tick_loop(self) -> None:
+        while not self._tick_stop.wait(self.tick_interval_s):
+            try:
+                self.tick()
+            except Exception:
+                with self._lock:
+                    self._counters["tick_errors"] += 1
+                logging.getLogger(__name__).exception("prediction tick failed")
 
     def processing_readback(self) -> dict[str, int]:
         with self._lock:
             counts = {name: self._counters[name] for name in (
                 "ml_enqueued", "ml_started", "ml_completed", "ml_succeeded", "ml_failed",
                 "ml_unavailable", "ml_coalesced", "ml_dropped_queue_full",
-                "ml_discarded_obsolete", "ml_canceled_on_close", "ml_max_queue_depth")}
+                "ml_discarded_obsolete", "ml_canceled_on_close", "ml_max_queue_depth",
+                "tick_errors")}
             return {**counts, "ml_queue_depth": len(self._jobs),
                     "ml_queue_limit": self.queue_limit,
                     "ml_active_jobs": int(self._active is not None),
@@ -179,25 +231,83 @@ class Orchestrator:
                     "context_history_frame_limit": self.state.history_limit * len(self.state.unit_mapping)}
 
     def snapshot(self) -> dict:
+        """Vehicles of the current run only; before registration an empty waiting view."""
         with self._lock:
-            now = self.clock()
+            now = self.run.clock()
             counters = self.server.counters()
             self._observe_accepted(counters.get("accepted", 0))
-            vehicles = [self._update_row(unit, tr, now)
-                        for unit, tr in self.state.unit_mapping.items()]
+            vehicles = ([] if now is None else
+                        [self._update_row(unit, tr, now) for unit, tr in self.run.vehicles()])
             return {"schema_version": "transport.backend-vehicles.v1",
                     "revision": self._revision, "source_clock": self.state.source_clock,
-                    "scenario_label": ("синтетический сценарий на исторической модели"
-                                       if self.state.source_clock == "simulation" else None),
-                    "clock_mapping": ({"epoch_origin": self.server.mapping.origin_epoch,
-                                       "dataset_origin": self.server.mapping.origin_wall.isoformat()}
-                                      if self.state.source_clock == "simulation" else None),
-                    "clock_time": now.isoformat(), "vehicles": vehicles,
+                    "clock_mapping": self.run.mapping_readback(),
+                    "clock_time": now.isoformat() if now is not None else None,
+                    "run": self.run.readback(now), "vehicles": vehicles,
                     "ingest": {"accepted": counters.get("accepted", 0),
                                "dropped": counters.get("dropped", 0),
                                "errors": counters.get("errors", 0),
+                               "rejected_no_run": counters.get("rejected_no_run", 0),
                                "queue_depth": counters["queue_depth"]},
                     "processing": self.processing_readback()}
+
+    def route(self, tr_id: str) -> dict:
+        """Route context of the last computed row: display path, passed GPS and plan stops.
+
+        Target, deviation, prediction and revision come from the same row the
+        snapshot served; the schedule is read, never re-evaluated here.
+        """
+        with self._lock:
+            unit_id = next((unit for unit, tr in self.run.vehicles() if tr == tr_id), None)
+            if unit_id is None:
+                raise RouteUnavailable("unknown_tr_id")
+            row, at = self._rows.get(tr_id), self._row_times.get(tr_id)
+            if row is None or at is None:
+                raise RouteUnavailable("vehicle_not_evaluated")
+            plan = self.schedule.by_vehicle.get(tr_id, [])
+            target_index = next((index for index, stop in enumerate(plan)
+                                 if stop.stop_id == row["target_stop_id"]), None)
+            target = plan[target_index] if target_index is not None else None
+            low = at - ROUTE_BEFORE_NOW
+            high = (target.time + ROUTE_AFTER_TARGET if target is not None
+                    else at + ROUTE_AFTER_NOW_NO_TARGET)
+            window = [(index, stop) for index, stop in enumerate(plan) if low <= stop.time <= high]
+            shown = [(index, stop) for index, stop in window if _on_map(stop)]
+            overflow = max(0, len(shown) - ROUTE_STOP_LIMIT)
+            if overflow:
+                # Drop the earliest stops, never the target.
+                dropped = {index for index, _ in shown if index != target_index}
+                dropped = set(sorted(dropped)[:overflow])
+                shown = [(index, stop) for index, stop in shown if index not in dropped]
+            observed = self.schedule.observed_stop_ids(tr_id)
+            shift = timedelta(seconds=row["cur_dev_s"] or 0.0)
+
+            def role(index: int, stop: Arrival) -> str:
+                if index == target_index:
+                    return "target"
+                if stop.stop_id in observed or stop.time + shift < at:
+                    return "passed"
+                if target_index is None:
+                    return "planned"
+                return "before_target" if index < target_index else "after_target"
+
+            passed = [[record["lon"], record["lat"],
+                       datetime.fromisoformat(str(record["event_time"])).strftime("%H:%M:%S")]
+                      for record in self.state.history(tr_id, at) if record["location_valid"]]
+            return {"run_id": self.run.run_id, "tr_id": tr_id, "unit_id": unit_id,
+                    "vehicle_revision": row["revision"], "clock_time": at.isoformat(),
+                    "window_start": low.isoformat(), "window_end": high.isoformat(),
+                    "path": self.run.path(unit_id), "passed": passed,
+                    "stops": [{"stop_id": stop.stop_id, "time": stop.time.strftime("%H:%M:%S"),
+                               "lon": stop.lon, "lat": stop.lat, "role": role(index, stop)}
+                              for index, stop in shown],
+                    "stops_dropped": len(window) - len(shown) - overflow,
+                    "stops_truncated": overflow,
+                    "target_stop_id": row["target_stop_id"],
+                    "target_time_begin": row["target_time_begin"],
+                    "cur_dev_s": row["cur_dev_s"], "prediction_s": row["prediction_s"],
+                    "prediction_updating": row["prediction_updating"],
+                    "model_version": row["model_version"],
+                    "artifact_sha256": row["artifact_sha256"]}
 
     def _observe_accepted(self, count: int) -> None:
         if count > self._seen_accepted:
@@ -226,6 +336,7 @@ class Orchestrator:
             row["revision"] = prior["revision"]
             row["published_unix_ns"] = prior["published_unix_ns"]
         self._rows[tr_id] = row
+        self._row_times[tr_id] = now
         return row
 
     def _vehicle(self, unit_id: int, tr_id: str, now: datetime, enqueue: bool) -> dict:
@@ -281,6 +392,9 @@ class Orchestrator:
         failure_reason = failure[1] if failure is not None and failure[0] == target_id else None
         age_s = ((now - datetime.fromisoformat(success["last_success_at"])).total_seconds()
                  if success else None)
+        # Newer input than the current-target success, or a job in flight.
+        updating = pending or (success is not None
+                               and success["prediction_context_revision"] != context_revision)
         status, reason = "unavailable", None
         if target is None:
             plan = self.schedule.by_vehicle.get(tr_id, ())
@@ -295,13 +409,11 @@ class Orchestrator:
         elif failure_reason is not None:
             status = "degraded" if success else "unavailable"
             reason = failure_reason
-        elif pending:
-            status, reason = "degraded", "prediction_pending"
         elif success is None:
-            reason = "prediction_waiting_new_telemetry"
-        elif success["prediction_context_revision"] != context_revision:
-            status, reason = "degraded", "prediction_behind_input"
-        elif age_s > self.predict_interval_s or success["quality"] != "normal":
+            # A changed target never shows the previous target's value.
+            status, reason = (("degraded", "prediction_pending") if pending
+                              else ("unavailable", "prediction_waiting_new_telemetry"))
+        elif age_s > self.fresh_s or success["quality"] != "normal":
             status, reason = "degraded", "prediction_aging"
         else:
             status = "normal"
@@ -318,12 +430,15 @@ class Orchestrator:
                 "gps_age_s": state["gps_age_s"], "connected": state["connected"],
                 "target_stop_id": target_id,
                 "target_time_begin": target.time.isoformat() if target else None,
+                "target_lon": target.lon if target and _finite(target.lon, target.lat) else None,
+                "target_lat": target.lat if target and _finite(target.lon, target.lat) else None,
                 "cur_dev_s": cur_dev, "cur_dev_source": "computed_stop" if cur_dev is not None else None,
                 "prediction_s": success["prediction_s"] if success else None,
                 "predicted_arrival": success["predicted_arrival"] if success else None,
                 "model_version": success["model_version"] if success else None,
                 "artifact_sha256": success["artifact_sha256"] if success else None,
                 "status": status, "reason": reason, "prediction_pending": pending,
+                "prediction_updating": updating,
                 "last_success_at": success["last_success_at"] if success else None,
                 "prediction_input_frame_id": success["prediction_input_frame_id"] if success else None,
                 "prediction_context_revision": success["prediction_context_revision"] if success else None,
@@ -378,7 +493,7 @@ class Orchestrator:
                 self._counters["ml_completed"] += 1
                 if error is not None:
                     self._counters["ml_failed"] += 1
-                now = self.clock()
+                now = self.run.clock()
                 target = self.schedule.target(job.tr_id, now)
                 previous = self._last_success.get(job.tr_id)
                 obsolete = (target is None or target.stop_id != job.target_id or now < job.at
@@ -403,7 +518,9 @@ class Orchestrator:
                     self._last_failure[job.tr_id] = (job.target_id, str(response.get("reason") or "ml_unavailable"))
                     self._counters["ml_unavailable"] += 1
                 row = self._vehicle(job.unit_id, job.tr_id, now, enqueue=True)
-                if not obsolete and error is None and response["applicability"] == "supported" and row["status"] == "normal":
+                # Only a prediction on the current full context may raise an alert.
+                if (not obsolete and error is None and response["applicability"] == "supported"
+                        and row["status"] == "normal" and not row["prediction_updating"]):
                     self._consider_alert(job.tr_id, job.target_id, now, job.cur_dev_s,
                                          float(response["prediction_s"]), row["status"], target.time)
                 self._update_row(job.unit_id, job.tr_id, now, enqueue=False)
@@ -424,3 +541,12 @@ class Orchestrator:
                                "target_window_end": (now + timedelta(seconds=900)).isoformat(),
                                "kind": "known_prior_delay" if cur_dev_s > 120 else "new_signal",
                                "known_delay_s": cur_dev_s, "threshold_s": 120.0}
+
+
+def _finite(*values: float) -> bool:
+    return all(math.isfinite(value) for value in values)
+
+
+def _on_map(stop: Arrival) -> bool:
+    west, south, east, north = MAP_BBOX
+    return _finite(stop.lon, stop.lat) and west <= stop.lon <= east and south <= stop.lat <= north

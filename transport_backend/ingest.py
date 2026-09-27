@@ -4,8 +4,11 @@
 frame and records its outcome. ``max_clients`` caps concurrent handler threads.
 ``max_frame_size`` caps per-client framing memory. History/outcome limits and
 stale threshold belong to TelemetryState.
-``clock`` is called at completed-frame ingest, before queueing; replay supplies
-its own dataset-wall clock. ``received_at_utc`` always records host wall time.
+``run`` owns the clock domain: it is sampled at completed-frame ingest, before
+queueing. While a simulation run is not registered, handshakes are accepted
+but navigation frames are rejected as ``rejected_no_run`` (no reconnect storm,
+no frame without a dataset time). ``received_at_utc`` always records host wall
+time.
 """
 
 from __future__ import annotations
@@ -14,32 +17,27 @@ from datetime import datetime, timezone
 from queue import Empty, Full, Queue
 import socket
 from threading import Event, Lock, Thread
-from typing import Callable
 from uuid import uuid4
 
 from .ndtp import FrameStream, NDTPError, parse_frame
-from .state import ClockMapping, Telemetry, TelemetryState, time_text, wire_event_time
+from .run import RunRegistry
+from .state import Telemetry, TelemetryState, time_text, wire_event_time
 
 
 class NDTPServer:
-    def __init__(self, state: TelemetryState, *, host: str = "127.0.0.1", port: int = 0,
-                 queue_limit: int = 256, max_frame_size: int = 65550,
-                 max_clients: int = 64,
-                 mapping: ClockMapping | None = None,
-                 clock: Callable[[], datetime] | None = None):
+    def __init__(self, state: TelemetryState, *, run: RunRegistry, host: str = "127.0.0.1",
+                 port: int = 0, queue_limit: int = 256, max_frame_size: int = 65550,
+                 max_clients: int = 64):
         if queue_limit < 1 or max_clients < 1:
             raise ValueError("queue_limit and max_clients must be positive")
-        if (mapping is None) != (state.source_clock == "utc"):
-            raise ValueError("mapped clocks need ClockMapping; utc must not use it")
-        if state.source_clock != "utc" and clock is None:
-            raise ValueError("mapped clocks need an explicit replay clock or simulation clock")
+        if run.source_clock != state.source_clock:
+            raise ValueError("run registry and telemetry state use different clock domains")
         self.state = state
+        self.run = run
         self.host = host
         self.port = port
         self.max_frame_size = max_frame_size
         self.max_clients = max_clients
-        self.mapping = mapping
-        self.clock = clock or (lambda: datetime.now(timezone.utc).replace(tzinfo=None))
         self.queue: Queue[Telemetry] = Queue(maxsize=queue_limit)
         self._stop = Event()
         self._listener: socket.socket | None = None
@@ -152,7 +150,7 @@ class NDTPServer:
                     self.state.count("errors_framing", framing_errors)
                 for raw in raws:
                     # Sample both clocks at the actual ingestion boundary.
-                    received = self.clock()
+                    mapping, received = self.run.ingest_sample()
                     host_received = datetime.now(timezone.utc).replace(tzinfo=None)
                     try:
                         frame = parse_frame(raw)
@@ -172,6 +170,10 @@ class NDTPServer:
                         self.state.count("errors")
                         self.state.count("errors_identity")
                         continue
+                    if received is None:
+                        self.state.count("dropped")
+                        self.state.count("rejected_no_run")
+                        continue
                     assert frame.navigation is not None
                     nav = frame.navigation
                     sequence += 1
@@ -179,7 +181,7 @@ class NDTPServer:
                     record = Telemetry(
                         unit_id=unit,
                         tr_id=self.state.unit_mapping[unit],
-                        event_time=time_text(wire_event_time(nav.timestamp, self.mapping)),
+                        event_time=time_text(wire_event_time(nav.timestamp, mapping)),
                         receive_time=time_text(received),
                         location_valid=nav.location_valid,
                         lon=nav.lon, lat=nav.lat, speed=float(nav.speed),
@@ -214,6 +216,8 @@ class NDTPServer:
             outcome = "rejected_state"
             try:
                 outcome = "accepted" if self.state.accept(record) else "duplicate"
+                if outcome == "accepted":
+                    self.run.frame_accepted()
             except ValueError:
                 self.state.count("errors")
                 self.state.count("errors_state")

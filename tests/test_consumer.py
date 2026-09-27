@@ -6,12 +6,18 @@ from contextlib import contextmanager
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from pathlib import Path
+import shutil
+import subprocess
 from threading import Thread
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from consumer.service import create_app
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def vehicle(prediction: float | None, revision: int, status: str = "normal") -> dict:
@@ -42,14 +48,21 @@ def fake_backend():
     class Backend(ThreadingHTTPServer):
         mode = "ok"
         payload = snapshot(12, 120.0)
+        routes: dict[str, dict] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            assert self.path == "/v1/vehicles"
             if self.server.mode == "timeout":
                 time.sleep(0.2)
             status = 503 if self.server.mode == "unavailable" else 200
-            body = json.dumps(self.server.payload).encode()
+            if self.path.startswith("/v1/route/"):
+                route = self.server.routes.get(self.path.removeprefix("/v1/route/"))
+                if status == 200 and route is None:
+                    status, route = 404, {"detail": "unknown_tr_id"}
+                body = json.dumps(route).encode()
+            else:
+                assert self.path == "/v1/vehicles"
+                body = json.dumps(self.server.payload).encode()
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -177,3 +190,67 @@ def test_initial_failure_and_bad_schema_do_not_claim_fresh_data():
         assert bad_schema["status"] == "offline"
         assert "schema_version" in bad_schema["reason"]
         assert bad_schema["snapshot"] == online["snapshot"]
+
+
+def route(tr_id: str = "131672", revision: int = 12) -> dict:
+    return {"run_id": "run-20260927T120501-3f9c", "tr_id": tr_id, "unit_id": 123,
+            "vehicle_revision": revision, "path": [[37.6, 55.7], [37.61, 55.71]],
+            "passed": [[37.6, 55.7, "03:34:55"]],
+            "stops": [{"stop_id": "53700172828", "time": "03:50:00", "lon": 37.62, "lat": 55.72,
+                       "role": "target"}],
+            "stops_dropped": 0, "target_stop_id": "53700172828", "cur_dev_s": 95.0,
+            "prediction_s": 120.0, "model_version": "canonical_rmse_d8", "artifact_sha256": "dc33"}
+
+
+def test_route_proxy_online_not_found_and_offline_without_invented_data():
+    with fake_backend() as (backend, url), TestClient(create_app(url, timeout_s=0.05)) as consumer:
+        backend.routes = {"131672": route()}
+        online = consumer.get("/api/route/131672")
+        assert online.status_code == 200
+        body = online.json()
+        assert body["status"] == "online" and body["reason"] is None
+        assert {key: body[key] for key in route()} == route()
+
+        missing = consumer.get("/api/route/999")
+        assert missing.status_code == 404
+        assert missing.json()["status"] == "not_found" and missing.json()["reason"] == "unknown_tr_id"
+        assert consumer.get("/api/route/..%2Fvehicles").status_code == 404
+
+        backend.routes = {"131672": {**route(), "tr_id": "other"}}
+        wrong = consumer.get("/api/route/131672")
+        assert wrong.status_code == 503 and "identity" in wrong.json()["reason"]
+
+        backend.routes = {"131672": route()}
+        backend.mode = "unavailable"
+        offline = consumer.get("/api/route/131672")
+        assert offline.status_code == 503
+        assert offline.json()["status"] == "offline" and "503" in offline.json()["reason"]
+        assert "path" not in offline.json()  # no last-known route is invented
+        backend.mode = "timeout"
+        assert consumer.get("/api/route/131672").json()["status"] == "offline"
+
+
+def test_build_identity_keeps_files_and_matches_host_recipe(monkeypatch):
+    monkeypatch.delenv("SOURCE_COMMIT", raising=False)
+    with fake_backend() as (_, url), TestClient(create_app(url)) as consumer:
+        unknown = consumer.get("/api/build").json()
+    assert set(unknown) == {"files", "source_commit", "dashboard_bundle_sha256", "consumer_static_sha256"}
+    assert unknown["source_commit"] == "unknown"
+    assert set(unknown["files"]) == {"index.html", "static/app.js", "static/app.css", "static/map-worker.js"}
+    with fake_backend() as (_, url), TestClient(create_app(url, source_commit="abc123-dirty")) as consumer:
+        known = consumer.get("/api/build").json()
+    assert known["source_commit"] == "abc123-dirty"
+    assert known["dashboard_bundle_sha256"] == unknown["dashboard_bundle_sha256"]
+    if shutil.which("shasum") is None:
+        pytest.skip("host recipe needs shasum")
+    # T-6 m2.md recipe, run verbatim from the repository root.
+    recipe = {
+        "dashboard_bundle_sha256": "shasum -a 256 consumer/static/app.css consumer/static/app.js "
+                                   "consumer/static/map-worker.js | shasum -a 256 | cut -d' ' -f1",
+        "consumer_static_sha256": "shasum -a 256 consumer/index.html $(ls consumer/static/* | sort) "
+                                  "| shasum -a 256 | cut -d' ' -f1",
+    }
+    for key, command in recipe.items():
+        expected = subprocess.run(["sh", "-c", command], cwd=REPO, capture_output=True,
+                                  text=True, check=True, env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"}).stdout.strip()
+        assert known[key] == expected, key

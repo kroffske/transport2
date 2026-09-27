@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 import os
 from pathlib import Path
 from threading import RLock
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from transport_ml.data import read_plan
 
 from .ingest import NDTPServer
-from .orchestration import ModelClient, Orchestrator
+from .orchestration import ModelClient, Orchestrator, RouteUnavailable
+from .run import RunConflict, RunNotFound, RunPlan, RunRegistry
 from .schedule import Schedule
 from .state import ClockMapping, TelemetryState, load_unit_mapping
 
@@ -64,8 +67,47 @@ class ReplayStep(BaseModel):
     session_id: str = Field(min_length=1, strict=True)
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+class RunRequest(BaseModel):
+    """Driver registration of the process's single simulation run."""
+
+    dataset_start: str
+    dataset_end: str
+    # Value bounds live in RunRegistry, after its conflict check: a second driver gets 409.
+    speedup: int
+    post_period_s: float
+    units: list[int]
+    # unit_id -> [[lon, lat], ...]: the driver's feeding plan, display-only.
+    path: dict[int, list[tuple[float, float]]] = Field(default_factory=dict)
+    source: Literal["official_emulator"] = "official_emulator"
+
+
+class RunStateReport(BaseModel):
+    """Driver heartbeat (``running``) or final state, with its pacing metrics."""
+
+    state: Literal["running", "completed", "failed"]
+    thinned_ratio: float = Field(ge=0, le=1)
+    repeat_ratio: float = Field(ge=0, le=1)
+    counters: dict[str, int] = Field(default_factory=dict)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+@dataclass(frozen=True)
+class Runtime:
+    state: TelemetryState
+    server: NDTPServer
+    orchestrator: Orchestrator
+    replay_clock: ReplayClock | None
+    run: RunRegistry
+
+
+def _dataset_time(value: str, name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid {name}") from exc
+    if parsed.tzinfo is not None:
+        raise HTTPException(status_code=422, detail=f"{name} must be naive dataset wall time")
+    return parsed
 
 
 def create_app(*, data_dir: str | Path | None = None, model_url: str | None = None,
@@ -79,13 +121,6 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
     host = ndtp_host or os.environ.get("NDTP_HOST", "127.0.0.1")
     port = ndtp_port if ndtp_port is not None else int(os.environ.get("NDTP_PORT", "9201"))
     origin = datetime(2026, 1, 6)
-    utc_origin = int(datetime.now(timezone.utc).timestamp()) if domain == "simulation" else None
-    mapping = (ClockMapping(utc_origin, datetime(2026, 1, 6, 3, 20)) if utc_origin is not None else
-               ClockMapping(1_700_000_000, origin) if domain == "dataset_wall" else None)
-    replay_clock = ReplayClock(origin) if domain == "dataset_wall" else None
-    clock = (replay_clock.now if replay_clock else
-             (lambda: mapping.from_epoch(datetime.now(timezone.utc).timestamp()))
-             if domain == "simulation" else _utc_now)
 
     @asynccontextmanager
     async def lifespan(api: FastAPI):
@@ -99,17 +134,27 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
                                history_limit=int(os.environ.get("HISTORY_LIMIT", "4096")),
                                outcome_limit=int(os.environ.get("OUTCOME_LIMIT", "1024")),
                                stale_after_s=float(os.environ.get("STALE_AFTER_S", "45")),
+                               reconnect_grace_s=float(os.environ.get("RECONNECT_GRACE_S", "3")),
                                source_clock=domain)
-        server = NDTPServer(state, host=host, port=port, mapping=mapping,
-                            clock=clock if domain != "utc" else None,
+        replay_clock = ReplayClock(origin) if domain == "dataset_wall" else None
+        stall_after_s = float(os.environ.get("RUN_STALL_AFTER_S", "30"))
+        run = (RunRegistry(domain, mapping_table, mapping=ClockMapping(1_700_000_000, origin),
+                           clock=replay_clock.now, stall_after_s=stall_after_s)
+               if replay_clock is not None else
+               RunRegistry(domain, mapping_table, stall_after_s=stall_after_s))
+        server = NDTPServer(state, run=run, host=host, port=port,
                             queue_limit=int(os.environ.get("NDTP_QUEUE_LIMIT", "256")),
                             max_clients=int(os.environ.get("NDTP_MAX_CLIENTS", "64")))
         model = ModelClient(model_endpoint, float(os.environ.get("ML_TIMEOUT_S", "3")))
-        orchestrator = Orchestrator(state, server, schedule, clock, model,
+        orchestrator = Orchestrator(state, server, schedule, model,
                                     predict_interval_s=float(os.environ.get("PREDICT_INTERVAL_S", "60")),
                                     alert_cooldown_s=float(os.environ.get("ALERT_COOLDOWN_S", "300")),
-                                    queue_limit=int(os.environ.get("ML_QUEUE_LIMIT", "32")))
-        api.state.backend = (state, server, orchestrator, replay_clock)
+                                    queue_limit=int(os.environ.get("ML_QUEUE_LIMIT", "32")),
+                                    # Replay advances one acknowledged frame at a time; only the
+                                    # emulator run needs its own tick.
+                                    tick_interval_s=(float(os.environ.get("PREDICT_TICK_S", "1"))
+                                                     if domain == "simulation" else None))
+        api.state.backend = Runtime(state, server, orchestrator, replay_clock, run)
         orchestrator.start()
         try:
             server.start()
@@ -121,27 +166,50 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
     api = FastAPI(title="Transport Backend API", version="transport.backend-vehicles.v1",
                   lifespan=lifespan)
 
+    def runtime() -> Runtime:
+        return api.state.backend
+
     @api.get("/ready")
     def ready():
-        _, server, _, _ = api.state.backend
-        host, port = server.address
+        rt = runtime()
+        host, port = rt.server.address
         return {"status": "ready", "source_clock": domain,
                 "ndtp_host": host, "ndtp_port": port,
-                "clock_mapping": {"dataset_origin": mapping.origin_wall.isoformat(),
-                                  "epoch_origin": mapping.origin_epoch} if mapping else None,
-                "scenario_label": "синтетический сценарий на исторической модели" if domain == "simulation" else None}
+                "clock_mapping": rt.run.mapping_readback(), "run": rt.run.readback()}
+
+    @api.post("/v1/run", status_code=201)
+    def register_run(request: RunRequest):
+        rt = runtime()
+        plan = RunPlan(_dataset_time(request.dataset_start, "dataset_start"),
+                       _dataset_time(request.dataset_end, "dataset_end"),
+                       request.speedup, request.post_period_s, tuple(request.units),
+                       {unit: tuple(points) for unit, points in request.path.items()})
+        try:
+            return rt.run.register(plan)
+        except RunConflict as exc:
+            return JSONResponse(status_code=409, content={"detail": exc.detail, "run_id": exc.run_id})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.post("/v1/run/{run_id}/state")
+    def report_run_state(run_id: str, report: RunStateReport):
+        rt = runtime()
+        try:
+            return rt.run.report(run_id, report.state, thinned_ratio=report.thinned_ratio,
+                                 repeat_ratio=report.repeat_ratio, counters=report.counters,
+                                 reason=report.reason)
+        except RunNotFound as exc:
+            raise HTTPException(status_code=404, detail="unknown_run_id") from exc
+        except RunConflict as exc:
+            return JSONResponse(status_code=409, content={"detail": exc.detail, "run_id": exc.run_id})
 
     @api.post("/v1/replay/clock")
     def advance_clock(step: ReplayStep):
-        state, _, _, controller = api.state.backend
+        rt = runtime()
+        state, controller = rt.state, rt.replay_clock
         if controller is None:
             raise HTTPException(status_code=409, detail="replay clock requires SOURCE_CLOCK=dataset_wall")
-        try:
-            at = datetime.fromisoformat(step.receive_time)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid receive_time") from exc
-        if at.tzinfo is not None:
-            raise HTTPException(status_code=422, detail="receive_time must be naive dataset_wall")
+        at = _dataset_time(step.receive_time, "receive_time")
         if step.unit_id not in state.unit_mapping:
             raise HTTPException(status_code=422, detail="unknown unit_id")
         journal = state.ingest_readback()
@@ -157,24 +225,30 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
 
     @api.get("/v1/ingest")
     def ingest(since_revision: int = Query(default=0, ge=0)):
-        state, server, orchestrator, controller = api.state.backend
-        readback = state.ingest_readback(since_revision)
-        if controller is not None:
-            completed = controller.acknowledge(readback["outcomes"])
+        rt = runtime()
+        readback = rt.state.ingest_readback(since_revision)
+        if rt.replay_clock is not None:
+            completed = rt.replay_clock.acknowledge(readback["outcomes"])
             if completed is not None and completed[1] == "accepted":
-                orchestrator.on_ingest(completed[0])
-        readback["counters"] = server.counters()
-        readback["queue_depth"] = server.queue.qsize()
-        readback["processing"] = orchestrator.processing_readback()
+                rt.orchestrator.on_ingest(completed[0])
+        readback["counters"] = rt.server.counters()
+        readback["queue_depth"] = rt.server.queue.qsize()
+        readback["processing"] = rt.orchestrator.processing_readback()
         readback["source_clock"] = domain
-        readback["clock_mapping"] = {"epoch_origin": mapping.origin_epoch,
-                                      "dataset_origin": mapping.origin_wall.isoformat()} if mapping else None
+        readback["clock_mapping"] = rt.run.mapping_readback()
+        readback["run"] = rt.run.readback()
         return readback
 
     @api.get("/v1/vehicles")
     def vehicles():
-        _, _, orchestrator, _ = api.state.backend
-        return orchestrator.snapshot()
+        return runtime().orchestrator.snapshot()
+
+    @api.get("/v1/route/{tr_id}")
+    def route(tr_id: str):
+        try:
+            return runtime().orchestrator.route(tr_id)
+        except RouteUnavailable as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return api
 

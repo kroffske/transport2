@@ -3,7 +3,7 @@
 .local
 .tasks
 .locus
-__pycache__
+**/__pycache__
 *.zip
 data
 artifacts

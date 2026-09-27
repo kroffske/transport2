@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from transport_backend import ClockMapping, NDTPServer, TelemetryState, load_unit_mapping
+from transport_backend import (ClockMapping, NDTPServer, RunPlan, RunRegistry, TelemetryState,
+                               load_unit_mapping)
 from transport_backend.ndtp import NAV, NDTPError, FrameStream, crc16_modbus, encode_frame, parse_frame
 
 
@@ -44,21 +45,40 @@ def connect(server: NDTPServer) -> socket.socket:
     return socket.create_connection(server.address, timeout=2)
 
 
-def test_simulation_socket_maps_both_clocks_and_rejects_future_event() -> None:
-    origin = int(datetime.now(timezone.utc).timestamp()) - 2
-    mapping = ClockMapping(origin, ORIGIN)
-    receive = [ORIGIN + timedelta(seconds=2, milliseconds=500)]
+def replay(state: TelemetryState, clock, mapping: ClockMapping = MAPPING) -> RunRegistry:
+    """Caller-owned replay clock, as the dataset_wall service wires it."""
+    return RunRegistry("dataset_wall", state.unit_mapping, mapping=mapping, clock=clock)
+
+
+def test_simulation_rejects_frames_until_run_then_maps_rate_and_rejects_future_event() -> None:
+    origin = 1_790_000_000
+    wall = [origin + 2.5]
     state = TelemetryState({UNIT: TR}, source_clock="simulation")
-    with NDTPServer(state, mapping=mapping, clock=lambda: receive[0]) as server:
+    run = RunRegistry("simulation", state.unit_mapping, wall=lambda: wall[0])
+    with NDTPServer(state, run=run) as server:
         with connect(server) as client:
             client.sendall(handshake() + nav(origin + 1))
+            await_counter(server, "rejected_no_run", 1)
+            assert state.counters()["connections"] == 1  # handshake is still accepted
+            assert state.counters().get("accepted", 0) == 0
+            assert state.ingest_readback()["processed_revision"] == 0
+            wall[0] = origin + 0.25
+            run.register(RunPlan(ORIGIN, ORIGIN + timedelta(hours=1), 5, 2.0, (UNIT,)))
+            assert run.mapping == ClockMapping(origin, ORIGIN, 5)
+            wall[0] = origin + 1.5
+            client.sendall(nav(origin + 1, request=3))
             await_counter(server, "accepted", 1)
-            record = state.snapshot(TR, receive[0])["telemetry"]
-            assert record["event_time"] == "2026-01-06 12:30:01.000000"
+            receive = ORIGIN + timedelta(seconds=7.5)
+            assert run.clock() == receive
+            record = state.snapshot(TR, receive)["telemetry"]
+            # One wire second is five dataset seconds.
+            assert record["event_time"] == "2026-01-06 12:30:05.000000"
+            assert record["receive_time"] == "2026-01-06 12:30:07.500000"
             assert record["event_at_utc"] == datetime.fromtimestamp(
                 origin + 1, timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
             assert state.ingest_readback()["last_accepted"]["event_at_utc"] == record["event_at_utc"]
-            client.sendall(nav(origin + 10, request=3))
+            assert run.readback()["state"] == "running"
+            client.sendall(nav(origin + 10, request=4))
             await_counter(server, "errors_state", 1)
             assert state.counters()["accepted"] == 1
             assert state.ingest_readback()["last_processed"]["outcome"] == "rejected_state"
@@ -100,9 +120,10 @@ def test_framer_fragment_coalesce_and_size_bound() -> None:
 
 def test_socket_fragment_crc_unknown_reconnect_and_correction() -> None:
     now = [ORIGIN + timedelta(seconds=1)]
+    wall = [100.0]
     state = TelemetryState({UNIT: TR}, history_limit=3, stale_after_s=5,
-                           source_clock="dataset_wall")
-    with NDTPServer(state, mapping=MAPPING, clock=lambda: now[0], max_frame_size=128) as server:
+                           source_clock="dataset_wall", wall=lambda: wall[0])
+    with NDTPServer(state, run=replay(state, lambda: now[0]), max_frame_size=128) as server:
         wall_before = datetime.now(timezone.utc).replace(tzinfo=None)
         first = connect(server)
         h = handshake()
@@ -132,7 +153,13 @@ def test_socket_fragment_crc_unknown_reconnect_and_correction() -> None:
         assert server.counters()["accepted"] == 1
         first.close()
         await_counter(server, "disconnects", 1)
+        # The emulator reopens sessions on every config POST: a short gap is not an outage.
+        assert state.snapshot(TR, now[0])["connected"] is True
+        wall[0] += 2.9
+        assert state.snapshot(TR, now[0])["reason"] is None
+        wall[0] += 0.2
         assert state.snapshot(TR, now[0])["reason"] == "disconnected"
+        assert state.counters()["disconnects"] == 1
 
         second = connect(server)
         second.sendall(handshake(request=1) + nav(request=2))
@@ -161,7 +188,7 @@ def test_socket_fragment_crc_unknown_reconnect_and_correction() -> None:
 def test_receive_availability_negative_lag_and_bounded_history() -> None:
     now = [ORIGIN]
     state = TelemetryState({UNIT: TR}, history_limit=2, source_clock="dataset_wall")
-    with NDTPServer(state, mapping=MAPPING, clock=lambda: now[0]) as server:
+    with NDTPServer(state, run=replay(state, lambda: now[0])) as server:
         client = connect(server)
         client.sendall(handshake() + nav(1_700_000_010))
         await_counter(server, "accepted", 1)
@@ -181,11 +208,21 @@ def test_mapping_from_real_data_and_clock_domains() -> None:
     mapping = load_unit_mapping([path])
     assert mapping[UNIT] == TR
     assert MAPPING.to_epoch(MAPPING.from_epoch(1_700_000_010)) == 1_700_000_010
-    replay = ClockMapping(1_700_000_000, datetime(2026, 1, 6))
-    assert replay.from_epoch(1_700_000_000) == datetime(2026, 1, 6)
-    assert replay.to_epoch(datetime(2026, 1, 6, 0, 0, 15)) == 1_700_000_015
-    with pytest.raises(ValueError, match="explicit replay clock"):
-        NDTPServer(TelemetryState({UNIT: TR}, source_clock="dataset_wall"), mapping=MAPPING)
+    fixed = ClockMapping(1_700_000_000, datetime(2026, 1, 6))
+    assert fixed.from_epoch(1_700_000_000) == datetime(2026, 1, 6)
+    assert fixed.to_epoch(datetime(2026, 1, 6, 0, 0, 15)) == 1_700_000_015
+    fast = ClockMapping(1_700_000_000, datetime(2026, 1, 6), rate=5)
+    assert fast.from_epoch(1_700_000_003) == datetime(2026, 1, 6, 0, 0, 15)
+    assert fast.from_epoch(1_700_000_000.5) == datetime(2026, 1, 6, 0, 0, 2, 500000)
+    with pytest.raises(ValueError, match="rate 1"):
+        fast.to_epoch(datetime(2026, 1, 6, 0, 0, 15))
+    with pytest.raises(ValueError, match="rate"):
+        ClockMapping(1_700_000_000, datetime(2026, 1, 6), rate=0)
+    with pytest.raises(ValueError, match="replay mapping and clock"):
+        RunRegistry("dataset_wall", {UNIT: TR}, mapping=MAPPING)
+    with pytest.raises(ValueError, match="different clock domains"):
+        NDTPServer(TelemetryState({UNIT: TR}, source_clock="dataset_wall"),
+                   run=RunRegistry("utc", {UNIT: TR}))
 
 
 def test_queue_overload_is_bounded_and_observable() -> None:
@@ -198,8 +235,7 @@ def test_queue_overload_is_bounded_and_observable() -> None:
 
     state = SlowState({UNIT: TR}, history_limit=2, outcome_limit=32,
                       source_clock="dataset_wall")
-    with NDTPServer(state, mapping=MAPPING, clock=lambda: ORIGIN,
-                    queue_limit=1) as server:
+    with NDTPServer(state, run=replay(state, lambda: ORIGIN), queue_limit=1) as server:
         client = connect(server)
         try:
             frames = b"".join(nav(1_700_000_001 + i, request=2 + i) for i in range(20))
@@ -225,7 +261,7 @@ def test_queue_overload_is_bounded_and_observable() -> None:
 
 def test_outcome_journal_eviction_reports_gap() -> None:
     state = TelemetryState({UNIT: TR}, outcome_limit=3, source_clock="dataset_wall")
-    with NDTPServer(state, mapping=MAPPING, clock=lambda: ORIGIN) as server:
+    with NDTPServer(state, run=replay(state, lambda: ORIGIN)) as server:
         client = connect(server)
         client.sendall(handshake() + b"".join(
             nav(1_700_000_001 + i, request=2 + i) for i in range(5)))
@@ -243,7 +279,7 @@ def test_outcome_journal_eviction_reports_gap() -> None:
 def test_invalid_gps_keeps_last_valid_position_and_age() -> None:
     now = [ORIGIN + timedelta(seconds=1)]
     state = TelemetryState({UNIT: TR}, stale_after_s=5, source_clock="dataset_wall")
-    with NDTPServer(state, mapping=MAPPING, clock=lambda: now[0]) as server:
+    with NDTPServer(state, run=replay(state, lambda: now[0])) as server:
         client = connect(server)
         client.sendall(handshake() + nav())
         await_counter(server, "accepted", 1)
@@ -269,8 +305,7 @@ def test_invalid_gps_keeps_last_valid_position_and_age() -> None:
 
 def test_reconnect_handlers_are_reaped_and_clients_limited() -> None:
     state = TelemetryState({UNIT: TR}, source_clock="dataset_wall")
-    with NDTPServer(state, mapping=MAPPING, clock=lambda: ORIGIN,
-                    max_clients=1) as server:
+    with NDTPServer(state, run=replay(state, lambda: ORIGIN), max_clients=1) as server:
         first = connect(server)
         first.sendall(handshake())
         await_counter(server, "connections", 1)
@@ -298,7 +333,7 @@ def test_reconnect_handlers_are_reaped_and_clients_limited() -> None:
 def test_live_unix_clock_is_explicit_utc() -> None:
     utc_now = datetime(2023, 11, 14, 22, 13, 21)
     state = TelemetryState({UNIT: TR}, source_clock="utc")
-    with NDTPServer(state, clock=lambda: utc_now) as server:
+    with NDTPServer(state, run=RunRegistry("utc", state.unit_mapping, clock=lambda: utc_now)) as server:
         client = connect(server)
         client.sendall(handshake() + nav())
         await_counter(server, "accepted", 1)

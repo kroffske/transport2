@@ -20,7 +20,8 @@ services:
     environment:
       DATA_DIR: /data
       MODEL_URL: http://ml:8000
-      SOURCE_CLOCK: ${SOURCE_CLOCK:-dataset_wall}
+      # One run per process: waits for the demo driver's POST /v1/run (see profile "demo").
+      SOURCE_CLOCK: ${SOURCE_CLOCK:-simulation}
       NDTP_HOST: 0.0.0.0
       NDTP_PORT: "9201"
     volumes:
@@ -38,7 +39,11 @@ services:
       retries: 6
 
   consumer:
-    build: .
+    build:
+      context: .
+      args:
+        # Build identity shown in diagnostics; unset -> "unknown", never a guessed hash.
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-unknown}
     command: ["uvicorn", "consumer.service:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "1"]
     environment:
       BACKEND_URL: http://backend:8001
@@ -53,54 +58,43 @@ services:
       timeout: 3s
       retries: 6
 
-  # Scenario show only: the same consumer image without ML/Backend. The screen opens in
-  # «Демо-сценарий»; the «Поток Backend» switch honestly reports that no Backend is running.
-  ui-demo:
-    profiles: ["ui-demo"]
-    build: .
-    command: ["uvicorn", "consumer.service:app", "--host", "0.0.0.0", "--port", "8003", "--workers", "1"]
-    environment:
-      BACKEND_URL: http://backend-not-started:8001
-    ports:
-      - "8003:8003"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/ready', timeout=2)"]
-      interval: 5s
-      timeout: 3s
-      retries: 6
-
+  # Official NDTP emulator, loaded beforehand with
+  # `docker load -i data/emulator/ndtp-telemetry-emulator.tar`; never pulled.
+  # Port 18080 is published on loopback for diagnostics only.
   emulator:
-    profiles: ["simulation"]
-    image: ndtp-telemetry-emulator:1.0
+    profiles: ["demo"]
+    image: ${EMULATOR_IMAGE:-ndtp-telemetry-emulator:1.0}
+    pull_policy: never
     platform: linux/amd64
     ports:
-      - "18080:18080"
+      - "127.0.0.1:18080:18080"
     depends_on:
       backend:
         condition: service_healthy
 
-  replay:
+  # Registers the run in the Backend, then feeds the emulator with project GPS points
+  # through its own POST /api/config; exits when the dataset window is over.
+  driver:
     profiles: ["demo"]
     build: .
-    command:
-      - python
-      - scripts/replay_ndtp.py
-      - --traffic
-      - /data/validate/traffic.csv
-      - --host
-      - backend
-      - --port
-      - "9201"
-      - --backend-url
-      - http://backend:8001
-      - --start
-      - "2026-01-06 03:20:00"
-      - --end
-      - "2026-01-06 03:45:00"
-      - --speedup
-      - "30"
+    command: ["python", "-m", "scripts.emulator_driver"]
+    environment:
+      DATA_DIR: /data
+      EMULATOR_URL: http://emulator:18080
+      BACKEND_URL: http://backend:8001
+      NDTP_TARGET_HOST: backend
+      NDTP_TARGET_PORT: "9201"
+      DEMO_SPEEDUP: ${DEMO_SPEEDUP:-5}
+      DEMO_POST_PERIOD_S: ${DEMO_POST_PERIOD_S:-2}
+      DEMO_WINDOW: ${DEMO_WINDOW:-06:30-08:30}
+      DEMO_REPEAT_MAX_S: ${DEMO_REPEAT_MAX_S:-30}
     volumes:
       - ${DATA_DIR:-./data}:/data:ro
+    restart: "no"
     depends_on:
+      backend:
+        condition: service_healthy
       consumer:
         condition: service_healthy
+      emulator:
+        condition: service_started

@@ -21,6 +21,89 @@
         }
       }
     },
+    "/v1/run": {
+      "post": {
+        "summary": "Register Run",
+        "operationId": "register_run_v1_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/run/{run_id}/state": {
+      "post": {
+        "summary": "Report Run State",
+        "operationId": "report_run_state_v1_run__run_id__state_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunStateReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/replay/clock": {
       "post": {
         "summary": "Advance Clock",
@@ -111,6 +194,43 @@
           }
         }
       }
+    },
+    "/v1/route/{tr_id}": {
+      "get": {
+        "summary": "Route",
+        "operationId": "route_v1_route__tr_id__get",
+        "parameters": [
+          {
+            "name": "tr_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tr Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -159,6 +279,121 @@
           "session_id"
         ],
         "title": "ReplayStep"
+      },
+      "RunRequest": {
+        "properties": {
+          "dataset_start": {
+            "type": "string",
+            "title": "Dataset Start"
+          },
+          "dataset_end": {
+            "type": "string",
+            "title": "Dataset End"
+          },
+          "speedup": {
+            "type": "integer",
+            "title": "Speedup"
+          },
+          "post_period_s": {
+            "type": "number",
+            "title": "Post Period S"
+          },
+          "units": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Units"
+          },
+          "path": {
+            "additionalProperties": {
+              "items": {
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Path"
+          },
+          "source": {
+            "type": "string",
+            "const": "official_emulator",
+            "title": "Source",
+            "default": "official_emulator"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dataset_start",
+          "dataset_end",
+          "speedup",
+          "post_period_s",
+          "units"
+        ],
+        "title": "RunRequest",
+        "description": "Driver registration of the process's single simulation run."
+      },
+      "RunStateReport": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "thinned_ratio": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Thinned Ratio"
+          },
+          "repeat_ratio": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Repeat Ratio"
+          },
+          "counters": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counters"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "thinned_ratio",
+          "repeat_ratio"
+        ],
+        "title": "RunStateReport",
+        "description": "Driver heartbeat (``running``) or final state, with its pacing metrics."
       },
       "ValidationError": {
         "properties": {

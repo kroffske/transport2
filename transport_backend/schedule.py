@@ -159,6 +159,11 @@ class Schedule:
         first = progress.first_observations[progress.last_stop.stop_id]
         return (first.event_time - progress.last_stop.time).total_seconds()
 
+    def observed_stop_ids(self, tr_id: str) -> frozenset[str]:
+        """Planned arrivals the detector has already observed (first observations)."""
+        progress = self._progress.get(tr_id)
+        return frozenset(progress.first_observations) if progress is not None else frozenset()
+
     def counters(self) -> dict[str, int]:
         return {**self._counters,
                 "stop_observation_count": sum(len(p.first_observations) for p in self._progress.values()),

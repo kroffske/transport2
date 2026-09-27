@@ -2,7 +2,11 @@
 
 ``history_limit`` bounds records and duplicate identities per mapped vehicle.
 ``outcome_limit`` bounds the frame outcome journal used for replay acknowledgments.
-``stale_after_s`` is the maximum age of the latest valid GPS event. Counters
+``stale_after_s`` is the maximum age of the latest valid GPS event.
+``reconnect_grace_s`` keeps a unit connected for that many host monotonic
+seconds after its last session closed: the official emulator reopens every TCP
+session on each configuration POST. ``connections``/``disconnects`` still count
+every real session. Counters
 ``accepted``, ``dropped``, and ``errors`` include reason-specific counterparts.
 No old snapshot is mutated: an as-of query filters both event and receive time.
 """
@@ -15,7 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Iterable, Mapping
+from time import monotonic
+from typing import Callable, Iterable, Mapping
 
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
@@ -33,24 +38,32 @@ def parse_time(value: str) -> datetime:
 
 @dataclass(frozen=True)
 class ClockMapping:
-    """Reversible synthetic epoch <-> naive dataset wall clock mapping.
+    """Synthetic epoch -> naive dataset wall clock mapping, reversible at rate 1.
 
     ``origin_epoch`` is a synthetic Unix second, not a timezone assertion.
-    ``origin_wall`` is a naive dataset timestamp. The caller's replay clock
-    controls receive availability independently of host wall time.
+    ``origin_wall`` is a naive dataset timestamp. ``rate`` is how many dataset
+    seconds pass per epoch second (a simulation speedup); at ``rate != 1`` the
+    wire second is coarser than a dataset second, so ``to_epoch`` is refused.
+    The caller's replay clock controls receive availability independently of
+    host wall time.
     """
 
     origin_epoch: int
     origin_wall: datetime
+    rate: int = 1
 
     def __post_init__(self) -> None:
         if self.origin_wall.tzinfo is not None:
             raise ValueError("origin_wall must be naive dataset wall time")
+        if type(self.rate) is not int or self.rate < 1:
+            raise ValueError("rate must be an integer >= 1")
 
-    def from_epoch(self, seconds: int) -> datetime:
-        return self.origin_wall + timedelta(seconds=seconds - self.origin_epoch)
+    def from_epoch(self, seconds: float) -> datetime:
+        return self.origin_wall + timedelta(seconds=(seconds - self.origin_epoch) * self.rate)
 
     def to_epoch(self, wall: datetime) -> int:
+        if self.rate != 1:
+            raise ValueError("to_epoch is defined only for rate 1")
         if wall.tzinfo is not None:
             raise ValueError("dataset wall time must be naive")
         delta = (wall - self.origin_wall).total_seconds()
@@ -118,9 +131,12 @@ class Telemetry:
 class TelemetryState:
     def __init__(self, unit_mapping: Mapping[int, str], *, history_limit: int = 4096,
                  outcome_limit: int = 1024, stale_after_s: float = 45.0,
-                 source_clock: str = "utc"):
+                 source_clock: str = "utc", reconnect_grace_s: float = 3.0,
+                 wall: Callable[[], float] = monotonic):
         if not unit_mapping or history_limit < 1 or outcome_limit < 1 or stale_after_s <= 0:
             raise ValueError("mapping nonempty, history/outcome limits >= 1, stale_after_s > 0")
+        if reconnect_grace_s < 0:
+            raise ValueError("reconnect_grace_s must be nonnegative")
         if source_clock not in {"utc", "dataset_wall", "simulation"}:
             raise ValueError("source_clock must be utc, dataset_wall or simulation")
         self.unit_mapping = {int(k): str(v) for k, v in unit_mapping.items()}
@@ -130,6 +146,9 @@ class TelemetryState:
         self.outcome_limit = outcome_limit
         self.stale_after_s = stale_after_s
         self.source_clock = source_clock
+        self.reconnect_grace_s = reconnect_grace_s
+        self._wall = wall
+        self._last_disconnect: dict[int, float] = {}
         self._history: dict[str, deque[Telemetry]] = {
             tr: deque(maxlen=history_limit) for tr in self.unit_mapping.values()}
         self._identities: dict[str, deque[tuple[object, ...]]] = {
@@ -205,6 +224,7 @@ class TelemetryState:
     def disconnected(self, unit_id: int, session_id: str) -> None:
         with self._lock:
             self._sessions[unit_id].discard(session_id)
+            self._last_disconnect[unit_id] = self._wall()
             self._counters["disconnects"] += 1
 
     def accept(self, record: Telemetry) -> bool:
@@ -266,7 +286,9 @@ class TelemetryState:
                       "stale_gps" if gps_age is not None and gps_age > self.stale_after_s else None)
         unit_id = next(unit for unit, tr in self.unit_mapping.items() if tr == tr_id)
         with self._lock:
-            connected = bool(self._sessions[unit_id])
+            closed_at = self._last_disconnect.get(unit_id)
+            connected = bool(self._sessions[unit_id]) or (
+                closed_at is not None and self._wall() - closed_at < self.reconnect_grace_s)
         if not connected:
             reason = "disconnected"
         return {"tr_id": tr_id, "unit_id": unit_id, "telemetry": current,

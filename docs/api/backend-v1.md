@@ -3,14 +3,53 @@ title: Backend v1 — контракт локальной интеграции
 type: guide
 status: active
 owner: transport2
-updated: "2026-09-26T00:00:00Z"
+updated: "2026-09-27T00:00:00Z"
 ---
 
 # Backend v1
 
-Этот контракт связывает W2 NDTP state, W3 orchestration, W4 replay и live consumer в T-4. Он фиксирует реализованный интерфейс; успешный запуск подтверждается отдельным readback. Полный BI/C4 сюда не входит.
+Этот контракт связывает NDTP state, orchestration, прогон официального эмулятора (T-7), replay для тестов и live consumer. Он фиксирует реализованный интерфейс; успешный запуск подтверждается отдельным readback. Полный BI/C4 сюда не входит.
 
-## Часы и доступность
+## Прогон официального эмулятора (`SOURCE_CLOCK=simulation`)
+
+Это режим демо (compose по умолчанию). Часы и прогон принадлежат одному владельцу — `transport_backend/run.py` (`RunRegistry`); NDTP-приём, tick прогнозов, `/ready`, `/v1/ingest`, `/v1/vehicles` и `/v1/route` читают mapping и время только через него.
+
+- Backend стартует в состоянии `waiting_driver` **без** clock mapping: `clock_mapping=null`, snapshot отдаёт `run.state="waiting_driver"` и `vehicles=[]`, `Schedule` не вызывается. Handshake NDTP принимается (нет шторма переподключений), навигационные кадры отклоняются и считаются в `counters.rejected_no_run` (и в `dropped`).
+- Драйвер `scripts/emulator_driver.py` регистрирует единственный на процесс прогон `POST /v1/run` **до** первого `POST /api/config` эмулятора:
+
+```json
+{"dataset_start": "2026-01-06T06:30:00", "dataset_end": "2026-01-06T08:30:00",
+ "speedup": 5, "post_period_s": 2, "units": [786201, 893159],
+ "path": {"786201": [[37.43, 55.80], [37.431, 55.801]]}, "source": "official_emulator"}
+```
+
+  Ответ `201`: `{"run_id": "run-20260927T124517-d90b", "clock_mapping": {"epoch_origin": 1790513117, "dataset_origin": "2026-01-06T06:30:00", "rate": 5}, "run": {...}}`. `run_id` генерирует Backend. `epoch_origin` — целая Unix-секунда регистрации (floor), `dataset_origin=dataset_start`, `rate=speedup`: время данных = `dataset_origin + (unix − epoch_origin) × rate`. Повторная регистрация в том же процессе → `409 {"detail": "run_already_registered", "run_id": "run-…"}` при любых параметрах (конфликт проверяется до проверки плана); вне `simulation` → `409 {"detail": "run_requires_simulation_clock", "run_id": null}`. Невалидное окно (`end ≤ start`), `speedup` вне `[1, 100]`, `post_period_s` вне `[1, 5]` с (при большем периоде heartbeat драйвера не уложится в 10 с, а здоровый прогон выглядел бы `stalled`), неизвестный или повторный `unit_id`, `path` вне `units` или координаты вне WGS84 → `422`. `path` — план подачи драйвера (только valid GPS окна), display-only: это «путь по GPS прогона», не официальная трасса и не вход модели.
+- `ClockMapping.rate` (целое ≥ 1): при `rate ≠ 1` одна секунда NDTP `timestamp` (её ставит эмулятор) — это `rate` секунд данных, поэтому обратное `to_epoch` запрещено.
+- Heartbeat и финал: `POST /v1/run/{run_id}/state` c `{"state": "running" | "completed" | "failed", "thinned_ratio": 0.28, "repeat_ratio": 0.27, "counters": {...}, "reason": null}`; драйвер шлёт `running` не реже раза в 10 с. `thinned_ratio` — доля точек окна, не отправленных из-за прореживания (за период уходит последняя точка ТС); `repeat_ratio` — доля повторов последней точки среди отправленных. Неизвестный `run_id` → `404`; после `completed`/`failed` → `409 run_already_finished`.
+- Lifecycle (`run.state`): `waiting_driver → starting` (зарегистрирован, принятых кадров нет) `→ running` (есть принятый кадр не старше `RUN_STALL_AFTER_S=30` с wall) `→ completed | failed` (сообщает драйвер, финальны) или `stalled` (Backend ставит сам: нет принятых кадров > 30 с wall; также из `starting`). Если кадры снова пошли, `stalled → running`.
+- Сброс = пересоздание процесса (recreate контейнера); endpoint сброса нет.
+- Прогнозы не зависят от опроса: собственный tick `Orchestrator` (`PREDICT_TICK_S=1` с wall; только в `simulation` — replay двигается по одному подтверждённому кадру) оценивает ТС прогона тем же кодом, что и snapshot, под одним lock вместе с чтением часов. `PREDICT_INTERVAL_S=60` остаётся во времени данных.
+- Переподключения: эмулятор рвёт и заново открывает TCP всех ТС на каждый `POST /api/config`. ТС считается подключённым, если есть активная сессия или последняя закрылась меньше `RECONNECT_GRACE_S=3` с wall назад; `connections/disconnects` считают все реальные сессии.
+
+`GET /ready` → `{"status": "ready", "source_clock", "ndtp_host", "ndtp_port", "clock_mapping": {"epoch_origin", "dataset_origin", "rate"} | null, "run": {...} | null}`. `/v1/ingest` дополнительно отдаёт `clock_mapping` и `run`. Поле `scenario_label` удалено; источник — `run.source="official_emulator"`.
+
+Конверт `run` (в `/ready`, `/v1/ingest`, `/v1/vehicles`; `null` вне `simulation`):
+
+```json
+{"run_id": "run-20260927T124517-d90b", "state": "running", "source": "official_emulator",
+ "speedup": 5, "post_period_s": 2.0,
+ "dataset_start": "2026-01-06T06:30:00", "dataset_end": "2026-01-06T08:30:00",
+ "dataset_time": "2026-01-06T06:47:10", "progress": 0.1431,
+ "thinned_ratio": 0.2822, "repeat_ratio": 0.2687,
+ "vehicle_count": 16, "accepted_frames": 201, "last_frame_age_s": 1.07,
+ "registered_at_utc": "2026-09-27T12:45:17.804080",
+ "driver": {"state": "running", "reason": null, "counters": {"points_sent": 117, "...": 0},
+            "reported_at_utc": "2026-09-27T12:45:39.939403"}}
+```
+
+До регистрации: `run_id=null`, `state="waiting_driver"`, числовые поля `null`. `progress = (dataset_time − dataset_start)/(dataset_end − dataset_start)`, ограничен `[0, 1]`. `run.dataset_time` — отсчёт тех же часов, что `clock_time` snapshot, но не позже `dataset_end`: часы источника после окна идут дальше (строки ТС честно стареют), а время прогона останавливается на конце окна. `thinned_ratio/repeat_ratio` — `null`, пока драйвер не прислал heartbeat.
+
+## Часы и доступность (replay для тестов)
 
 `dataset_wall` — исходные naive timestamps датасета, без утверждения географической timezone. Historical NDTP `u32 timestamp` кодируется обратимой парой `dataset_origin=2026-01-06 00:00:00`, `epoch_origin=1700000000`. Live emulator timestamp — настоящий Unix UTC; его сегодняшний день не переводится на дату обучения.
 
@@ -28,8 +67,10 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
 {
   "schema_version": "transport.backend-vehicles.v1",
   "revision": 12,
-  "source_clock": "dataset_wall",
-  "clock_time": "2026-01-06T03:35:00",
+  "source_clock": "simulation",
+  "clock_mapping": {"epoch_origin": 1790513117, "dataset_origin": "2026-01-06T06:30:00", "rate": 5},
+  "clock_time": "2026-01-06T06:47:10",
+  "run": {"run_id": "run-20260927T124517-d90b", "state": "running", "...": "см. конверт run"},
   "vehicles": [
     {
       "tr_id": "131672",
@@ -43,6 +84,8 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "connected": true,
       "target_stop_id": "53700172828",
       "target_time_begin": "2026-01-06T03:50:00",
+      "target_lon": 37.42318933,
+      "target_lat": 55.7338932,
       "cur_dev_s": 95.0,
       "cur_dev_source": "computed_stop",
       "prediction_s": 120.0,
@@ -51,13 +94,19 @@ Sender до TCP отправки сверяет `/ready.source_clock` и `/ready
       "artifact_sha256": "dc33437108c3e036089450c9b98771dacd014246fbb91d0df2a89d0c8e247122",
       "status": "normal",
       "reason": null,
+      "prediction_pending": false,
+      "prediction_updating": true,
       "last_success_at": "2026-01-06T03:35:00",
       "revision": 12
     }
   ],
-  "ingest": { "accepted": 12, "dropped": 0, "errors": 0, "queue_depth": 0 }
+  "ingest": { "accepted": 12, "dropped": 0, "errors": 0, "rejected_no_run": 0, "queue_depth": 0 }
 }
 ```
+
+`vehicles` — только ТС текущего прогона (`units` регистрации); в `dataset_wall`/`utc` — все ТС реестра. `target_lon/target_lat` — координаты плановой цели (`null` без цели или без валидной координаты). `clock_time=null` до регистрации прогона.
+
+**Свежесть прогноза в живом потоке.** Успешный прогноз относится к цели, для которой его посчитали; при смене цели прежнее значение не выдаётся (`prediction_s=null`), новый прогноз ставится сразу, и пока он в работе строка — `degraded` с `reason="prediction_pending"`. Если последний успех относится к текущей цели, его `quality="normal"` и возраст во времени данных `≤ PREDICTION_FRESH_S = 1.5 × PREDICT_INTERVAL_S` (90 с при 60 с), строка остаётся `status="normal"` даже при более новых кадрах; тогда `prediction_updating=true` (есть вход новее прогноза или задача в работе). Возраст больше порога → `degraded`, `prediction_aging`. Прежняя причина `prediction_behind_input` больше не выдаётся: её заменил флаг `prediction_updating`. Alert создаётся только прогнозом, посчитанным на полном текущем контексте (`normal` и `prediction_updating=false`).
 
 Отсутствующие значения — JSON `null`, не ноль. `target_stop_id` — ID планового прибытия (`tt_action_item_id`). Долгота/широта — WGS84 degrees, с флагом валидности. `revision` меняется при принятом новом состоянии или изменении статуса; consumer использует его для live readback. `status` сообщает `normal`, `degraded` или `unavailable`, а `reason` объясняет отсутствие свежего прогноза. При сбое ML либо NDTP последнее число может оставаться только вместе с `degraded`, возрастом и `last_success_at`; его нельзя выдавать за свежий прогноз.
 
@@ -71,12 +120,44 @@ Backend отправляет ML только восемь разрешённых
 
 ## Ограниченная обработка ML и наблюдений остановки
 
-HTTP inference выполняет отдельный worker. Одновременно активен один ML request; очередь хранит до `ML_QUEUE_LIMIT=32` автомобилей и объединяет ожидающие задания одного автомобиля до последнего входа. Каждое задание сохраняет свой T, target, frame identity и past-only request до помещения в очередь. Ingest acknowledgment и snapshot не ждут ML. Completion для изменившегося target отбрасывается; прогноз по более старому доступному контексту текущего target остаётся `degraded` с причиной `prediction_behind_input`. Pending обозначается `prediction_pending`.
+HTTP inference выполняет отдельный worker. Одновременно активен один ML request; очередь хранит до `ML_QUEUE_LIMIT=32` автомобилей и объединяет ожидающие задания одного автомобиля до последнего входа. Каждое задание сохраняет свой T, target, frame identity и past-only request до помещения в очередь. Ingest acknowledgment и snapshot не ждут ML. Completion для изменившегося target отбрасывается; прогноз по более старому доступному контексту текущего target помечается `prediction_updating=true` (см. «Свежесть прогноза»). Pending обозначается `prediction_pending`.
 
 `processing` в `/v1/ingest` и `/v1/vehicles` отдаёт `ml_enqueued`, `ml_started`, `ml_completed`, `ml_succeeded`, `ml_failed`, `ml_unavailable`, `ml_coalesced`, `ml_dropped_queue_full`, `ml_discarded_obsolete`, `ml_canceled_on_close`, `ml_max_queue_depth`, `ml_queue_depth`, `ml_queue_limit`, `ml_active_jobs` и bounded detector counters. Coalescing не является потерей входной telemetry, но пропускает промежуточное ML задание и должно учитываться в измерениях.
 
 Первое наблюдение остановки хранится отдельно от скользящей 900-секундной ML history, максимум одно на известное плановое прибытие. Поэтому продолжительная стоянка не сдвигает уже наблюдённое время прибытия. Late evidence не меняет первое наблюдение и не обращает принятую последовательность остановок. Это приближённый GPS detector, а не фактическое расписание.
 
-Row дополнительно отдаёт `input_context_revision` и `prediction_context_revision`. Версия сравнивает весь доступный bounded history, 900-секундный ML input, current deviation и target. Пакет с отрицательным receive lag, ставший доступным позже своего receive time, меняет эту версию и вызывает новый captured request; прежний completion не может получить `normal` или создать alert. `input_frame_id` остаётся корреляцией последнего receive frame и сам по себе не доказывает неизменность контекста.
+Row дополнительно отдаёт `input_context_revision` и `prediction_context_revision`. Версия сравнивает весь доступный bounded history, 900-секундный ML input, current deviation и target. Пакет с отрицательным receive lag, ставший доступным позже своего receive time, меняет эту версию и вызывает новый captured request; прежний completion не создаёт alert и показывается с `prediction_updating=true`. `input_frame_id` остаётся корреляцией последнего receive frame и сам по себе не доказывает неизменность контекста.
 
 Same-event correction, отзывающая GPS evidence первого наблюдения остановки, снимает будущую уверенность detector до нового подтверждённого наблюдения. Простое вытеснение старой telemetry из bounded history этого не делает. Counters включают `stop_observations_retracted`, `context_history_frame_count` и `context_history_frame_limit`.
+
+## Маршрутный контекст `GET /v1/route/{tr_id}`
+
+Отдельная ручка (не внутри snapshot). Цель, `cur_dev_s`, `prediction_s`, `prediction_updating`, `model_version`, `artifact_sha256` и `vehicle_revision` берутся из последней посчитанной строки ТС — той же, что отдаёт `/v1/vehicles` (сверка по `vehicle_revision == row.revision`); `Schedule` здесь не пересчитывается, окно считается от момента расчёта этой строки (`clock_time`).
+
+```json
+{"run_id": "run-20260927T124517-d90b", "tr_id": "133300", "unit_id": 1076894,
+ "vehicle_revision": 564, "clock_time": "2026-01-06T06:33:05.996345",
+ "window_start": "2026-01-06T06:28:05.996345", "window_end": "2026-01-06T07:00:00",
+ "path": [[37.411995, 55.734196], "..."],
+ "passed": [[37.423573, 55.733715, "06:32:50"], "..."],
+ "stops": [{"stop_id": "53700641295", "time": "06:32:00", "lon": 37.41915975, "lat": 55.733633, "role": "passed"},
+           {"stop_id": "53700641290", "time": "06:34:00", "lon": 37.42385401, "lat": 55.73234446, "role": "before_target"},
+           {"stop_id": "53700641292", "time": "06:45:00", "lon": 37.42318933, "lat": 55.7338932, "role": "target"},
+           {"stop_id": "53700641287", "time": "06:46:00", "lon": 37.41785937, "lat": 55.73389267, "role": "after_target"}],
+ "stops_dropped": 0, "stops_truncated": 0,
+ "target_stop_id": "53700641292", "target_time_begin": "2026-01-06T06:45:00",
+ "cur_dev_s": -40.0, "prediction_s": 30.46, "prediction_updating": true,
+ "model_version": "canonical_rmse_d8", "artifact_sha256": "dc33…7122"}
+```
+
+- `path` — manifest драйвера из регистрации (display-only, «путь по GPS прогона»).
+- `passed` — только valid GPS из истории Backend этого процесса (кадры до регистрации отклонены, поэтому это только текущий прогон); время — `event_time` `HH:MM:SS`. Повтор точки драйвером даёт отдельную запись с теми же координатами.
+- `stops` — плановые прибытия `tr_id` по времени в окне `[сейчас − 5 мин, цель + 15 мин]`, без цели — `[сейчас − 5 мин, сейчас + 30 мин]`; `time` — плановое `HH:MM:SS`. Не более 40: при переполнении отбрасываются самые ранние, цель всегда остаётся; их число — `stops_truncated`. Остановка без конечной координаты или вне bbox карты (`37.25,55.50,38.00,56.00`, как в `consumer/map/manifest.json`) исключается и считается в `stops_dropped`.
+- `role`: `target` — цель модели; `passed` — детектор уже наблюдал это прибытие или `план + cur_dev_s < сейчас` (без `cur_dev_s` — `план < сейчас`); остальные до цели — `before_target`, после — `after_target`; без цели — `planned`. Значения прогноза для остановок кроме цели Backend не выдумывает: это допущение UI.
+- `404 {"detail": "unknown_tr_id"}` — ТС нет в текущем прогоне (или прогон не зарегистрирован); `404 {"detail": "vehicle_not_evaluated"}` — строка ещё не посчитана (tick исправит за ≤ 1 с).
+
+## Consumer
+
+- `GET /api/snapshot` — без изменений: конверт `{status, reason, checked_at, fetched_at, age_s, snapshot}`, новые поля Backend (`run`, `target_lon/lat`, `prediction_updating`) проходят как есть.
+- `GET /api/route/{tr_id}` — proxy на `GET /v1/route/{tr_id}` без кэша: `200 {"status": "online", "reason": null, "checked_at", ...поля route}`; `404 {"status": "not_found", "reason": "<detail Backend>"}`; Backend недоступен, timeout, `5xx` или неверная форма → `503 {"status": "offline", "reason": "..."}` без маршрутных данных (прошлый маршрут не выдаётся). `tr_id` вне `[0-9A-Za-z_-]{1,64}` → `404`.
+- `GET /api/build` — `{"files": {"index.html", "static/app.js", "static/app.css", "static/map-worker.js": sha256}, "source_commit", "dashboard_bundle_sha256", "consumer_static_sha256"}`, считается на каждый запрос. Рецепт T-6 (`.tasks/T-6-2026-09-26-ndtp/artifacts/transport-demo/m2.md`): `dashboard_bundle_sha256` = sha256 вывода `shasum -a 256 consumer/static/app.css consumer/static/app.js consumer/static/map-worker.js`; `consumer_static_sha256` = sha256 вывода `shasum -a 256 consumer/index.html $(ls consumer/static/* | sort)` (пути относительно корня репозитория, сортировка C-locale). `source_commit` — build-arg `SOURCE_COMMIT` образа (`git describe --always --dirty --abbrev=40`), без него `"unknown"`.

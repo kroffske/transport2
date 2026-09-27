@@ -18,3 +18,8 @@ COPY scripts ./scripts
 
 RUN useradd --uid 10001 --create-home appuser
 USER appuser
+
+# Source identity reported by consumer /api/build. Last, so a new commit reuses all
+# layers above. Pass `--build-arg SOURCE_COMMIT=$(git describe --always --dirty --abbrev=40)`.
+ARG SOURCE_COMMIT=unknown
+ENV SOURCE_COMMIT=${SOURCE_COMMIT}
