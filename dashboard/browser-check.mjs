@@ -122,6 +122,13 @@ async function headerFits(page, label) {
       }
       const bar = document.querySelector('.topbar').getBoundingClientRect();
       const state = document.getElementById('run-state');
+      // v2: the attention bar and the map tools share the top of the map; neither may cover the other's buttons.
+      const att = document.getElementById('attention'), tools = document.querySelector('.map-tools');
+      if (!att.hidden && tools) {
+        const a = att.getBoundingClientRect(), t = tools.getBoundingClientRect();
+        if (a.x < t.right && t.x < a.right && a.y < t.bottom && t.y < a.bottom) hits.push('attention×map-tools');
+        if ([...att.querySelectorAll('button, .sla')].some(e => e.getBoundingClientRect().right > a.right + 0.5)) hits.push('attention buttons cut');
+      }
       return [...hits, ...parts.filter(p => p.r.right > bar.right + 0.5).map(p => `${p.name} outside`),
         ...(state.scrollWidth > state.clientWidth + 1 || !state.getClientRects().length ? ['run-state cut'] : [])];
     });
@@ -129,7 +136,7 @@ async function headerFits(page, label) {
   }
   await page.setViewportSize(VIEWPORT);
   await page.waitForTimeout(250);
-  check(bad.length === 0, `${label}: header parts never overlap at ${HEADER_WIDTHS.join('/')} px, run state whole (${bad.join('; ') || 'ok'}, H-1)`);
+  check(bad.length === 0, `${label}: header parts never overlap at ${HEADER_WIDTHS.join('/')} px, run state whole, attention bar clear of map tools (${bad.join('; ') || 'ok'}, H-1)`);
 }
 // W13 acceptance (ui-review §5): card order, sticky head, no technical identifiers outside
 // «Технические подробности», one delay formatter, and the camera following the selection.

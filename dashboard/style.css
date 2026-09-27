@@ -142,7 +142,7 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
 .map-pane[data-state=unavailable] .map-state { border-left: 5px solid var(--severe); text-align: left; }
 .map-state[hidden] { display: none; }
 
-.attention { position: absolute; z-index: 3; top: 14px; left: 14px; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 140px); padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--nodata); border-radius: 8px; box-shadow: 0 6px 18px rgba(10, 30, 45, .14); font-size: 14px; }
+.attention { position: absolute; z-index: 3; top: 14px; left: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; max-width: calc(100% - 540px); padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--nodata); border-radius: 8px; box-shadow: 0 6px 18px rgba(10, 30, 45, .14); font-size: 14px; }
 .attention[hidden] { display: none; }
 .attention[data-level=severe] { border-left-color: var(--severe); }
 .attention[data-level=warning] { border-left-color: var(--warning); }
@@ -187,6 +187,8 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .gps-marked { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: #e7ebee; color: var(--nodata); font-size: 13px; font-weight: 600; }
 
 .map-tools { position: absolute; z-index: 3; top: 14px; right: 14px; display: flex; gap: 8px; }
+/* Below 1700 px the tools stack on the right so the attention bar keeps its buttons clear of them. */
+@media (max-width: 1699px) { .map-tools { flex-direction: column; align-items: flex-end; } .attention { max-width: calc(100% - 280px); } }
 .overview[hidden] { display: none; }
 .overview, .map-tool { padding: 8px 14px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; font-weight: 600; box-shadow: 0 4px 12px rgba(10, 30, 45, .12); white-space: nowrap; }
 .map-tool { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; }
