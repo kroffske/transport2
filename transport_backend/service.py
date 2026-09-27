@@ -69,19 +69,23 @@ def _utc_now() -> datetime:
 
 
 def create_app(*, data_dir: str | Path | None = None, model_url: str | None = None,
-               source_clock: Literal["dataset_wall", "utc"] | None = None,
+               source_clock: Literal["dataset_wall", "utc", "simulation"] | None = None,
                ndtp_host: str | None = None, ndtp_port: int | None = None) -> FastAPI:
     data = Path(data_dir if data_dir is not None else os.environ.get("DATA_DIR", "data"))
     model_endpoint = model_url or os.environ.get("MODEL_URL", "http://127.0.0.1:8000")
     domain = source_clock or os.environ.get("SOURCE_CLOCK", "dataset_wall")
-    if domain not in {"dataset_wall", "utc"}:
-        raise ValueError("SOURCE_CLOCK must be dataset_wall or utc")
+    if domain not in {"dataset_wall", "utc", "simulation"}:
+        raise ValueError("SOURCE_CLOCK must be dataset_wall, utc or simulation")
     host = ndtp_host or os.environ.get("NDTP_HOST", "127.0.0.1")
     port = ndtp_port if ndtp_port is not None else int(os.environ.get("NDTP_PORT", "9201"))
     origin = datetime(2026, 1, 6)
-    mapping = ClockMapping(1_700_000_000, origin) if domain == "dataset_wall" else None
+    utc_origin = int(datetime.now(timezone.utc).timestamp()) if domain == "simulation" else None
+    mapping = (ClockMapping(utc_origin, datetime(2026, 1, 6, 3, 20)) if utc_origin is not None else
+               ClockMapping(1_700_000_000, origin) if domain == "dataset_wall" else None)
     replay_clock = ReplayClock(origin) if domain == "dataset_wall" else None
-    clock = replay_clock.now if replay_clock else _utc_now
+    clock = (replay_clock.now if replay_clock else
+             (lambda: mapping.from_epoch(datetime.now(timezone.utc).timestamp()))
+             if domain == "simulation" else _utc_now)
 
     @asynccontextmanager
     async def lifespan(api: FastAPI):
@@ -97,7 +101,7 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
                                stale_after_s=float(os.environ.get("STALE_AFTER_S", "45")),
                                source_clock=domain)
         server = NDTPServer(state, host=host, port=port, mapping=mapping,
-                            clock=clock if replay_clock else None,
+                            clock=clock if domain != "utc" else None,
                             queue_limit=int(os.environ.get("NDTP_QUEUE_LIMIT", "256")),
                             max_clients=int(os.environ.get("NDTP_MAX_CLIENTS", "64")))
         model = ModelClient(model_endpoint, float(os.environ.get("ML_TIMEOUT_S", "3")))
@@ -124,7 +128,8 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
         return {"status": "ready", "source_clock": domain,
                 "ndtp_host": host, "ndtp_port": port,
                 "clock_mapping": {"dataset_origin": mapping.origin_wall.isoformat(),
-                                  "epoch_origin": mapping.origin_epoch} if mapping else None}
+                                  "epoch_origin": mapping.origin_epoch} if mapping else None,
+                "scenario_label": "синтетический сценарий на исторической модели" if domain == "simulation" else None}
 
     @api.post("/v1/replay/clock")
     def advance_clock(step: ReplayStep):
@@ -161,6 +166,9 @@ def create_app(*, data_dir: str | Path | None = None, model_url: str | None = No
         readback["counters"] = server.counters()
         readback["queue_depth"] = server.queue.qsize()
         readback["processing"] = orchestrator.processing_readback()
+        readback["source_clock"] = domain
+        readback["clock_mapping"] = {"epoch_origin": mapping.origin_epoch,
+                                      "dataset_origin": mapping.origin_wall.isoformat()} if mapping else None
         return readback
 
     @api.get("/v1/vehicles")

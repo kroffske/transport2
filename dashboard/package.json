@@ -1,0 +1,23 @@
+{
+  "name": "dashboard",
+  "version": "1.0.0",
+  "description": "Каталог зарезервирован для диспетчерского BI-дашборда. Компонент ещё не реализован.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "esbuild app.js --bundle --minify --format=iife --outfile=../consumer/static/app.js --loader:.css=css && esbuild node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs --bundle --minify --format=iife --outfile=../consumer/static/map-worker.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "maplibre-gl": "^6.11.2",
+    "pmtiles": "^4.4.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "playwright": "^1.55.1"
+  }
+}

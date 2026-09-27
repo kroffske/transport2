@@ -53,6 +53,16 @@ services:
       timeout: 3s
       retries: 6
 
+  emulator:
+    profiles: ["simulation"]
+    image: ndtp-telemetry-emulator:1.0
+    platform: linux/amd64
+    ports:
+      - "18080:18080"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   replay:
     profiles: ["demo"]
     build: .

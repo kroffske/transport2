@@ -187,6 +187,11 @@ class Orchestrator:
                         for unit, tr in self.state.unit_mapping.items()]
             return {"schema_version": "transport.backend-vehicles.v1",
                     "revision": self._revision, "source_clock": self.state.source_clock,
+                    "scenario_label": ("синтетический сценарий на исторической модели"
+                                       if self.state.source_clock == "simulation" else None),
+                    "clock_mapping": ({"epoch_origin": self.server.mapping.origin_epoch,
+                                       "dataset_origin": self.server.mapping.origin_wall.isoformat()}
+                                      if self.state.source_clock == "simulation" else None),
                     "clock_time": now.isoformat(), "vehicles": vehicles,
                     "ingest": {"accepted": counters.get("accepted", 0),
                                "dropped": counters.get("dropped", 0),

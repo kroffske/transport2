@@ -30,9 +30,9 @@ class NDTPServer:
         if queue_limit < 1 or max_clients < 1:
             raise ValueError("queue_limit and max_clients must be positive")
         if (mapping is None) != (state.source_clock == "utc"):
-            raise ValueError("dataset_wall needs ClockMapping; utc must not use it")
-        if state.source_clock == "dataset_wall" and clock is None:
-            raise ValueError("dataset_wall needs an explicit replay clock")
+            raise ValueError("mapped clocks need ClockMapping; utc must not use it")
+        if state.source_clock != "utc" and clock is None:
+            raise ValueError("mapped clocks need an explicit replay clock or simulation clock")
         self.state = state
         self.host = host
         self.port = port
@@ -188,6 +188,8 @@ class NDTPServer:
                         session_id=session, request_id=frame.request_id,
                         source_clock=self.state.source_clock, frame_id=identity,
                         received_at_utc=time_text(host_received),
+                        event_at_utc=(time_text(wire_event_time(nav.timestamp, None))
+                                      if self.state.source_clock == "simulation" else None),
                     )
                     try:
                         self.queue.put_nowait(record)

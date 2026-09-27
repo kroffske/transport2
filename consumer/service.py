@@ -11,11 +11,14 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import httpx
 
 
 SCHEMA_VERSION = "transport.backend-vehicles.v1"
 INDEX = Path(__file__).with_name("index.html")
+ASSETS = Path(__file__).with_name("static")
+MAP = Path(__file__).with_name("map")
 
 
 class SnapshotReader:
@@ -74,6 +77,8 @@ def create_app(backend_url: str | None = None, timeout_s: float | None = None) -
     timeout_s = timeout_s if timeout_s is not None else float(os.environ.get("BACKEND_TIMEOUT_S", "1.0"))
     reader = SnapshotReader(backend_url, timeout_s)
     app = FastAPI(title="Transport live consumer")
+    app.mount("/static", StaticFiles(directory=ASSETS), name="static")
+    app.mount("/map", StaticFiles(directory=MAP), name="map")
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

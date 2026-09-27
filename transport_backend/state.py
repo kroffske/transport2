@@ -103,6 +103,7 @@ class Telemetry:
     source_clock: str
     frame_id: str
     received_at_utc: str
+    event_at_utc: str | None = None
 
     def traffic_row(self) -> dict[str, object]:
         """Rows accepted by transport_ml.data.TRAFFIC_COLUMNS."""
@@ -120,8 +121,8 @@ class TelemetryState:
                  source_clock: str = "utc"):
         if not unit_mapping or history_limit < 1 or outcome_limit < 1 or stale_after_s <= 0:
             raise ValueError("mapping nonempty, history/outcome limits >= 1, stale_after_s > 0")
-        if source_clock not in {"utc", "dataset_wall"}:
-            raise ValueError("source_clock must be utc or dataset_wall")
+        if source_clock not in {"utc", "dataset_wall", "simulation"}:
+            raise ValueError("source_clock must be utc, dataset_wall or simulation")
         self.unit_mapping = {int(k): str(v) for k, v in unit_mapping.items()}
         if len(set(self.unit_mapping.values())) != len(self.unit_mapping):
             raise ValueError("each tr_id must have exactly one unit_id")
@@ -187,7 +188,8 @@ class TelemetryState:
                         "session_id": record.session_id, "frame_id": record.frame_id,
                         "event_time": record.event_time,
                         "receive_time": record.receive_time,
-                        "received_at_utc": record.received_at_utc, "outcome": outcome}
+                        "received_at_utc": record.received_at_utc,
+                        "event_at_utc": record.event_at_utc, "outcome": outcome}
             if len(self._outcomes) == self.outcome_limit:
                 self._counters["outcome_evictions"] += 1
             self._outcomes.append(identity)
@@ -210,6 +212,8 @@ class TelemetryState:
             raise ValueError("telemetry unit/tr mapping mismatch")
         if record.source_clock != self.source_clock:
             raise ValueError("telemetry clock domain mismatch")
+        if self.source_clock == "simulation" and parse_time(record.event_time) > parse_time(record.receive_time):
+            raise ValueError("future simulation event")
         # Wire payload semantics, not global requestId: repeat on a reconnect
         # is still a duplicate, whereas a correction at the same event time is not.
         identity = (record.unit_id, record.event_time, record.location_valid,

@@ -44,6 +44,26 @@ def connect(server: NDTPServer) -> socket.socket:
     return socket.create_connection(server.address, timeout=2)
 
 
+def test_simulation_socket_maps_both_clocks_and_rejects_future_event() -> None:
+    origin = int(datetime.now(timezone.utc).timestamp()) - 2
+    mapping = ClockMapping(origin, ORIGIN)
+    receive = [ORIGIN + timedelta(seconds=2, milliseconds=500)]
+    state = TelemetryState({UNIT: TR}, source_clock="simulation")
+    with NDTPServer(state, mapping=mapping, clock=lambda: receive[0]) as server:
+        with connect(server) as client:
+            client.sendall(handshake() + nav(origin + 1))
+            await_counter(server, "accepted", 1)
+            record = state.snapshot(TR, receive[0])["telemetry"]
+            assert record["event_time"] == "2026-01-06 12:30:01.000000"
+            assert record["event_at_utc"] == datetime.fromtimestamp(
+                origin + 1, timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+            assert state.ingest_readback()["last_accepted"]["event_at_utc"] == record["event_at_utc"]
+            client.sendall(nav(origin + 10, request=3))
+            await_counter(server, "errors_state", 1)
+            assert state.counters()["accepted"] == 1
+            assert state.ingest_readback()["last_processed"]["outcome"] == "rejected_state"
+
+
 def test_packed_crc_and_unsupported_cell_rejected() -> None:
     assert crc16_modbus(b"123456789") == 0x4B37
     frame = parse_frame(nav(extra=bytes((8, 0)) + bytes(6)))
