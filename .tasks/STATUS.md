@@ -1,4 +1,4 @@
-# Tasks — 2 active, 0 waiting, 0 backlog, 4 archived
+# Tasks — 3 active, 0 waiting, 0 backlog, 4 archived
 
 ```text
 NEXT:    T-6 · T-6-2026-09-26-ndtp/task.md → D01 — основной экран и проверенный baseline.
@@ -11,6 +11,7 @@ REFRESH: locus task sync-index
 |----|------|-------|--------|-----|-------|----------|------|
 | T-5 | research | [Оптимизировать ML для score выше 0.70](T-5-2026-09-25-ml-score-0-70/task.md) | doing |  | codex | █░ 1/2<br>☐ Проверенный кандидат submission и вывод… | Локальная оптимизация завершена: выбран residual depth4/800 по CV (78.03 -> 76.… |
 | T-6 | feature | [Длительный поток NDTP и интерактивная карта задерж](T-6-2026-09-26-ndtp/task.md) | doing | p1 | codex | ░░░░░░░░ 0/8<br>☐ D01 — основной экран и проверенный base…<br>☐ D02A — повторяемый интерфейсный сценари…<br>+6 more… | Запущен native Pi workflow transport-live, run 20260926-163549-febd; task artif… |
+| T-7 | feature | [Единое демо: официальный эмулятор → ML → карта с м](T-7-2026-09-27-ml/task.md) | doing | p1 | claude | ██░░░░░░░░ 2/10<br>☐ Backend-прогон и драйвер официального э…<br>☐ Единый сценарий, прогон и ускорение в U…<br>+6 more… | Решение пользователя 2026-09-27 (после data-note): модель прогнозирует первую п… |
 
 ### Recently closed (4)
 
@@ -23,4 +24,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 4 closed tasks total_
 
-_Generated: 2026-09-27T02:31:46.831Z_
+_Generated: 2026-09-27T12:24:25.093Z_

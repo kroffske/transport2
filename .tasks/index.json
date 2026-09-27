@@ -1,6 +1,6 @@
 {
   "schema": "index.v1",
-  "generated_at": "2026-09-27T02:31:46.831Z",
+  "generated_at": "2026-09-27T12:24:25.093Z",
   "tasks": [
     {
       "id": "T-5",
@@ -62,6 +62,43 @@
         "event": "note",
         "actor": "manager",
         "text": "Запущен native Pi workflow transport-live, run 20260926-163549-febd; task artifacts/launch/supervisor.json содержит argv/cwd и retained tmux transport2-t6:pi. Оба исходника прошли node --check и orchestration-only source checker; task lint без findings. Heartbeat transport2-supervisor-ndtp наблюдает каждые 10 минут. Текущий этап plan, runtime начал call-0001 с requested openai-codex/gpt-6-sol.",
+        "from": null,
+        "to": null,
+        "source": "status_note"
+      },
+      "parent_id": "",
+      "subtasks": []
+    },
+    {
+      "id": "T-7",
+      "title": "Единое демо: официальный эмулятор → ML → карта с маршрутом и прогнозом",
+      "status": "doing",
+      "type": "feature",
+      "priority": "p1",
+      "owner": "claude",
+      "created_at": "2026-09-27T11:24:42.661Z",
+      "updated_at": "2026-09-27T12:24:25.059Z",
+      "stream": "T",
+      "path": "T-7-2026-09-27-ml",
+      "work_items_total": 10,
+      "work_items_done": 2,
+      "work_items_remaining": [
+        "Backend-прогон и драйвер официального эмулятора (agent A).",
+        "Единый сценарий, прогон и ускорение в UI (agent B).",
+        "Маршрутный контекст и прогноз (agents A + B).",
+        "Реальный ML gate (coordinator).",
+        "Road-first карта и символы (agent B, после W4/W5).",
+        "Build identity (A — consumer/Dockerfile/compose; B — diagnostics UI).",
+        "Документация и финальная matrix (agent C + coordinator).",
+        "Независимая финальная QA (agent D)."
+      ],
+      "subtask_count": 0,
+      "last_event": "2026-09-27T12:24:25.075Z",
+      "latest_status_note": {
+        "ts": "2026-09-27T11:43:02.879Z",
+        "event": "note",
+        "actor": "manager",
+        "text": "Решение пользователя 2026-09-27 (после data-note): модель прогнозирует первую плановую остановку в (T+10,T+15] мин, не следующую. Отображение: текущее опоздание ТС (факт); остановки до цели = план + текущее фактическое отклонение (подпись «по факту, не прогноз»); целевая остановка = прогноз модели (выделена); после цели = план + тот же сдвиг модели (допущение, переключаемо). Рекомендация data-note: окно 06:30–08:30, focus 132430/133300/134040, все 16 активных unit в эмулятор; Backend simulation clock нужен configurable origin + scale.",
         "from": null,
         "to": null,
         "source": "status_note"
