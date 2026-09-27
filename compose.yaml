@@ -5,7 +5,7 @@ services:
     environment:
       MODEL_DIR: /models
     volumes:
-      - ${MODEL_DIR:-./.local/validate-tuning-2026-09-26}:/models:ro
+      - ${MODEL_DIR:-./models/final}:/models:ro
     ports:
       - "8000:8000"
     healthcheck:

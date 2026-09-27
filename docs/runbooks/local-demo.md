@@ -33,7 +33,7 @@ traffic.csv ─► driver ─POST /api/config─► emulator ─NDTP─► backe
 | Docker с Compose v2 | — | `docker compose version` |
 | Образ официального эмулятора | `data/emulator/ndtp-telemetry-emulator.tar` → `docker load` | `docker image inspect ndtp-telemetry-emulator:1.0` |
 | Данные validate | `data/validate/traffic.csv`, `data/validate/schedule_plan.csv` | `ls data/validate` |
-| Модель | `.local/validate-tuning-2026-09-26/` (`final_model.cbm`, `final_model.json`, `vehicle_origins.csv`) | `ls .local/validate-tuning-2026-09-26/final_model.cbm` |
+| Модель | `models/final/` в репозитории (`final_model.cbm`, `final_model.json`, `vehicle_origins.csv`) | `cd models/final && shasum -a 256 -c SHA256SUMS` |
 | Карта | `consumer/map/moscow.pmtiles` (источник и SHA-256 — в `consumer/map/manifest.json`) | `shasum -a 256 consumer/map/moscow.pmtiles` |
 
 Образ эмулятора загружается один раз:
@@ -100,7 +100,7 @@ DEMO_SPEEDUP=10 DEMO_POST_PERIOD_S=1 SOURCE_COMMIT=$(git describe --always --dir
 | `DEMO_POST_PERIOD_S` | `2` | Период `POST /api/config` драйвера в секундах wall, от 1 до 5. Каждый POST отправляет по одной точке на ТС |
 | `DEMO_WINDOW` | `06:30-08:30` | Окно данных дня 2026-01-06. В окне по умолчанию 16 активных ТС. При ×5 показ длится около 24 мин, при ×10 — около 12 мин |
 | `DEMO_REPEAT_MAX_S` | `30` | Сколько секунд данных драйвер повторяет последнюю точку ТС, если новой нет. Затем ТС убирается из конфига эмулятора до следующей точки |
-| `MODEL_DIR` | `./.local/validate-tuning-2026-09-26` | Каталог модели для `ml` |
+| `MODEL_DIR` | `./models/final` | Каталог модели для `ml` |
 | `DATA_DIR` | `./data` | Каталог данных для `backend` и `driver` |
 | `EMULATOR_IMAGE` | `ndtp-telemetry-emulator:1.0` | Тег загруженного образа эмулятора |
 

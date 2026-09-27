@@ -25,7 +25,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path('/Users/ravius/projects/transport2/data')
-MODEL = Path('/Users/ravius/projects/transport2/.local/validate-tuning-2026-09-26')
+MODEL = ROOT / 'models/final'
 TASK_NAME = 'T-4-2026-09-25-backend-dashboard-infra'
 TASK_ROOT = ROOT / '.tasks'
 ARCHIVED_TASK = TASK_ROOT / '_archive' / TASK_NAME

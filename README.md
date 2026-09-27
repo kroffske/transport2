@@ -8,7 +8,7 @@
 
 ## Быстрый путь для жюри
 
-Один раз подготовить (файлы не хранятся в Git): Docker, образ эмулятора, данные `data/validate/{traffic.csv,schedule_plan.csv}`, модель `.local/validate-tuning-2026-09-26/` и карту `consumer/map/moscow.pmtiles` (источник и SHA-256 — в `consumer/map/manifest.json`).
+Модель (`models/final/`, SHA-256 в `models/final/SHA256SUMS`) и карта (`consumer/map/moscow.pmtiles`, источник и SHA-256 — в `consumer/map/manifest.json`) лежат в репозитории. Один раз подготовить (не хранятся в Git): Docker, образ эмулятора и данные `data/validate/{traffic.csv,schedule_plan.csv}` из официальной раздачи.
 
 ```bash
 docker load -i data/emulator/ndtp-telemetry-emulator.tar
@@ -34,7 +34,8 @@ Prerequisites, настройки `DEMO_SPEEDUP`/`DEMO_POST_PERIOD_S`/`DEMO_WIND
 | `scripts/` | Драйвер официального эмулятора и historical NDTP sender | `emulator_driver.py` — источник демо (profile `demo`); `replay_ndtp.py` — только инструмент тестов |
 | `tests/` | ML, NDTP/state, прогон и route, драйвер эмулятора, schedule/orchestration и consumer contracts | `.venv/bin/python -m pytest tests -q` — 78 тестов |
 | `artifacts/` | Исторические модели и метрики T-3/T-5 | Локальные файлы; прежние модели не являются текущим кандидатом |
-| `.local/validate-tuning-2026-09-26/` | Текущая модель, frozen код обучения/инференса и evidence | Игнорируется Git; production inference перенесён в owning пакет |
+| `models/final/` | Файлы текущей модели для ML-сервиса (`final_model.cbm`, `final_model.json`, `vehicle_origins.csv`) | В Git |
+| `.local/validate-tuning-2026-09-26/` | Frozen код обучения/инференса и evidence модели | Игнорируется Git; production inference перенесён в owning пакет |
 | `data/` | Официальные train/test/validate, labels, шаблон сабмита и эмулятор | Полная локальная копия; тяжёлые файлы исключены из Git |
 | `docs/source/official/` | Официальная постановка и критерии оценки | Исходный PDF без изменений |
 | `reference/initial-solution/` | Оригинальная документация начального решения | Сохранена побайтно для происхождения и контекста |
