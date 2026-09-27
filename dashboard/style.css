@@ -6,6 +6,8 @@
   --focus: #2f6f9f;
   font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--ink); background: var(--bg);
 }
+/* stop role tokens (shared with T-16) */
+:root { --stop-passed: #a9b3ba; --stop-ahead: #1b2a36; --stop-after: #6b7780; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { display: flex; flex-direction: column; overflow: hidden; }
@@ -222,8 +224,13 @@ kbd { margin-left: 6px; font: 600 10px ui-monospace, Menlo, monospace; padding: 
 .line.ahead { background: #1565c0; height: 5px; box-shadow: 0 0 0 1.5px #fff; }
 .line.leader { height: 0; border-top: 2px dashed #1b2a36; border-radius: 0; }
 .line.passed { background: #a4b0b9; height: 5px; }
-.stop { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2.5px solid #1b2a36; }
-.stop.passed { width: 8px; height: 8px; border: 1.5px solid #a9b3ba; }
+.line.after { height: 3.5px; border-radius: 0; background: repeating-linear-gradient(90deg, var(--stop-after) 0 7px, transparent 7px 12px); }
+.legend-group { display: grid; gap: 4px; }
+.legend-group[hidden] { display: none; }
+/* Stop roles as on the map (map-symbols.js stopLook): shape and ring, never a severity colour. */
+.legend-stop { display: inline-block; flex: none; width: 15px; height: 15px; border-radius: 50%; background: #fff; border: 3px solid var(--stop-ahead); }
+.legend-stop[data-stop=passed] { width: 8px; height: 8px; margin: 0 3.5px; border: 0; background: var(--stop-passed); }
+.legend-stop[data-stop=after] { border: 3px dashed var(--stop-after); }
 .legend-symbol { display: inline-block; margin: -5px -4px; } /* bitmaps from map-symbols.js, padding included */
 .maplibregl-ctrl-bottom-left .maplibregl-ctrl-attrib { font-size: 11px; }
 
