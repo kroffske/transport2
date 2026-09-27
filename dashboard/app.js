@@ -872,7 +872,7 @@ function renderCard() {
   if (!locationOk(v) || !gpsValid(v)) {
     notes.push(el('p', {className: 'card-note', 'data-key': 'gps-note'}, gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен — отмечено диспетчером; на карте последняя позиция, фиолетовая иконка с «×».'
       : locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
-      : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект не показан на карте.'));
+      : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект на карте не показан.'));
   }
   const parts = [top, off, ...notes, stepsBlock(view, v), routeBlock(v), incident ? incidentBlock(incident, v) : null, facts, tech].filter(Boolean);
   // Another vehicle gets a fresh card; the same vehicle is patched in place, so focus, typing, the

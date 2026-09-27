@@ -160,9 +160,15 @@ async function w13Card(page, label, frameId) {
   const leaks = TECH_PATTERNS.filter(re => re.test(visible)).map(String);
   check(leaks.length === 0 && await page.locator('#card-tech').evaluate(d => !d.open), `${label}: no technical identifiers outside the collapsed «Технические подробности» (${leaks.join(' ') || 'none'}, C-1)`);
   if (frameId != null) {
-    const shownFrame = await page.locator('#model-link').getAttribute('data-frame');
-    const title = await cardTitle(page);
-    const nowFrame = ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).find(v => String(v.tr_id) === title)?.prediction_input_frame_id;
+    // Live frames move every poll and the card lags one poll: retry for up to ~4 s until they meet.
+    let shownFrame = null, nowFrame = null;
+    for (let i = 0; i < 6; i += 1) {
+      const title = await cardTitle(page);
+      nowFrame = ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).find(v => String(v.tr_id) === title)?.prediction_input_frame_id;
+      shownFrame = await page.locator('#model-link').getAttribute('data-frame');
+      if (shownFrame === String(frameId) || shownFrame === String(nowFrame)) break;
+      await page.waitForTimeout(700);
+    }
     check(shownFrame === String(frameId) || shownFrame === String(nowFrame), `${label}: #model-link data-frame = prediction_input_frame_id ${shownFrame} (C-1)`);
   }
   const body = await page.locator('body').innerText();
@@ -304,10 +310,16 @@ try {
         const targetRow = page.locator('.stops li[data-role=target]');
         const expected = routeBody.prediction_s != null ? shiftedText(target.time, routeBody.prediction_s, {seconds: true}) : null;
         // Live forecasts move between two reads: the row is compared with the route read before and after.
-        const shown = await targetRow.textContent();
-        const again = (await api(page, `/api/route/${encodeURIComponent(id)}`)).body;
-        const target2 = (again?.stops ?? []).find(s => s.role === 'target');
-        const expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s, {seconds: true}) : null;
+        // The card redraws its route every few seconds: give it up to ~4 s to catch up with the latest read.
+        let shown = await targetRow.textContent(), expected2 = null;
+        for (let i = 0; i < 6; i += 1) {
+          const again = (await api(page, `/api/route/${encodeURIComponent(id)}`)).body;
+          const target2 = (again?.stops ?? []).find(s => s.role === 'target');
+          expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s, {seconds: true}) : null;
+          shown = await targetRow.textContent();
+          if (!expected || shown.includes(expected) || (expected2 && shown.includes(expected2))) break;
+          await page.waitForTimeout(700);
+        }
         check(await targetRow.count() === 1 && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели')
           && (!expected || shown.includes(expected) || (expected2 && shown.includes(expected2))), `card: target = plan + prediction_s «прогноз модели» (${expected}${expected2 && expected2 !== expected ? ` / ${expected2}` : ''}; shown «${shown.replace(/\s+/g, ' ')}» under «${(await page.locator('.stops li[data-group=target]').textContent()).replace(/\s+/g, ' ')}»)`);
         check(await page.locator('.stop-label[data-kind=target]').count() === 1
@@ -372,7 +384,12 @@ try {
       await shot(page, 'live-4-no-prediction-1920.png');
     } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
     // Live rows change: take the invalid-GPS vehicle from a fresh snapshot and check the card against the row it shows.
-    const invalid = ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).find(v => !v.location_valid);
+    // Raw GPS validity flips every few seconds live (jump / out_of_map): pick a vehicle invalid in two reads one poll apart.
+    const invalidNow = async () => ((await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? []).filter(v => !v.location_valid);
+    const firstRead = new Map((await invalidNow()).map(v => [String(v.tr_id), coordOk(v.lon, v.lat)]));
+    await page.waitForTimeout(POLL_SPAN_MS);
+    const secondRead = await invalidNow();
+    const invalid = secondRead.find(v => firstRead.get(String(v.tr_id)) === coordOk(v.lon, v.lat)) ?? secondRead[0];
     if (invalid) {
       await page.locator(`#vehicles .vehicle[data-id="${invalid.tr_id}"]`).click();
       // The card shows the last poll; the row is read on both sides of one poll so a GPS fix
@@ -382,7 +399,7 @@ try {
       const before = await rowOf();
       await page.waitForTimeout(POLL_SPAN_MS);
       const row = await rowOf();
-      if (before?.location_valid !== row?.location_valid) skipped.push(`live: ${invalid.tr_id} changed GPS validity during the check — invalid-GPS card not asserted`);
+      if (before?.location_valid !== row?.location_valid || coordOk(before?.lon, before?.lat) !== coordOk(row?.lon, row?.lat)) skipped.push(`live: ${invalid.tr_id} changed GPS validity or position during the check — invalid-GPS card not asserted`);
       else if (row && !row.location_valid && coordOk(row.lon, row.lat)) {
         // lon/lat is the last valid position: drawn grey with «?», the card says so.
         check(await cardTitle(page) === String(invalid.tr_id) && (await cardText(page)).includes('Последний кадр без валидного GPS')
@@ -390,8 +407,10 @@ try {
         'invalid GPS: drawn at the last valid position with «?», card says so');
         await shot(page, 'live-5-invalid-gps-1920.png');
       } else if (row && !row.location_valid) {
-        check(await cardTitle(page) === String(invalid.tr_id) && (await cardText(page)).includes('объект на карте не показан') && await page.locator('#card-show').isDisabled()
-          && await page.locator(`.vehicle-label[data-id="${invalid.tr_id}"]`).count() === 0, 'invalid GPS without a valid position: listed, not drawn, card says so');
+        const seen = {id: row.tr_id, lon: row.lon, lat: row.lat, title: await cardTitle(page), note: (await page.locator('#card [data-key=gps-note]').textContent().catch(() => null)),
+          showDisabled: await page.locator('#card-show').isDisabled().catch(() => null), labels: await page.locator(`.vehicle-label[data-id="${invalid.tr_id}"]`).count()};
+        check(seen.title === String(invalid.tr_id) && (await cardText(page)).includes('объект на карте не показан') && seen.showDisabled === true && seen.labels === 0,
+          `invalid GPS without a valid position: listed, not drawn, card says so (${JSON.stringify(seen)})`);
       } else skipped.push(`live: ${invalid.tr_id} got a valid GPS fix during the check — invalid-GPS card not asserted`);
     } else skipped.push('live: no vehicle with invalid GPS in this snapshot');
 
@@ -981,18 +1000,20 @@ try {
     const g = bus('900043', center[0] - 0.02, center[1] - 0.01, {prediction_s: null, prediction_state: 'warming', status: 'degraded', reason: 'prediction_pending'});
     const x = bus('900044', center[0] + 0.02, center[1] - 0.012, {prediction_s: null, status: 'unavailable', reason: 'no_target_in_horizon', route_not_started: true});
     const lostBus = bus('900045', center[0] + 0.01, center[1] + 0.015, {prediction_s: null, status: 'unavailable', reason: 'vehicle_lost', lost: true, connected: false, prediction_state: 'none'});
-    setSnapshot(RUN('run-W16-0001'), [w, g, x, lostBus]);
+    const noFix = bus('900046', null, null, {lon: null, lat: null, target_lon: null, target_lat: null, location_valid: false, prediction_s: null, status: 'unavailable',
+      reason: 'no_target_in_horizon', gps_suspect: 'no_fix', gps_suspect_text: 'нет GPS-фиксации', lost: false, prediction_state: 'none'});
+    setSnapshot(RUN('run-W16-0001'), [w, g, x, lostBus, noFix]);
     state.routes = null;
     state.route = {900041: routeOf(w), 900043: routeOf(g), 900044: routeOf(x)};
     const page = await open({setup, allow: /\/api\/route\//});
     await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
     await page.waitForTimeout(POLL_SPAN_MS);
-    setSnapshot(RUN('run-W16-0001'), [{...w, prediction_s: 200}, g, x, lostBus]);
+    setSnapshot(RUN('run-W16-0001'), [{...w, prediction_s: 200}, g, x, lostBus, noFix]);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     const rowOf = id => page.locator(`#vehicles .vehicle[data-id="${id}"]`);
     // F-5 / hold: frames stopped, Backend status unavailable, the held pair with «updating».
     const heldW = {...w, prediction_s: 200, status: 'unavailable', reason: 'no_fresh_frames', prediction_state: 'updating', prediction_updating: true, connected: false};
-    setSnapshot(RUN('run-W16-0001'), [heldW, g, x, lostBus]);
+    setSnapshot(RUN('run-W16-0001'), [heldW, g, x, lostBus, noFix]);
     await page.waitForTimeout(3 * POLL_SPAN_MS);
     const rowW = await rowOf('900041').textContent();
     check(await rowOf('900041').getAttribute('data-level') === 'warning' && rowW.includes('+3 мин 20 с') && rowW.includes('обновляется') && !/устарел|нет прогноза|пропал/i.test(rowW)
@@ -1001,12 +1022,17 @@ try {
     // Warming: green, «по графику», «прогноз готовится», not counted as «Без прогноза», never dimmed.
     const rowG = await rowOf('900043').textContent();
     check(await rowOf('900043').getAttribute('data-level') === 'normal' && rowG.includes('по графику') && rowG.includes('Прогноз готовится')
-      && (await page.locator('[data-filter=nodata] b').textContent()) === '2'
+      && (await page.locator('[data-filter=nodata] b').textContent()) === '3'
       && (await page.locator('.vehicle-label[data-id="900043"]').textContent()) === '900043 · по графику'
       && await page.locator('.vehicle-label[data-id="900043"]').evaluate(l => !l.classList.contains('is-dimmed') && l.dataset.level === 'normal'),
     `W16 warming: green row «по графику · Прогноз готовится», map label «по графику», not in «Без прогноза» (${rowG.replace(/\s+/g, ' ')})`);
     check((await rowOf('900045').textContent()).includes('ТС пропало (нет данных > 5 мин)') && await rowOf('900045').getAttribute('data-level') === 'nodata',
       'W16 lost: Backend `lost` / vehicle_lost reads «ТС пропало (нет данных > 5 мин)»');
+    // No GPS fix at all (no coordinates, e.g. no_fix at the start of a run): listed, not drawn, the card says so.
+    await rowOf('900046').click();
+    await page.waitForTimeout(500);
+    check((await page.locator('#card [data-key=gps-note]').textContent()) === 'Валидной позиции нет — объект на карте не показан.' && await page.locator('#card-show').isDisabled()
+      && await page.locator('.vehicle-label[data-id="900046"]').count() === 0, 'no GPS fix and no coordinates: listed, not drawn, card «объект на карте не показан»');
     await rowOf('900043').click();
     await page.waitForTimeout(500);
     const headG = await page.locator('#card .headline').innerText();
@@ -1015,7 +1041,7 @@ try {
     `W16 warming card: «По графику · прогноз готовится», chip «По графику» (${headG.replace(/\s+/g, ' ')})`);
     await shot(page, 'regression-w16-hold-warming-1920.png');
     // F-6: the run completed — the SLA of the open event stops and says «прогон завершён».
-    setSnapshot(RUN('run-W16-0001', {state: 'completed', progress: 1, dataset_time: '2026-01-06T08:30:00'}), [heldW, g, x, lostBus]);
+    setSnapshot(RUN('run-W16-0001', {state: 'completed', progress: 1, dataset_time: '2026-01-06T08:30:00'}), [heldW, g, x, lostBus, noFix]);
     await page.waitForFunction(() => document.getElementById('run').dataset.state === 'completed', null, {timeout: 8000});
     await page.locator('#tab-events').click();
     await page.waitForTimeout(400);
