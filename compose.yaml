@@ -53,6 +53,22 @@ services:
       timeout: 3s
       retries: 6
 
+  # Scenario show only: the same consumer image without ML/Backend. The screen opens in
+  # «Демо-сценарий»; the «Поток Backend» switch honestly reports that no Backend is running.
+  ui-demo:
+    profiles: ["ui-demo"]
+    build: .
+    command: ["uvicorn", "consumer.service:app", "--host", "0.0.0.0", "--port", "8003", "--workers", "1"]
+    environment:
+      BACKEND_URL: http://backend-not-started:8001
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
   emulator:
     profiles: ["simulation"]
     image: ndtp-telemetry-emulator:1.0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from threading import Thread
@@ -81,6 +82,10 @@ def test_revisions_predictions_outages_and_recovery_over_http():
         assert consumer.get("/map/moscow.pmtiles", headers={"range": "bytes=0-126"}).status_code == 206
         assert "id=\"vehicles\"" in page.text
         assert consumer.get("/ready").json() == {"status": "ready"}
+        served = consumer.get("/static/app.js").content
+        build = consumer.get("/api/build").json()["files"]
+        assert set(build) == {"index.html", "static/app.js", "static/app.css", "static/map-worker.js"}
+        assert build["static/app.js"] == hashlib.sha256(served).hexdigest()
 
         first = consumer.get("/api/snapshot").json()
         assert first["status"] == "online"

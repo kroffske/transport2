@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 from threading import Lock
@@ -19,6 +20,8 @@ SCHEMA_VERSION = "transport.backend-vehicles.v1"
 INDEX = Path(__file__).with_name("index.html")
 ASSETS = Path(__file__).with_name("static")
 MAP = Path(__file__).with_name("map")
+# Files that make up the served dispatcher screen; their hashes identify the build a browser sees.
+BUILD_FILES = ("index.html", "static/app.js", "static/app.css", "static/map-worker.js")
 
 
 class SnapshotReader:
@@ -87,6 +90,12 @@ def create_app(backend_url: str | None = None, timeout_s: float | None = None) -
     @app.get("/api/snapshot")
     def snapshot() -> dict[str, Any]:
         return reader.read()
+
+    @app.get("/api/build")
+    def build() -> dict[str, Any]:
+        # Hashed on every request, so the answer always matches the bytes being served.
+        root = INDEX.parent
+        return {"files": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in BUILD_FILES}}
 
     @app.get("/ready")
     def ready() -> dict[str, str]:

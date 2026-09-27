@@ -2,11 +2,20 @@
 
 Единый локальный репозиторий для задачи хакатона Московского транспорта. Он объединяет официальную раздачу данных и эмулятор NDTP с начальным ML-решением, подготовленным на небольшой выборке.
 
-Локальная цепочка NDTP → Backend → отдельный ML API → live consumer реализована и проверена через Docker historical replay. Backend вычисляет текущее отклонение из прошлых GPS и плана; consumer показывает реальные обновления и деградацию после разрыва связи. Полноценный BI-интерфейс отложен.
+Локальная цепочка NDTP → Backend → отдельный ML API → live consumer реализована и проверена через Docker historical replay. Backend вычисляет текущее отклонение из прошлых GPS и плана. Consumer раздаёт диспетчерскую 2D-карту Москвы с событиями и действиями диспетчера в двух явно подписанных режимах: «Демо-сценарий» (значения заданы) и «Поток Backend». Это демонстрационный интерфейс, не полный BI.
 
 Выбранная CatBoost-модель имеет локальный MAE 44.01 с на validate и 45.00 с на test. Она обучена на 4 139 строках после исключения синтетических копий validate/test-прибытий; validate разрешён для выбора модели, но не включается в fit. Официальный score неизвестен без MAE_TARGET. Потоковый detector не сохраняет автоматически этот offline MAE.
 
-## Локальный demo
+## Быстрый путь для жюри
+
+1. Нужны Docker и файл карты `consumer/map/moscow.pmtiles` (не хранится в Git; источник и SHA-256 — в `consumer/map/manifest.json`).
+2. `docker compose --profile ui-demo up --build -d ui-demo`
+3. Открыть <http://localhost:8003/?mode=demo> → «Начать демо» (или «Далее») → «События» → карточка → «Взять в работу».
+4. «Сброс» начинает сценарий заново без перезагрузки.
+
+Это сценарный показ: значения заданы сценарием, что видно по подписи режима. Рассказ на 2–3 минуты, тезисы и ограничения — в [runbook](docs/runbooks/local-demo.md#сценарный-показ-одна-команда). Сквозной режим с моделью описан ниже.
+
+## Локальный demo: NDTP + ML
 
 При наличии локальных data/model файлов:
 
@@ -14,7 +23,7 @@
 docker compose --profile demo up --build -d
 ```
 
-Откройте [live consumer](http://localhost:8002) во время replay. Инструкция, configurable пути, часы, сбои и официальный эмулятор описаны в [runbook](docs/runbooks/local-demo.md). Для полного повторного запуска используйте `docker compose --profile demo down`.
+Откройте [consumer в режиме потока](http://localhost:8002/?mode=live) во время replay; без `?mode=live` та же страница открывает «Демо-сценарий» с заданными значениями. Инструкция, configurable пути, часы, сбои и официальный эмулятор описаны в [runbook](docs/runbooks/local-demo.md). Для полного повторного запуска используйте `docker compose --profile demo down`.
 
 ## Что где лежит
 
@@ -22,7 +31,7 @@ docker compose --profile demo up --build -d
 |---|---|---|
 | `transport_ml/` | Обучение, признаки, временное сравнение, инференс и FastAPI-сервис | Текущий direct-point API, pinned model/origin SHA и exact parity |
 | `transport_backend/` | TCP NDTP, bounded state, расписание и HTTP orchestration | Past-only computed stop detector, явные clocks и failure readback |
-| `consumer/` | Минимальная страница live polling | Читает только Backend HTTP; старые результаты помечает явно |
+| `consumer/` | Раздача диспетчерской карты, `/api/snapshot` и локальных PMTiles | Читает только Backend HTTP; старые результаты помечает явно |
 | `scripts/` | Historical NDTP sender | Receive-order lockstep replay с per-frame ack и trace |
 | `tests/` | ML, NDTP/state, schedule/orchestration и consumer contracts | 57 тестов в объединённом checkout; [независимая QA](.tasks/_archive/T-4-2026-09-25-backend-dashboard-infra/qa.md) приняла локальную цепочку |
 | `artifacts/` | Исторические модели и метрики T-3/T-5 | Локальные файлы; прежние модели не являются текущим кандидатом |
@@ -32,7 +41,7 @@ docker compose --profile demo up --build -d
 | `reference/initial-solution/` | Оригинальная документация начального решения | Сохранена побайтно для происхождения и контекста |
 | `docs/api/`, `docs/pydoc/` | Текущие OpenAPI и исторические PyDoc snapshots | Актуальные PyDoc команды находятся в runbook |
 | `notebooks/` | Четыре ноутбука аудита и моделирования T-3 | Сохраняют исторический результат T-3 |
-| `dashboard/` | Будущий диспетчерский BI-интерфейс | Ещё не реализован |
+| `dashboard/` | Исходники диспетчерской карты (MapLibre, PMTiles, Three.js), сборка в `consumer/static` | Экран карты с режимами «Демо-сценарий» и «Поток Backend»; см. [`dashboard/README.md`](dashboard/README.md) |
 
 Полное дерево и правила владения описаны в [`docs/repository-layout.md`](docs/repository-layout.md). Происхождение файлов — в [`docs/source-map.md`](docs/source-map.md). Навигация по документации начинается с [`docs/index.md`](docs/index.md).
 
@@ -52,7 +61,7 @@ docker compose --profile demo up --build -d
 
 ## Оптимизированная модель и submission
 
-Основной файл — [`submission.csv`](submission.csv): 151 строка в порядке официального шаблона. Модель и её актуальные ограничения описаны в [передаче интеграции](docs/runbooks/integration-handoff.md).
+Основной файл — [`submission.csv`](submission.csv): 151 строка в порядке официального шаблона, SHA-256 `4c324401d397c0720887c9b5a2b2d0fb931c791df70935e6cea4e670cee7b0ce`. Модель, provenance кандидата, проверка формата и статус сдачи на платформу описаны в [передаче интеграции](docs/runbooks/integration-handoff.md#кандидат-сдачи-проверено-2026-09-27).
 
 [Локальный отчёт](.local/validate-tuning-2026-09-26/report.md) содержит происхождение модели и все сравнения. При условном MAE_TARGET=30 score на validate равен 0.821; это не платформенный readback. Старые отчёты до очистки синтетики не доказывают отсутствие производных пересечений.
 
