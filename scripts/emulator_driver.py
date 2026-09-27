@@ -70,7 +70,7 @@ class Settings:
     def from_env(cls, env: dict[str, str] | None = None) -> "Settings":
         env = dict(os.environ if env is None else env)
         day = env.get("DEMO_DATE", "2026-01-06")
-        window = env.get("DEMO_WINDOW", "06:30-08:30").replace("–", "-").replace(" ", "")
+        window = env.get("DEMO_WINDOW", "00:00-23:59").replace("–", "-").replace(" ", "")
         try:
             first, last = window.split("-")
             start = datetime.fromisoformat(f"{day}T{first}")

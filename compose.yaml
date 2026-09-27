@@ -86,7 +86,7 @@ services:
       NDTP_TARGET_PORT: "9201"
       DEMO_SPEEDUP: ${DEMO_SPEEDUP:-5}
       DEMO_POST_PERIOD_S: ${DEMO_POST_PERIOD_S:-2}
-      DEMO_WINDOW: ${DEMO_WINDOW:-06:30-08:30}
+      DEMO_WINDOW: ${DEMO_WINDOW:-00:00-23:59}
       DEMO_REPEAT_MAX_S: ${DEMO_REPEAT_MAX_S:-30}
     volumes:
       - ${DATA_DIR:-./data}:/data:ro

@@ -119,7 +119,7 @@ def test_invalid_settings_are_rejected(tmp_path):
         _settings(tmp_path / "t.csv", DEMO_WINDOW="08:30-06:30")
     defaults = Settings.from_env({})
     assert (defaults.speedup, defaults.post_period_s, defaults.repeat_max_s) == (5, 2.0, 30.0)
-    assert (defaults.dataset_start, defaults.dataset_end) == (START, datetime(2026, 1, 6, 8, 30))
+    assert (defaults.dataset_start, defaults.dataset_end) == (datetime(2026, 1, 6), datetime(2026, 1, 6, 23, 59))
 
 
 class FakeWorld:
