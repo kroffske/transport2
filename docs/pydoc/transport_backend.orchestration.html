@@ -185,7 +185,7 @@ Data descriptors inherited from <a href="builtins.html#BaseException">builtins.B
 <td class="section-title" colspan=3>&nbsp;<br><a name="Orchestrator">class <strong>Orchestrator</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
     
 <tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
-<td class="decor title-decor" colspan=2><span class="code"><a href="#Orchestrator">Orchestrator</a>(state:&nbsp;'TelemetryState',&nbsp;server:&nbsp;'NDTPServer',&nbsp;schedule:&nbsp;'Schedule',&nbsp;model:&nbsp;'<a href="#ModelClient">ModelClient</a>',&nbsp;*,&nbsp;predict_interval_s:&nbsp;'float'&nbsp;=&nbsp;60.0,&nbsp;alert_cooldown_s:&nbsp;'float'&nbsp;=&nbsp;300.0,&nbsp;queue_limit:&nbsp;'int'&nbsp;=&nbsp;32,&nbsp;tick_interval_s:&nbsp;'float&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;off_route_m:&nbsp;'float'&nbsp;=&nbsp;400.0,&nbsp;off_route_clear_m:&nbsp;'float'&nbsp;=&nbsp;250.0)<br>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#Orchestrator">Orchestrator</a>(state:&nbsp;'TelemetryState',&nbsp;server:&nbsp;'NDTPServer',&nbsp;schedule:&nbsp;'Schedule',&nbsp;model:&nbsp;'<a href="#ModelClient">ModelClient</a>',&nbsp;*,&nbsp;predict_interval_s:&nbsp;'float'&nbsp;=&nbsp;60.0,&nbsp;alert_cooldown_s:&nbsp;'float'&nbsp;=&nbsp;300.0,&nbsp;queue_limit:&nbsp;'int'&nbsp;=&nbsp;32,&nbsp;tick_interval_s:&nbsp;'float&nbsp;|&nbsp;None'&nbsp;=&nbsp;None,&nbsp;off_route_m:&nbsp;'float'&nbsp;=&nbsp;400.0,&nbsp;off_route_clear_m:&nbsp;'float'&nbsp;=&nbsp;250.0,&nbsp;prediction_hold_s:&nbsp;'float'&nbsp;=&nbsp;180.0)<br>
 &nbsp;<br>
 Bounded&nbsp;prediction&nbsp;worker;&nbsp;HTTP&nbsp;readbacks&nbsp;never&nbsp;execute&nbsp;model&nbsp;I/O.<br>
 &nbsp;<br>
@@ -196,14 +196,17 @@ With&nbsp;``tick_interval_s``&nbsp;an&nbsp;own&nbsp;wall-clock&nbsp;tick&nbsp;ev
 vehicles,&nbsp;so&nbsp;predictions&nbsp;do&nbsp;not&nbsp;depend&nbsp;on&nbsp;anyone&nbsp;polling&nbsp;the&nbsp;snapshot.<br>
 A&nbsp;success&nbsp;for&nbsp;the&nbsp;current&nbsp;target&nbsp;stays&nbsp;``normal``&nbsp;while&nbsp;its&nbsp;dataset&nbsp;age&nbsp;is<br>
 at&nbsp;most&nbsp;``fresh_s``&nbsp;(1.5&nbsp;x&nbsp;``predict_interval_s``);&nbsp;newer&nbsp;input&nbsp;then&nbsp;only<br>
-sets&nbsp;``prediction_updating``.<br>&nbsp;</span></td></tr>
+sets&nbsp;``prediction_updating``.<br>
+When&nbsp;the&nbsp;target&nbsp;changes,&nbsp;a&nbsp;job&nbsp;for&nbsp;the&nbsp;new&nbsp;target&nbsp;jumps&nbsp;the&nbsp;queue;&nbsp;until<br>
+it&nbsp;answers,&nbsp;for&nbsp;at&nbsp;most&nbsp;``prediction_hold_s``&nbsp;of&nbsp;dataset&nbsp;time,&nbsp;the&nbsp;row<br>
+keeps&nbsp;the&nbsp;last&nbsp;success&nbsp;as&nbsp;a&nbsp;whole&nbsp;pair&nbsp;(its&nbsp;target&nbsp;and&nbsp;its&nbsp;prediction).<br>&nbsp;</span></td></tr>
 <tr><td>&nbsp;</td>
 <td class="singlecolumn">Methods defined here:<br>
 <dl><dt><a name="Orchestrator-__enter__"><strong>__enter__</strong></a>(self) -&gt; "'Orchestrator'"</dt></dl>
 
 <dl><dt><a name="Orchestrator-__exit__"><strong>__exit__</strong></a>(self, *_: 'object') -&gt; 'None'</dt></dl>
 
-<dl><dt><a name="Orchestrator-__init__"><strong>__init__</strong></a>(self, state: 'TelemetryState', server: 'NDTPServer', schedule: 'Schedule', model: 'ModelClient', *, predict_interval_s: 'float' = 60.0, alert_cooldown_s: 'float' = 300.0, queue_limit: 'int' = 32, tick_interval_s: 'float | None' = None, off_route_m: 'float' = 400.0, off_route_clear_m: 'float' = 250.0)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+<dl><dt><a name="Orchestrator-__init__"><strong>__init__</strong></a>(self, state: 'TelemetryState', server: 'NDTPServer', schedule: 'Schedule', model: 'ModelClient', *, predict_interval_s: 'float' = 60.0, alert_cooldown_s: 'float' = 300.0, queue_limit: 'int' = 32, tick_interval_s: 'float | None' = None, off_route_m: 'float' = 400.0, off_route_clear_m: 'float' = 250.0, prediction_hold_s: 'float' = 180.0)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
 
 <dl><dt><a name="Orchestrator-close"><strong>close</strong></a>(self) -&gt; 'None'</dt></dl>
 
@@ -216,10 +219,11 @@ sets&nbsp;``prediction_updating``.<br>&nbsp;</span></td></tr>
 Target,&nbsp;deviation,&nbsp;prediction&nbsp;and&nbsp;revision&nbsp;come&nbsp;from&nbsp;the&nbsp;same&nbsp;row&nbsp;the<br>
 snapshot&nbsp;served;&nbsp;the&nbsp;schedule&nbsp;is&nbsp;read,&nbsp;never&nbsp;re-evaluated&nbsp;here.</span></dd></dl>
 
-<dl><dt><a name="Orchestrator-routes"><strong>routes</strong></a>(self) -&gt; 'dict'</dt><dd><span class="code">Planned-stop&nbsp;lines&nbsp;of&nbsp;all&nbsp;run&nbsp;vehicles&nbsp;in&nbsp;the&nbsp;display&nbsp;window,&nbsp;with&nbsp;off-route&nbsp;flags.<br>
+<dl><dt><a name="Orchestrator-routes"><strong>routes</strong></a>(self) -&gt; 'dict'</dt><dd><span class="code">Route&nbsp;lines&nbsp;of&nbsp;all&nbsp;run&nbsp;vehicles&nbsp;in&nbsp;the&nbsp;display&nbsp;window,&nbsp;with&nbsp;off-route&nbsp;flags.<br>
 &nbsp;<br>
-Flags&nbsp;come&nbsp;from&nbsp;the&nbsp;last&nbsp;computed&nbsp;vehicle&nbsp;rows;&nbsp;the&nbsp;line&nbsp;is&nbsp;the&nbsp;plan's<br>
-stops&nbsp;with&nbsp;``now&nbsp;-&nbsp;15&nbsp;min&nbsp;&lt;=&nbsp;time&nbsp;&lt;=&nbsp;now&nbsp;+&nbsp;45&nbsp;min``&nbsp;inside&nbsp;the&nbsp;map&nbsp;bbox.</span></dd></dl>
+Flags&nbsp;come&nbsp;from&nbsp;the&nbsp;last&nbsp;computed&nbsp;vehicle&nbsp;rows;&nbsp;the&nbsp;line&nbsp;runs&nbsp;through&nbsp;the<br>
+plan's&nbsp;stops&nbsp;with&nbsp;``now&nbsp;-&nbsp;15&nbsp;min&nbsp;&lt;=&nbsp;time&nbsp;&lt;=&nbsp;now&nbsp;+&nbsp;45&nbsp;min``&nbsp;inside&nbsp;the&nbsp;map<br>
+bbox&nbsp;along&nbsp;their&nbsp;road&nbsp;shapes;&nbsp;``line_times``&nbsp;is&nbsp;set&nbsp;on&nbsp;stop&nbsp;points&nbsp;only.</span></dd></dl>
 
 <dl><dt><a name="Orchestrator-snapshot"><strong>snapshot</strong></a>(self) -&gt; 'dict'</dt><dd><span class="code">Vehicles&nbsp;of&nbsp;the&nbsp;current&nbsp;run&nbsp;only;&nbsp;before&nbsp;registration&nbsp;an&nbsp;empty&nbsp;waiting&nbsp;view.</span></dd></dl>
 
@@ -353,11 +357,19 @@ Return&nbsp;the&nbsp;current&nbsp;time&nbsp;in&nbsp;nanoseconds&nbsp;since&nbsp;
 <td class="section-title" colspan=3>&nbsp;<br><strong class="bigsection">Data</strong></td></tr>
     
 <tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
-<td class="singlecolumn"><strong>HEADING_MAX_AGE_S</strong> = 120.0<br>
+<td class="singlecolumn"><strong>GPS_FRAME_RECENT_S</strong> = 120.0<br>
+<strong>GPS_JUMP_M</strong> = 500.0<br>
+<strong>GPS_JUMP_MPS</strong> = 50.0<br>
+<strong>GPS_JUMP_WINDOW_S</strong> = 300.0<br>
+<strong>GPS_NO_FIX_S</strong> = 600.0<br>
+<strong>GPS_SUSPECT_TEXT</strong> = {'far_from_route': 'Далеко от маршрута наряда (больше 400 м)', 'jump': 'Скачок координат: быстрее 180 км/ч между соседними точками', 'no_fix': 'Датчик на связи, но не даёт валидных координат', 'no_plan': 'Нет наряда в плане: маршрут и прогноз не строятся', 'out_of_map': 'Координаты вне области карты'}<br>
+<strong>HEADING_MAX_AGE_S</strong> = 120.0<br>
 <strong>HEADING_MIN_SPEED_KMH</strong> = 3.0<br>
 <strong>LINE_AFTER_NOW</strong> = datetime.timedelta(seconds=2700)<br>
 <strong>LINE_BEFORE_NOW</strong> = datetime.timedelta(seconds=900)<br>
 <strong>MAP_BBOX</strong> = (37.25, 55.5, 38.0, 56.0)<br>
+<strong>M_PER_DEG_LAT</strong> = 110540.0<br>
+<strong>M_PER_DEG_LON_EQUATOR</strong> = 111320.0<br>
 <strong>ROUTE_AFTER_NOW_NO_TARGET</strong> = datetime.timedelta(seconds=1800)<br>
 <strong>ROUTE_AFTER_TARGET</strong> = datetime.timedelta(seconds=900)<br>
 <strong>ROUTE_BEFORE_NOW</strong> = datetime.timedelta(seconds=300)<br>

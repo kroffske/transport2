@@ -89,14 +89,16 @@ Data and other attributes defined here:<br>
 <td class="section-title" colspan=3>&nbsp;<br><a name="Schedule">class <strong>Schedule</strong></a>(<a href="builtins.html#object">builtins.object</a>)</td></tr>
     
 <tr><td class="decor title-decor" rowspan=2><span class="code">&nbsp;&nbsp;&nbsp;</span></td>
-<td class="decor title-decor" colspan=2><span class="code"><a href="#Schedule">Schedule</a>(plan:&nbsp;'pd.DataFrame',&nbsp;*,&nbsp;stop_radius_m:&nbsp;'float'&nbsp;=&nbsp;35.0,&nbsp;stop_speed_kmh:&nbsp;'float'&nbsp;=&nbsp;3.0,&nbsp;observation_lag_s:&nbsp;'float'&nbsp;=&nbsp;900.0)<br>
+<td class="decor title-decor" colspan=2><span class="code"><a href="#Schedule">Schedule</a>(plan:&nbsp;'pd.DataFrame',&nbsp;*,&nbsp;stop_radius_m:&nbsp;'float'&nbsp;=&nbsp;35.0,&nbsp;stop_speed_kmh:&nbsp;'float'&nbsp;=&nbsp;3.0,&nbsp;observation_lag_s:&nbsp;'float'&nbsp;=&nbsp;900.0,&nbsp;shapes:&nbsp;'RouteShapes&nbsp;|&nbsp;None'&nbsp;=&nbsp;None)<br>
 &nbsp;<br>
 One&nbsp;owner&nbsp;for&nbsp;target&nbsp;choice,&nbsp;ordered&nbsp;stop&nbsp;matching&nbsp;and&nbsp;the&nbsp;planned-stop&nbsp;line.<br>&nbsp;</span></td></tr>
 <tr><td>&nbsp;</td>
 <td class="singlecolumn">Methods defined here:<br>
-<dl><dt><a name="Schedule-__init__"><strong>__init__</strong></a>(self, plan: 'pd.DataFrame', *, stop_radius_m: 'float' = 35.0, stop_speed_kmh: 'float' = 3.0, observation_lag_s: 'float' = 900.0)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
+<dl><dt><a name="Schedule-__init__"><strong>__init__</strong></a>(self, plan: 'pd.DataFrame', *, stop_radius_m: 'float' = 35.0, stop_speed_kmh: 'float' = 3.0, observation_lag_s: 'float' = 900.0, shapes: 'RouteShapes | None' = None)</dt><dd><span class="code">Initialize&nbsp;self.&nbsp;&nbsp;See&nbsp;help(type(self))&nbsp;for&nbsp;accurate&nbsp;signature.</span></dd></dl>
 
 <dl><dt><a name="Schedule-counters"><strong>counters</strong></a>(self) -&gt; 'dict[str, int]'</dt></dl>
+
+<dl><dt><a name="Schedule-has_shapes"><strong>has_shapes</strong></a>(self, tr_id: 'str') -&gt; 'bool'</dt><dd><span class="code">Whether&nbsp;road&nbsp;shapes&nbsp;exist&nbsp;for&nbsp;``tr_id``&nbsp;(else&nbsp;lines&nbsp;are&nbsp;straight).</span></dd></dl>
 
 <dl><dt><a name="Schedule-ml_rows"><strong>ml_rows</strong></a>(self, tr_id: 'str') -&gt; 'list[dict[str, str]]'</dt></dl>
 
@@ -111,13 +113,19 @@ evidence;&nbsp;future&nbsp;confidence&nbsp;then&nbsp;requires&nbsp;a&nbsp;confir
 
 <dl><dt><a name="Schedule-observed_stop_ids"><strong>observed_stop_ids</strong></a>(self, tr_id: 'str') -&gt; 'frozenset[str]'</dt><dd><span class="code">Planned&nbsp;arrivals&nbsp;the&nbsp;detector&nbsp;has&nbsp;already&nbsp;observed&nbsp;(first&nbsp;observations).</span></dd></dl>
 
-<dl><dt><a name="Schedule-route_nearest"><strong>route_nearest</strong></a>(self, tr_id: 'str', lon: 'float', lat: 'float') -&gt; 'tuple[float, float, float] | None'</dt><dd><span class="code">Closest&nbsp;point&nbsp;``(lon,&nbsp;lat,&nbsp;distance_m)``&nbsp;of&nbsp;the&nbsp;whole-day&nbsp;planned-stop&nbsp;line.</span></dd></dl>
+<dl><dt><a name="Schedule-route_nearest"><strong>route_nearest</strong></a>(self, tr_id: 'str', lon: 'float', lat: 'float') -&gt; 'tuple[float, float, float] | None'</dt><dd><span class="code">Closest&nbsp;point&nbsp;``(lon,&nbsp;lat,&nbsp;distance_m)``&nbsp;of&nbsp;the&nbsp;whole-day&nbsp;line&nbsp;(stops&nbsp;+&nbsp;shapes).</span></dd></dl>
 
-<dl><dt><a name="Schedule-route_offset_m"><strong>route_offset_m</strong></a>(self, tr_id: 'str', lon: 'float', lat: 'float') -&gt; 'float | None'</dt><dd><span class="code">Distance&nbsp;to&nbsp;the&nbsp;line&nbsp;through&nbsp;all&nbsp;of&nbsp;the&nbsp;day's&nbsp;planned&nbsp;stops&nbsp;(time&nbsp;order).<br>
+<dl><dt><a name="Schedule-route_offset_m"><strong>route_offset_m</strong></a>(self, tr_id: 'str', lon: 'float', lat: 'float') -&gt; 'float | None'</dt><dd><span class="code">Distance&nbsp;to&nbsp;the&nbsp;whole-day&nbsp;line:&nbsp;planned&nbsp;stops&nbsp;in&nbsp;time&nbsp;order&nbsp;joined&nbsp;by&nbsp;road&nbsp;shapes.<br>
 &nbsp;<br>
 ``None``&nbsp;when&nbsp;the&nbsp;plan&nbsp;has&nbsp;fewer&nbsp;than&nbsp;two&nbsp;stops&nbsp;with&nbsp;coordinates.&nbsp;This&nbsp;is<br>
 a&nbsp;spatial&nbsp;check&nbsp;("does&nbsp;the&nbsp;vehicle&nbsp;drive&nbsp;where&nbsp;its&nbsp;assignment&nbsp;goes"),<br>
 not&nbsp;a&nbsp;schedule-position&nbsp;check.</span></dd></dl>
+
+<dl><dt><a name="Schedule-shape_line"><strong>shape_line</strong></a>(self, tr_id: 'str', stops: 'list[Arrival]') -&gt; 'tuple[list[tuple[float, float]], list[int]]'</dt><dd><span class="code">Polyline&nbsp;through&nbsp;``stops``&nbsp;in&nbsp;order&nbsp;and&nbsp;the&nbsp;index&nbsp;of&nbsp;each&nbsp;stop&nbsp;in&nbsp;it.<br>
+&nbsp;<br>
+Stops&nbsp;are&nbsp;anchors&nbsp;and&nbsp;appear&nbsp;exactly&nbsp;at&nbsp;their&nbsp;coordinates;&nbsp;between&nbsp;two<br>
+consecutive&nbsp;stops&nbsp;the&nbsp;road&nbsp;shape&nbsp;of&nbsp;that&nbsp;pair&nbsp;is&nbsp;inserted&nbsp;when&nbsp;known,<br>
+otherwise&nbsp;the&nbsp;segment&nbsp;stays&nbsp;straight.</span></dd></dl>
 
 <dl><dt><a name="Schedule-stops_between"><strong>stops_between</strong></a>(self, tr_id: 'str', low: 'datetime', high: 'datetime') -&gt; 'list[Arrival]'</dt><dd><span class="code">Planned&nbsp;stops&nbsp;with&nbsp;``low&nbsp;&lt;=&nbsp;time&nbsp;&lt;=&nbsp;high``,&nbsp;in&nbsp;plan&nbsp;(time)&nbsp;order.</span></dd></dl>
 
@@ -251,5 +259,6 @@ caller's&nbsp;order&nbsp;decides&nbsp;between&nbsp;overlapping&nbsp;out-and-back
     
 <tr><td class="decor data-decor"><span class="code">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></td><td>&nbsp;</td>
 <td class="singlecolumn"><strong>M_PER_DEG_LAT</strong> = 110540.0<br>
-<strong>M_PER_DEG_LON_EQUATOR</strong> = 111320.0</td></tr></table>
+<strong>M_PER_DEG_LON_EQUATOR</strong> = 111320.0<br>
+<strong>RouteShapes</strong> = dict[str, dict[tuple[str, str], transport_backend.route_shapes.SegmentShape]]</td></tr></table>
 </body></html>
