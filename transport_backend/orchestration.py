@@ -22,7 +22,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from transport_ml.data import TRAFFIC_COLUMNS
 
 from .ingest import NDTPServer
-from .schedule import Arrival, Schedule, nearest_on_polyline
+from .schedule import M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, Arrival, Schedule, nearest_on_polyline
 from .state import TelemetryState
 
 # Display area of the bundled basemap (consumer/map/manifest.json "coverage").
@@ -41,6 +41,19 @@ SPLIT_BEFORE_NOW = timedelta(minutes=10)
 SPLIT_AFTER_NOW = timedelta(minutes=20)
 HEADING_MIN_SPEED_KMH = 3.0
 HEADING_MAX_AGE_S = 120.0
+# GPS hints (data seconds / metres); thresholds are explained in docs/api/backend-v1.md.
+GPS_NO_FIX_S = 600.0        # frames keep coming, but no valid fix for this long
+GPS_FRAME_RECENT_S = 120.0  # "frames keep coming": the latest frame is this recent
+GPS_JUMP_M = 500.0          # consecutive valid fixes this far apart ...
+GPS_JUMP_MPS = 50.0         # ... faster than 180 km/h is a coordinate jump
+GPS_JUMP_WINDOW_S = 300.0   # a jump is reported for this long
+GPS_SUSPECT_TEXT = {
+    "no_fix": "Датчик на связи, но не даёт валидных координат",
+    "out_of_map": "Координаты вне области карты",
+    "jump": "Скачок координат: быстрее 180 км/ч между соседними точками",
+    "far_from_route": "Далеко от маршрута наряда (больше 400 м)",
+    "no_plan": "Нет наряда в плане: маршрут и прогноз не строятся",
+}
 
 
 class RouteUnavailable(LookupError):
@@ -536,6 +549,7 @@ class Orchestrator:
         if held is not None:
             age_s = (now - datetime.fromisoformat(held["last_success_at"])).total_seconds()
             updating = True
+        route_check = self._route_check(tr_id, state["lon"], state["lat"], now)
         return {"tr_id": tr_id, "unit_id": unit_id,
                 "input_frame_id": frame_id,
                 "input_context_revision": context_revision,
@@ -548,7 +562,9 @@ class Orchestrator:
                 "receive_time": latest["receive_time"] if latest else None,
                 "gps_age_s": state["gps_age_s"], "connected": state["connected"],
                 "heading": _heading(history, now),
-                **self._route_check(tr_id, state["lon"], state["lat"], now),
+                **route_check,
+                **_gps_suspect(history, now, state, route_check["off_route"],
+                               bool(self.schedule.by_vehicle.get(tr_id))),
                 "target_stop_id": shown_target.stop_id if shown_target else None,
                 "target_time_begin": shown_target.time.isoformat() if shown_target else None,
                 "target_lon": (shown_target.lon if shown_target
@@ -735,3 +751,46 @@ def _heading(history: list[dict], now: datetime) -> int | None:
                 and _finite(float(speed), float(heading)) and float(speed) > HEADING_MIN_SPEED_KMH):
             return max(0, min(360, round(float(heading))))
     return None
+
+
+def _gps_suspect(history: list[dict], now: datetime, state: dict, off_route: bool | None,
+                 has_plan: bool) -> dict:
+    """One hint why the vehicle's position or forecast may be off; never changes status.
+
+    First match wins: no valid fix while frames arrive, position outside the map,
+    a recent coordinate jump, far from the assignment line, no assignment at all.
+    """
+    kind = None
+    latest = history[-1] if history else None
+    frames_recent = (latest is not None and state["connected"]
+                     and (now - datetime.fromisoformat(str(latest["event_time"]))).total_seconds()
+                     <= GPS_FRAME_RECENT_S)
+    lon, lat = state["lon"], state["lat"]
+    west, south, east, north = MAP_BBOX
+    if frames_recent and (state["gps_age_s"] is None or state["gps_age_s"] > GPS_NO_FIX_S):
+        kind = "no_fix"
+    elif lon is not None and lat is not None and not (west <= lon <= east and south <= lat <= north):
+        kind = "out_of_map"
+    elif _recent_jump(history, now):
+        kind = "jump"
+    elif off_route:
+        kind = "far_from_route"
+    elif not has_plan:
+        kind = "no_plan"
+    return {"gps_suspect": kind, "gps_suspect_text": GPS_SUSPECT_TEXT.get(kind) if kind else None}
+
+
+def _recent_jump(history: list[dict], now: datetime) -> bool:
+    """Two consecutive valid fixes > 500 m apart at > 50 m/s within the last 300 s of data."""
+    previous: tuple[datetime, float, float] | None = None
+    for record in history:  # ordered by event_time
+        if not record["location_valid"] or record["lon"] is None or record["lat"] is None:
+            continue
+        at, lon, lat = datetime.fromisoformat(str(record["event_time"])), float(record["lon"]), float(record["lat"])
+        if previous is not None and (now - at).total_seconds() <= GPS_JUMP_WINDOW_S:
+            metres = math.hypot((lon - previous[1]) * M_PER_DEG_LON_EQUATOR * math.cos(math.radians(lat)),
+                                (lat - previous[2]) * M_PER_DEG_LAT)
+            if metres > GPS_JUMP_M and metres / max((at - previous[0]).total_seconds(), 1.0) > GPS_JUMP_MPS:
+                return True
+        previous = (at, lon, lat)
+    return False

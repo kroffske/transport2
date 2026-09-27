@@ -383,3 +383,50 @@ def test_service_loads_route_shapes_from_the_data_dir(tmp_path):
         route = client.get("/v1/routes").json()["routes"][0]
         assert route["line_shape"] == "road"
         assert route["line"][:4] == DETOUR
+
+
+# ------------------------------------------------------------- GPS hints
+
+def test_gps_suspect_no_plan_out_of_map_and_far_from_route(world):
+    flow, state, now = world
+    now[0] = DAY + timedelta(hours=6, minutes=30)
+    assert state.accept(_record("v", 1, "2026-01-06 06:29:00", 37.515, LAT))
+    assert state.accept(_record("none", 4, "2026-01-06 06:29:50", 37.6, 55.7))
+    assert state.accept(_record("late", 2, "2026-01-06 06:29:50", 37.1, 56.1))
+    assert state.accept(_record("one", 3, "2026-01-06 06:29:50", 37.6, 55.6 + NORTH_1KM))
+    rows = {row["tr_id"]: row for row in flow.snapshot()["vehicles"]}
+    assert (rows["v"]["gps_suspect"], rows["v"]["gps_suspect_text"]) == (None, None)
+    assert rows["none"]["gps_suspect"] == "no_plan"
+    assert rows["none"]["gps_suspect_text"] == "Нет наряда в плане: маршрут и прогноз не строятся"
+    assert rows["late"]["gps_suspect"] == "out_of_map"  # also far from its line: map wins
+    # "one" has a single stop, so no line and no off-route flag: nothing to hint.
+    assert rows["one"]["gps_suspect"] is None
+    assert state.accept(_record("v", 1, "2026-01-06 06:29:55", 37.515, LAT + NORTH_1KM, request_id=3))
+    far = next(row for row in flow.snapshot()["vehicles"] if row["tr_id"] == "v")
+    assert far["off_route"] is True and far["gps_suspect"] == "far_from_route"
+
+
+def test_gps_suspect_jump_expires_and_no_fix_leaves_status_alone(world):
+    flow, state, now = world
+    now[0] = DAY + timedelta(hours=6, minutes=30)
+    # 1.25 km in 5 s along the line: a coordinate jump.
+    assert state.accept(_record("v", 1, "2026-01-06 06:29:50", 37.505, LAT))
+    assert state.accept(_record("v", 1, "2026-01-06 06:29:55", 37.525, LAT, request_id=3))
+    row = next(row for row in flow.snapshot()["vehicles"] if row["tr_id"] == "v")
+    assert row["gps_suspect"] == "jump"
+    assert row["gps_suspect_text"] == "Скачок координат: быстрее 180 км/ч между соседними точками"
+    revision = row["revision"]
+    now[0] = DAY + timedelta(hours=6, minutes=35)  # the jump is 305 s old
+    row = next(row for row in flow.snapshot()["vehicles"] if row["tr_id"] == "v")
+    assert row["gps_suspect"] is None and row["revision"] > revision
+    # Frames keep coming without a valid fix for more than 600 s of data.
+    for index, second in enumerate(range(0, 700, 60)):
+        at = DAY + timedelta(hours=6, minutes=35, seconds=second)
+        assert state.accept(_record("v", 1, at.strftime("%Y-%m-%d %H:%M:%S"), 37.525, LAT,
+                                    valid=False, request_id=10 + index))
+    now[0] = DAY + timedelta(hours=6, minutes=46)
+    row = next(row for row in flow.snapshot()["vehicles"] if row["tr_id"] == "v")
+    assert row["gps_age_s"] > 600 and row["gps_suspect"] == "no_fix"
+    assert row["gps_suspect_text"] == "Датчик на связи, но не даёт валидных координат"
+    # A hint only: status and reason stay what they were.
+    assert (row["status"], row["reason"]) == ("unavailable", "no_confident_observed_stop")
