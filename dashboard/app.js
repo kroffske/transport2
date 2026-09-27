@@ -33,9 +33,21 @@ const LEVEL = {
   severe: {label: 'Сильная задержка'},
   warning: {label: 'Предупреждение'},
   normal: {label: 'В пределах нормы'},
-  nodata: {label: 'Нет прогноза'},
+  nodata: {label: 'Без прогноза'},
 };
-const FILTER_LABEL = {all: 'Все', warning: 'С предупреждениями', nodata: 'Нет прогноза'};
+const FILTER_LABEL = {all: 'Все', warning: 'С предупреждениями', nodata: 'Без прогноза'};
+
+// A vehicle without a current forecast is calm, not an alarm (user decision, T-7 W14): the text
+// says why in plain words. Before it is on its assignment route there is nothing to forecast; a
+// forecast being computed is «обновляется»; anything else is «прогноза пока нет». The exact reason
+// stays in the card (source line and «Технические подробности»).
+const NOT_ON_ROUTE_REASONS = new Set(['no_target_in_horizon']);
+const UPDATING_REASONS = new Set(['prediction_pending', 'prediction_waiting_new_telemetry', 'prediction_behind_input', 'prediction_held_previous_target']);
+function noForecastText(v) {
+  if (v.route_not_started === true || NOT_ON_ROUTE_REASONS.has(v.reason)) return 'прогноз появится, когда ТС выйдет на маршрут';
+  if (v.prediction_state === 'updating' || v.prediction_updating === true || UPDATING_REASONS.has(v.reason)) return 'обновляется';
+  return 'прогноза пока нет';
+}
 const STATUS = {normal: 'данные в норме', degraded: 'данные частично устарели', unavailable: 'прогноз недоступен'};
 const DEFAULT_VIEW = {center: [37.6173, 55.7558], zoom: 11};
 const TOAST_MS = 15000;
@@ -557,7 +569,7 @@ function refreshRoute() {
 function shortValue(vehicle, assessment, {short = false} = {}) {
   if (assessment.level !== 'nodata') return delayText(vehicle.prediction_s, {short});
   if (runOver(currentRun())) return 'прогон завершён';
-  return assessment.hasPrediction ? `${delayText(vehicle.prediction_s, {short})} · устарел` : 'нет прогноза';
+  return assessment.hasPrediction ? `${delayText(vehicle.prediction_s, {short})} · устарел` : '—';
 }
 
 const capital = value => value ? value[0].toUpperCase() + value.slice(1) : value;
@@ -569,13 +581,12 @@ function rowNote(vehicle, assessment) {
   if (incident?.unread && incident.state !== 'resolved' && assessment.level !== 'nodata') note = `Новое · ${note.toLowerCase()}`;
   if (assessment.level === 'nodata') {
     note = capital(!isFresh() ? 'Backend недоступен' : runOver(currentRun()) ? 'прогон завершён'
-      : reasonText(vehicle.reason) || (assessment.hasPrediction ? 'прогноз устарел' : 'нет прогноза'));
+      : assessment.hasPrediction ? reasonText(vehicle.reason) || 'прогноз устарел' : noForecastText(vehicle));
   } else if (vehicle.prediction_updating === true || isHeld(vehicle)) {
     note = `${note} · обновляется`;
   }
-  if (vehicle.route_not_started === true) note = 'Наряд ещё не начался';
   // An invalid-GPS reason already says it; the position note is not repeated.
-  const where = assessment.level === 'nodata' && vehicle.reason === 'invalid_gps' && locationOk(vehicle) ? '' : positionNote(vehicle);
+  const where = note.toLowerCase().includes('gps') ? '' : positionNote(vehicle);
   const off = vehicle.off_route === true ? `вне маршрута ${offsetText(vehicle.route_offset_m) ?? ''}`.trim() : '';
   return [note, where, off].filter(Boolean).join(' · ');
 }
@@ -713,13 +724,14 @@ function renderCard() {
   } else if (runOver(run)) {
     value.textContent = 'Прогон завершён';
     source.textContent = 'Данных прогона больше нет — прогнозов не будет до нового прогона.';
-  } else if (v.route_not_started === true && fresh) {
-    value.textContent = 'Наряд ещё не начался';
-    source.textContent = 'Плановых остановок наряда рядом с текущим временем нет — прогнозировать нечего.';
+  } else if (!fresh) {
+    value.textContent = 'Прогноза пока нет';
+    source.textContent = 'Backend недоступен — снимок не обновляется.';
   } else {
-    value.textContent = 'Нет прогноза';
+    value.textContent = capital(noForecastText(v));
     if (outsideRun) targetLine.textContent = 'Цель за пределами окна данных прогона';
-    source.textContent = `Прогноза нет: ${fresh ? reasonText(v.reason) || 'источник не передал прогноз' : 'Backend недоступен'}`;
+    source.textContent = v.route_not_started === true ? 'Наряд ещё не начался: плановых остановок рядом с текущим временем нет.'
+      : `Причина: ${reasonText(v.reason) || 'источник не передал прогноз'}.`;
   }
   const headline = el('div', {className: 'headline'}, el('span', {}, 'Прогноз задержки у цели'), value,
     targetLine.textContent ? targetLine : null, source);
@@ -957,6 +969,8 @@ function contactBlock(incident, vehicle) {
 
 // One line over the map (L-5, H-2): the end of the run, else the first delay the dispatcher has not
 // opened and not taken into work; never a repeat of the card that is already open.
+const BANNER_HOLD_MS = 30000;
+let bannerLead = null;
 function renderAttention() {
   const box = $('attention');
   if (!feed?.snapshot || !snapshotRows().length) { box.hidden = true; return; }
@@ -980,12 +994,11 @@ function renderAttention() {
     return;
   }
   const warnings = visibleRows(snapshotRows(), {filter: 'warning', fresh: true});
+  // Only real warnings are announced; vehicles without a forecast are not counted here (user decision).
   if (!warnings.length) {
-    const {all, nodata} = countByFilter(snapshotRows(), true);
-    box.dataset.level = nodata ? 'nodata' : 'normal';
-    patchText(box, nodata === all
-      ? `Нет актуальных прогнозов (${all} машин): предупреждения сейчас не оцениваются.`
-      : `Предупреждений нет${nodata ? ` · ${nodata} машин без актуального прогноза` : ''}.`);
+    bannerLead = null;
+    box.dataset.level = 'normal';
+    patchText(box, 'Предупреждений нет');
     return;
   }
   const open = warnings.filter(({vehicle}) => String(vehicle.tr_id) !== selected
@@ -995,7 +1008,13 @@ function renderAttention() {
     patchText(box, `Все предупреждения открыты или в работе (${warnings.length}).`);
     return;
   }
-  const [{vehicle, assessment}] = open;
+  // The lead vehicle stays at least BANNER_HOLD_MS while it is still an open warning (D-3), so the
+  // banner does not flip between two vehicles whose forecasts cross every poll.
+  const now = performance.now();
+  const kept = bannerLead && now - bannerLead.since < BANNER_HOLD_MS ? open.find(({vehicle}) => String(vehicle.tr_id) === bannerLead.id) : null;
+  const lead = kept ?? open[0];
+  if (!bannerLead || bannerLead.id !== String(lead.vehicle.tr_id)) bannerLead = {id: String(lead.vehicle.tr_id), since: now};
+  const {vehicle, assessment} = lead;
   box.dataset.level = assessment.level;
   const title = el('span', {className: 'attention-title'}, incidentForVehicle(incidents, vehicle.tr_id)?.unread ? 'Новая задержка' : 'Задержка у цели');
   const body = el('span', {}, `${vehicle.tr_id} · прогноз ${delayText(vehicle.prediction_s)}${open.length > 1 ? ` · ещё ${open.length - 1}` : ''}`);

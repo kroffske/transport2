@@ -328,7 +328,7 @@ try {
       await page.locator(`#vehicles .vehicle[data-id="${without.tr_id}"]`).click();
       await page.waitForTimeout(1500);
       const text = await cardText(page);
-      check(await page.locator('#card').getAttribute('data-level') === 'nodata' && (text.includes('Прогноза нет') || text.includes('устарел') || (without.route_not_started === true && text.includes('Наряд ещё не начался')))
+      check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел/.test(text)
         && (!without.reason || text.includes(reasonText(without.reason))), `no prediction (${without.reason}): «${reasonText(without.reason)}», not green`);
       await shot(page, 'live-4-no-prediction-1920.png');
     } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
@@ -494,7 +494,7 @@ try {
     await page.locator('#vehicles .vehicle[data-id="900001"]').click();
     check(await page.locator('#card .incident').getAttribute('data-state') === 'active' && await page.locator('.incident-history li').count() === historyBefore
       && await page.locator('#events-unread').isHidden(), `nodata shorter than ${LOST_AFTER_S} s: still «Активно», no history line, no unread`);
-    check((await cardText(page)).includes('Прогноза нет: прогноз обновляется для новой цели'), 'prediction_pending: honest «прогноз обновляется для новой цели»');
+    check((await page.locator('#card .headline').textContent()).includes('Обновляется') && (await cardText(page)).includes('Причина: прогноз обновляется для новой цели'), 'prediction_pending: quiet «Обновляется», reason in the card');
     await page.waitForTimeout((LOST_AFTER_S - 4) * 1000);
     check(await page.locator('#card .incident').getAttribute('data-state') === 'monitoring_lost', `nodata for ≥ ${LOST_AFTER_S} s: «Мониторинг потерян»`);
     setSnapshot(RUN('run-A-0001'), [a, b]);
@@ -552,7 +552,7 @@ try {
     for (const [reason, label] of reasons) {
       setSnapshot(RUN('run-A-0001'), [a, {...b, status: 'unavailable', reason, prediction_s: null, prediction_updating: false}]);
       await page.waitForFunction(r => document.getElementById('card').textContent.includes(r), label, {timeout: 6000}).catch(() => {});
-      check((await cardText(page)).includes(`Прогноза нет: ${label}`) && await page.locator('#card').getAttribute('data-level') === 'nodata', `reason ${reason} → «${label}», not green`);
+      check((await cardText(page)).includes(`Причина: ${label}`) && await page.locator('#card').getAttribute('data-level') === 'nodata', `reason ${reason} → «${label}», not green`);
       if (reason === 'ml_unreachable_or_timeout') await shot(page, 'regression-4-ml-unreachable-1920.png');
     }
 
@@ -793,8 +793,8 @@ try {
     // The assignment has not started yet.
     await page.locator('#vehicles .vehicle[data-id="900007"]').click();
     await page.waitForTimeout(800);
-    check((await page.locator('#card .headline').textContent()).includes('Наряд ещё не начался')
-      && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Наряд ещё не начался'), 'route_not_started: «наряд ещё не начался» in card and list');
+    check((await page.locator('#card .headline').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут') && (await page.locator('#card .headline').textContent()).includes('Наряд ещё не начался')
+      && (await page.locator('#vehicles .vehicle[data-id="900007"]').textContent()).includes('Прогноз появится, когда ТС выйдет на маршрут'), 'route_not_started: «прогноз появится, когда ТС выйдет на маршрут» in card and list');
     await page.close();
   }
 
@@ -917,7 +917,18 @@ try {
       prediction_updating: false, target_stop_id: `N900021`}, held(n), z]);
     await page.waitForTimeout(2 * POLL_SPAN_MS);
     check(await page.locator('#vehicles .vehicle[data-id="900021"]').getAttribute('data-level') === 'nodata'
-      && (await page.locator('#vehicles .vehicle[data-id="900021"]').textContent()).includes('нет прогноза'), 'prediction_state none: «нет прогноза»');
+      && (await page.locator('#vehicles .vehicle[data-id="900021"]').textContent()).includes('Обновляется'), 'prediction_state none: no forecast (grey), reason pending → «Обновляется»');
+    // User decision: vehicles without a forecast are calm — no banner count, no alarm level.
+    setSnapshot(RUN('run-W14H-0001'), [n, z].map(v => ({...v, status: 'unavailable', reason: 'no_target_in_horizon', prediction_s: null, route_not_started: true}))
+      .concat([{...w, status: 'degraded', reason: 'ml_unreachable_or_timeout', prediction_s: null}]));
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    const calmBanner = await page.locator('#attention').textContent();
+    const calmRows = await page.locator('#vehicles .vehicle').allInnerTexts();
+    check(calmBanner === 'Предупреждений нет' && await page.locator('#attention').getAttribute('data-level') === 'normal'
+      && calmRows.some(t => t.includes('Прогноз появится, когда ТС выйдет на маршрут')) && calmRows.some(t => t.includes('Прогноза пока нет'))
+      && !calmRows.some(t => /нет прогноза/.test(t)) && await page.locator('.toast').count() === 0,
+    `no forecast is calm: banner «Предупреждений нет» without a count, rows by cause (${calmRows.map(t => t.replace(/\s+/g, ' ')).join(' | ')})`);
+    await shot(page, 'regression-w14-no-forecast-calm-1920.png');
     await page.close();
   }
 

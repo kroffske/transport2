@@ -54,9 +54,10 @@ export function visibleRows(rows, {filter = 'all', query = '', fresh}) {
     .map(vehicle => ({vehicle, assessment: assess(vehicle, fresh)}))
     .filter(({vehicle, assessment}) => matchesFilter(assessment, filter)
       && (!needle || String(vehicle.tr_id ?? '').toLowerCase().includes(needle)))
+    // Warnings by size; within the calm levels by ID only, so the list does not jump every poll
+    // as ordinary forecasts move by a few seconds.
     .sort((a, b) => RANK[a.assessment.level] - RANK[b.assessment.level]
-      || (finite(b.vehicle.prediction_s) ? Number(b.vehicle.prediction_s) : -Infinity)
-        - (finite(a.vehicle.prediction_s) ? Number(a.vehicle.prediction_s) : -Infinity)
+      || (isWarning(a.assessment) ? Number(b.vehicle.prediction_s) - Number(a.vehicle.prediction_s) : 0)
       || String(a.vehicle.tr_id).localeCompare(String(b.vehicle.tr_id)));
 }
 
