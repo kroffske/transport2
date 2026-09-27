@@ -5,6 +5,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.idea/
+.vscode/
+*.iml
 
 # Локальные модели, эксперименты и runtime evidence не входят в исходники.
 /.local/
@@ -12,6 +15,12 @@ __pycache__/
 /.tasks/**/artifacts/
 /notebooks/.tasks/
 /.locus/settings.json
+/.locus-pi/runs/
+/.locus-pi/logs/
+/.locus-pi/workspaces/
+
+# Локальные картографические тайлы большие и воспроизводятся отдельно от исходников.
+/consumer/map/*.pmtiles
 
 # Полная официальная раздача хранится локально, но не попадает в Git.
 data/train/

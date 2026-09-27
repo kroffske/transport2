@@ -197,10 +197,14 @@ max_rounds = 2
 stale_on_binding_change = true
 
 [pm]
+prompt_file = "process.md"
 default_delivery_mode = "standard"
 default_orchestration_mode = "inline"
 allow_automatic_escalation = true
 require_reason_for_deescalation = true
+
+[plan]
+prompt_file = "process.md"
 
 [pm.delivery_modes.accelerated]
 plan_review_profile = "light"
@@ -232,173 +236,3 @@ Treat commit, push, pull request, merge, release, and deploy as distinct boundar
 If the repository has not stated whether its base branch may be updated directly or only through a pull request, stop before remote mutation and resolve that rule first.
 Record the branch, commit, checks, and any remote URL or deploy result that were actually reached.
 '''
-
-# PM selection policy is project-only. It chooses a profile; it does not start work.
-[pm.workflow]
-default = "feature"
-
-[pm.workflow.by_type]
-bug = "bug"
-fix = "bug"
-
-[workflows.bug]
-schema = "locus.workflow.v1"
-description = "Reproduce -> isolate owner -> fix cause -> regression proof -> QA."
-expected_skills = ["locus-plan", "locus-dev", "locus-ship"]
-triggers = ["bug", "debug", "broken", "failing", "regression"]
-steps = [
-  "Capture observed and expected behavior.",
-  "Build the smallest deterministic pass/fail loop, or record why impossible.",
-  "Isolate the owning layer before editing.",
-  "Fix the confirmed cause.",
-  "Add or update regression proof.",
-  "Run QA according to risk."
-]
-questions = [
-  "What is the smallest reliable signal that reproduces the bug?",
-  "Which layer owns the observed behavior?",
-  "What regression proof fails before the fix and passes after?"
-]
-
-# steps explain the workflow. Only stage `after` edges define route order.
-[[workflows.bug.stages]]
-id = "plan"
-kind = "skill"
-use = "locus-plan"
-
-[[workflows.bug.stages]]
-id = "implement"
-kind = "skill"
-use = "locus-dev"
-after = ["plan"]
-
-[[workflows.bug.stages]]
-id = "verify"
-kind = "check"
-use = "task-verification"
-after = ["implement"]
-
-[workflows.feature]
-schema = "locus.workflow.v1"
-description = "Outcome -> owner/interface -> slice -> tests/docs -> QA."
-expected_skills = ["locus-plan", "locus-dev", "locus-ship"]
-triggers = ["feature", "add", "implement", "new capability"]
-steps = [
-  "State user-visible outcome and non-goals.",
-  "Name the owning module/class/interface.",
-  "Choose the smallest useful slice.",
-  "Implement with behavior proof.",
-  "Update docs/config when the public contract changes.",
-  "Run review and QA."
-]
-questions = [
-  "Who owns this behavior in domain terms?",
-  "What public contract must callers rely on?",
-  "What is the first slice that proves value without overbuilding?"
-]
-
-[[workflows.feature.stages]]
-id = "plan"
-kind = "skill"
-use = "locus-plan"
-
-[[workflows.feature.stages]]
-id = "implement"
-kind = "skill"
-use = "locus-dev"
-after = ["plan"]
-
-[[workflows.feature.stages]]
-id = "review"
-kind = "agent"
-use = "code-quality-reviewer"
-after = ["implement"]
-
-[[workflows.feature.stages]]
-id = "qa"
-kind = "skill"
-use = "locus-qa"
-after = ["review"]
-
-[workflows.refactor]
-description = "Current behavior proof -> target boundary -> mechanical steps -> equivalence proof -> review."
-expected_skills = ["locus-plan", "locus-dev", "locus-ship"]
-triggers = ["refactor", "cleanup", "simplify", "rewrite", "wrappers"]
-steps = [
-  "Capture current behavior proof before changing shape.",
-  "Name the target owner/boundary.",
-  "Apply small mechanical changes.",
-  "Run equivalence checks.",
-  "Use code-quality-review for wrapper/ownership risk."
-]
-questions = [
-  "What behavior must stay identical?",
-  "Which wrapper/helper disappears or earns its keep?",
-  "What check proves no semantic drift?"
-]
-
-[workflows.research]
-description = "Brief -> lanes -> evidence -> synthesis -> replan."
-expected_skills = ["locus-plan", "locus-research"]
-triggers = ["research", "investigate", "compare", "find options"]
-steps = [
-  "Write the decision-blocking question.",
-  "Collect evidence in bounded lanes.",
-  "Synthesize recommendation and risks.",
-  "Route to planning if implementation scope changes."
-]
-questions = [
-  "What decision will this research unblock?",
-  "What evidence would change the recommendation?",
-  "What needs to be replanned after synthesis?"
-]
-
-[workflows.release]
-description = "QA accepted -> changelog/version -> scoped commit -> push/install verification."
-expected_skills = ["locus-plan", "locus-qa", "locus-ship"]
-triggers = ["ship", "release", "commit", "push", "deploy"]
-steps = [
-  "Confirm QA acceptance or explicit bypass.",
-  "Check git status and intended files.",
-  "Update changelog/version if required.",
-  "Commit and push/install as requested.",
-  "Record ship evidence."
-]
-questions = [
-  "What exact boundary is being shipped?",
-  "Are there unrelated/generated files in the diff?",
-  "What post-ship verification is required?"
-]
-
-[workflows.docs]
-description = "Source truth -> affected docs -> registry update -> drift check."
-expected_skills = ["locus-plan", "locus-docs", "locus-ship"]
-triggers = ["docs", "documentation", "readme", "guide"]
-steps = [
-  "Identify the source-of-truth behavior or contract.",
-  "Update only docs affected by that contract.",
-  "Register durable .locus/** docs when needed.",
-  "Run a drift check against code/config/tests."
-]
-questions = [
-  "What code/config/test surface is the source of truth?",
-  "Which docs become stale if this changes?",
-  "What drift check proves the docs match reality?"
-]
-
-[workflows.audit]
-description = "Scope -> evidence -> ranked findings -> fix plan or accepted risk."
-expected_skills = ["locus-plan", "locus-qa"]
-triggers = ["audit", "security", "risk", "review risks"]
-steps = [
-  "Define the audited boundary and excluded areas.",
-  "Collect evidence before rating findings.",
-  "Rank findings by impact and exploitability or delivery risk.",
-  "Route fixes through planning when they change ownership or contracts.",
-  "Record accepted risk explicitly."
-]
-questions = [
-  "What boundary is being audited?",
-  "What evidence would upgrade or downgrade the finding?",
-  "Which findings require a plan instead of an inline fix?"
-]
