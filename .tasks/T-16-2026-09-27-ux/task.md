@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T17:42:56.765Z"
-updated_at: "2026-09-27T18:31:58.642Z"
+updated_at: "2026-09-27T19:13:03.180Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -52,3 +52,7 @@ Comment: Часть объединённого UX-ревью (T-12 GPT + T-13 Cl
 
 - `npm --prefix dashboard test` и `npm --prefix dashboard run build` проходят в worktree.
 - Скриншоты через preview.mjs показывают требования §C на обоих размерах.
+
+## Closure
+
+Блок прогноза (цель · по расписанию · ожидается · опоздание), тексты всех состояний (включая W16 warming/lost), формат +м:сс, метки карты, порядок карточки. Принято в T-19, влито в main PR #1/#2.

@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T17:42:57.531Z"
-updated_at: "2026-09-27T17:57:14.754Z"
+updated_at: "2026-09-27T19:13:03.630Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -52,3 +52,7 @@ Comment: Часть объединённого UX-ревью (T-12 GPT + T-13 Cl
 
 - `npm --prefix dashboard test` и `npm --prefix dashboard run build` проходят в worktree.
 - Скриншоты через preview.mjs показывают требования §S на обоих размерах.
+
+## Closure
+
+Роли остановок формой/штрихом, пунктир после цели, легенда «Остановки»; в серой гамме различимы. Принято в T-19, влито в main PR #1/#2 (в #2 легенда в одну строку).

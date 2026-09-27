@@ -10,7 +10,7 @@ type: feature
 priority: p1
 owner: claude
 created_at: "2026-09-27T17:43:15.943Z"
-updated_at: "2026-09-27T18:38:54.279Z"
+updated_at: "2026-09-27T19:13:06.113Z"
 parent: null
 depends_on: []
 gstack_refs: {}
@@ -38,15 +38,15 @@ Comment: Спецификация — `.tasks/T-13-2026-09-27-ux-ui-claude-t-12/
 
 ## Work items
 
-- [ ] W1: Слияние T-15…T-18 и сборка.
+- [x] W1: Слияние T-15…T-18 и сборка.
   - Deliverable: ветка интеграции, зелёные `npm --prefix dashboard test`, `pytest`, сборка.
   - Contribution: единая версия.
   - Proxy result: ветки не слиты или бандл не пересобран.
-- [ ] W2: Проверка §V.
+- [x] W2: Проверка §V.
   - Deliverable: скриншоты и результаты сценариев 1–10 в `artifacts/`.
   - Contribution: доказательство эффекта.
   - Proxy result: проверка только одного размера окна.
-- [ ] W3: QA и ship.
+- [x] W3: QA и ship.
   - Deliverable: QA ACCEPTED; commit, push, PR в `dev`, merge.
   - Contribution: изменения в `dev`.
   - Proxy result: локальный коммит без push/PR.
@@ -56,3 +56,7 @@ Comment: Спецификация — `.tasks/T-13-2026-09-27-ux-ui-claude-t-12/
 - `npm --prefix dashboard test`, `npm --prefix dashboard run build`, `python -m pytest -q` зелёные.
 - Сценарии §V 1–10: каждый с отметкой pass/fail и скриншотом.
 - `gh pr view` показывает merged.
+
+## Closure
+
+Влито в main: PR kroffske/transport2#1 (5a5eb47) и #2 (0151cf3), dev = main. Проверки: npm 109/109, pytest 105p/7s, browser-check live 59/59 и regression 140/140 на 0151cf3; QA без P1 (artifacts/qa.md). Consumer пересобран, /api/build = 0151cf3. Следующий шаг — T-20.
