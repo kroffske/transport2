@@ -145,6 +145,30 @@ async function headerFits(page, label) {
   await page.waitForTimeout(250);
   check(bad.length === 0, `${label}: header parts never overlap at ${HEADER_WIDTHS.join('/')} px, run state whole, attention bar clear of map tools (${bad.join('; ') || 'ok'}, H-1)`);
 }
+// The legend is a vertical panel docked to the map's left edge: one item per line, inside the map,
+// clear of the attention bar, the map tools, the toasts and the card panel. `route`: whether the
+// selected vehicle's route and stop rows are expected. `maxShare`: the largest part of the map's
+// width and height it may take (narrow windows). `scroll`: whether it may scroll inside.
+async function legendFits(page, label, {route, maxShare = 0.25, scroll = false}) {
+  const r = await page.evaluate(() => {
+    const box = e => e && e.getClientRects().length ? e.getBoundingClientRect() : null;
+    const legend = document.querySelector('#map-pane .legend');
+    const l = box(legend), pane = box(document.getElementById('map-pane'));
+    const hit = (a, b) => a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom;
+    const others = [...document.querySelectorAll('#map-pane .attention:not([hidden]), #map-pane .map-tools, #map-pane .toast, #card[data-open=true]')]
+      .map(e => ({name: e.id || e.className, r: box(e)})).filter(o => o.r?.width && o.r.height);
+    const items = [...legend.querySelectorAll('.legend-row > span:not(.legend-help)')].map(box).filter(Boolean).sort((a, b) => a.top - b.top);
+    return {x: l.x - pane.x, bottomGap: pane.bottom - l.bottom, width: l.width, height: l.height, paneW: pane.width, paneH: pane.height,
+      inside: l.x >= pane.x && l.right <= pane.right && l.y >= pane.y && l.bottom <= pane.bottom,
+      hits: others.filter(o => hit(l, o.r)).map(o => o.name), items: items.length,
+      oneperline: items.every((it, i) => i === 0 || it.top >= items[i - 1].bottom - 1),
+      scrolls: legend.scrollHeight > legend.clientHeight + 1, route: !document.getElementById('legend-route').hidden,
+      help: document.getElementById('legend-help').title.includes('Цвет ТС') && box(document.getElementById('legend-help'))?.width > 0};
+  });
+  const ok = r.inside && r.x <= 16 && r.bottomGap <= 40 && r.hits.length === 0 && r.oneperline && r.help && r.route === route
+    && r.items === (route ? 15 : 7) && r.width <= Math.min(240, r.paneW * maxShare) && r.height <= r.paneH * Math.max(maxShare, 0.6) && (scroll || !r.scrolls);
+  check(ok, `${label}: legend is a vertical panel at the left edge of the map, one item per line, route rows ${route ? 'shown' : 'hidden'}, «?» note, clear of other panels (${JSON.stringify(r)})`);
+}
 // W13 acceptance (ui-review §5): card order, sticky head, no technical identifiers outside
 // «Технические подробности», one delay formatter, and the camera following the selection.
 const TECH_PATTERNS = [/[0-9a-f]{12,}/, /rev \d+/, /контекст №/, /кадр NDTP/, /canonical_/, /запись расписания/, /\d{4}-\d\d-\d\dT/];
@@ -313,9 +337,7 @@ try {
     check(drawn.length > 0 && drawn.every(symbolMatchesLevel), `map symbols: every vehicle is a bus icon whose non-colour marks match its state (${drawn.map(d => `${d.id}:${d.symbol}`).join(', ')})`);
     const legend = await page.locator('img.legend-symbol').evaluateAll(images => images.map(img => img.src));
     check(legend.length === 8 && new Set(legend).size === 8 && legend.every(src => src.startsWith('data:image/png')), 'legend shows the 8 map symbols (W16: + violet «GPS неисправен»), all different, drawn locally');
-    const legendBox = await page.locator('.legend').boundingBox();
-    check(legendBox.height <= 56 && legendBox.width <= 920 && await page.locator('#legend-route').isHidden()
-      && (await page.locator('#legend-help').getAttribute('title')).includes('Цвет ТС'), `legend without a selection: one row ≤ 56 px, route row hidden, note in «?» (${Math.round(legendBox.width)}×${Math.round(legendBox.height)})`);
+    await legendFits(page, 'legend without a selection', {route: false});
 
     // A vehicle with a current model prediction, a target and a valid position.
     const candidate = vehicles.filter(v => v.status === 'normal' && v.prediction_s != null && v.target_stop_id && v.location_valid)
@@ -373,7 +395,8 @@ try {
         await page.locator('#shift-after-target').check();
       }
       check((await page.locator('#route .route-caption').textContent()).includes('плановый маршрут наряда'), 'card: the line is the planned route of the assignment, not a GPS track');
-      check((await page.locator('#legend-route').textContent()).includes('впереди') && (await page.locator('.legend').boundingBox()).height <= 84, 'legend with a selection: route row shown, ≤ 84 px');
+      check((await page.locator('#legend-route').textContent()).includes('впереди'), 'legend with a selection: route rows describe the line «впереди»');
+      await legendFits(page, 'legend with a selection', {route: true});
       // Route layers exactly as route_line asks: on_route → passed + ahead; otherwise dim (+ leader).
       const {body: rowNow} = await api(page, '/api/snapshot');
       const me = rowNow?.snapshot?.vehicles?.find(v => String(v.tr_id) === id);
@@ -557,6 +580,7 @@ try {
     'lifecycle, progress and the large data clock «06:47 · время данных» from the run (Q7)');
     check(await page.locator('#events-unread').textContent() === '1' && (await page.locator('#events-toggle').textContent()).startsWith('Непрочитано')
       && await page.locator('.toast').count() === 0, 'first snapshot of a run: existing warning counted as «Непрочитано 1» (Q4), no toast');
+    await legendFits(page, 'legend without a selection', {route: false});
     check((await page.locator('#vehicles .vehicle[data-id="900009"]').textContent()).includes('вне карты')
       && await page.locator('.vehicle-label[data-id="900009"]').count() === 0, 'valid GPS outside the data extent: listed «вне карты», not drawn');
     await survivesPolls(page, '#vehicles .vehicle[data-id="900002"]', 'list row');
@@ -643,6 +667,22 @@ try {
     check((await stops.nth(3).textContent()).includes('07:03') && !(await stops.nth(3).textContent()).includes('→'), 'toggle off: after-target stops show plan time only');
     await page.locator('#shift-after-target').check();
     await shot(page, 'regression-3-route-bad-coords-1920.png');
+    // The legend panel with the route rows: 1920 (card column), 1366×768 (card panel over the map's
+    // right edge), 800 px (card closed: it would cover the whole layout; the legend is compact).
+    await legendFits(page, 'legend with a selection at 1920', {route: true});
+    await page.setViewportSize({width: 1366, height: 768});
+    await page.waitForTimeout(400);
+    await legendFits(page, 'legend with a selection at 1366×768, card panel open', {route: true});
+    await shot(page, 'regression-3c-legend-1366.png');
+    await page.locator('#card-close').click();
+    await page.setViewportSize({width: 800, height: 900});
+    await page.waitForTimeout(400);
+    await legendFits(page, 'legend with a selection at 800 px, compact', {route: true, maxShare: 0.45, scroll: true});
+    await shot(page, 'regression-3d-legend-800.png');
+    await page.setViewportSize(VIEWPORT);
+    await page.waitForTimeout(400);
+    await page.locator('#vehicles .vehicle[data-id="900001"]').click();
+    await page.waitForFunction(() => document.getElementById('card').dataset.open === 'true', null, {timeout: 4000});
     // A degraded row keeps a numeric prediction: it is not shown as the model's value or its assumption.
     setSnapshot(RUN('run-A-0001'), [{...a, status: 'degraded', reason: 'prediction_pending'}, b]);
     await page.waitForFunction(() => document.getElementById('card').dataset.level === 'nodata', null, {timeout: 6000});

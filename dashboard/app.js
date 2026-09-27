@@ -553,8 +553,11 @@ function overview(animate = true) {
   const duration = animate ? 600 : 0;
   if (!points.length) { map.easeTo({...DEFAULT_VIEW, duration}); return; }
   const bounds = points.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(points[0], points[0]));
-  // Padding clears the banner and the legend; a larger one would push the view against maxBounds.
-  map.fitBounds(bounds, {padding: {top: 100, bottom: 140, left: 110, right: 110}, maxZoom: 14, duration});
+  // Padding clears the banner, the legend panel on the left and the map controls at the bottom; a
+  // larger one would push the view against maxBounds.
+  const legend = shownRect(document.querySelector('#map-pane .legend'));
+  const left = Math.max(110, legend ? legend.right - $('map-pane').getBoundingClientRect().left + 30 : 0);
+  map.fitBounds(bounds, {padding: {top: 100, bottom: 80, left, right: 110}, maxZoom: 14, duration});
 }
 
 // Show the selected vehicle together with its target, so the forecast's stop is on screen.
@@ -624,8 +627,9 @@ function visibleZone() {
   const legend = shownRect(document.querySelector('#map-pane .legend'));
   const card = shownRect($('card'));
   const covered = card ? Math.max(0, pane.right - Math.max(pane.left, card.left)) : 0;
-  return {left: 8, top: (attention ? attention.bottom - pane.top : 0) + 8,
-    right: pane.width - covered - 8, bottom: (legend ? legend.top - pane.top : pane.height) - 8};
+  const controls = [...document.querySelectorAll('#map-pane .maplibregl-ctrl-bottom-left, #map-pane .maplibregl-ctrl-bottom-right')].map(shownRect).filter(Boolean);
+  return {left: (legend ? legend.right - pane.left : 0) + 8, top: (attention ? attention.bottom - pane.top : 0) + 8,
+    right: pane.width - covered - 8, bottom: Math.min(pane.bottom, ...controls.map(r => r.top)) - pane.top - 8};
 }
 function renderEdgeArrow() {
   const v = findRow(selected);
