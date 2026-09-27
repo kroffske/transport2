@@ -186,8 +186,16 @@ async function dispatcherPath(page, label) {
   await page.locator('#events-toggle').click();
   const events = page.locator('#events-list .event[data-group=needs]');
   check(await page.locator('#events-panel').isVisible() && await events.count() >= 1, `${label}: «События» opens the queue; the event is in «Требуют реакции»`);
-  const eventId = await events.first().getAttribute('data-id');
-  await events.first().click();
+  // Live episodes can end while the check runs (the item moves to «Завершены»): take the first
+  // event still waiting, a few times.
+  let eventId = null;
+  for (let attempt = 0; attempt < 4 && !eventId; attempt += 1) {
+    const id = await events.first().getAttribute('data-id', {timeout: 5000}).catch(() => null);
+    if (!id) break;
+    if (await page.locator(`#events-list .event[data-id="${id}"]`).click({timeout: 4000}).then(() => true).catch(() => false)) eventId = id;
+  }
+  check(eventId !== null, `${label}: an event waiting for reaction opens its card`);
+  if (!eventId) { await page.locator('#tab-vehicles').click(); return null; }
   await page.waitForTimeout(900);
   check(await page.locator(`.toast[data-id="${eventId}"]`).count() === 0, `${label}: opening the event hides its toast`);
   check(await page.locator('#card .incident').getAttribute('data-id') === eventId, `${label}: event → its vehicle's card with the same event`);
@@ -294,7 +302,7 @@ try {
         const target2 = (again?.stops ?? []).find(s => s.role === 'target');
         const expected2 = again?.prediction_s != null && target2 ? shiftedText(target2.time, again.prediction_s, {seconds: true}) : null;
         check(await targetRow.count() === 1 && (await page.locator('.stops li[data-group=target]').textContent()).includes('прогноз модели')
-          && (!expected || shown.includes(expected) || (expected2 && shown.includes(expected2))), `card: target = plan + prediction_s «прогноз модели» (${expected}${expected2 && expected2 !== expected ? ` / ${expected2}` : ''})`);
+          && (!expected || shown.includes(expected) || (expected2 && shown.includes(expected2))), `card: target = plan + prediction_s «прогноз модели» (${expected}${expected2 && expected2 !== expected ? ` / ${expected2}` : ''}; shown «${shown.replace(/\s+/g, ' ')}» under «${(await page.locator('.stops li[data-group=target]').textContent()).replace(/\s+/g, ' ')}»)`);
         check(await page.locator('.stop-label[data-kind=target]').count() === 1
           && inside(await page.locator('.stop-label[data-kind=target]').boundingBox(), await page.locator('#map-pane').boundingBox()), 'map: target time label drawn inside the map (never at 0/0)');
       } else if (!target) skipped.push(`live: route of ${id} has no target stop at this moment`);
@@ -341,12 +349,16 @@ try {
     // A vehicle without a current prediction: honest reason, not a green state.
     // A forecast held over a target change is a current forecast (W14), not «no prediction».
     const noForecast = v => v.status !== 'normal' && v.reason !== 'prediction_held_previous_target';
-    const without = vehicles.find(v => noForecast(v) && v.location_valid) ?? vehicles.find(noForecast);
+    const freshRows = async () => (await api(page, '/api/snapshot')).body?.snapshot?.vehicles ?? [];
+    const now = await freshRows();
+    const without = now.find(v => noForecast(v) && v.location_valid) ?? now.find(noForecast);
     if (without) {
       await page.locator(`#vehicles .vehicle[data-id="${without.tr_id}"]`).click();
       await page.waitForTimeout(1500);
       const text = await cardText(page);
-      check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел|Прогон завершён|нет наряда/.test(text)
+      const after = (await freshRows()).find(v => String(v.tr_id) === String(without.tr_id));
+      if (!after || !noForecast(after) || after.reason !== without.reason) skipped.push(`live: ${without.tr_id} changed state during the check — no-prediction card not asserted`);
+      else check(await page.locator('#card').getAttribute('data-level') === 'nodata' && /Прогноз появится, когда ТС выйдет на маршрут|Обновляется|Прогноза пока нет|устарел|Прогон завершён|нет наряда/.test(text)
         && (!without.reason || text.includes(reasonText(without.reason)) || run?.state === 'completed' || text.includes('Прогон завершён')), `no prediction (${without.reason}): «${reasonText(without.reason)}», not green`);
       await shot(page, 'live-4-no-prediction-1920.png');
     } else skipped.push('live: every vehicle has a current prediction — no-prediction card not shown');
@@ -1043,6 +1055,11 @@ try {
     await page.waitForTimeout(300);
     check(dimOn && !(await dimmedLabel()) && await page.locator('#dim-nodata').getAttribute('aria-pressed') === 'false', '«Приглушить без прогноза»: on hides grey labels, off shows them');
     check((await page.locator('#hotkeys').textContent()).includes('J / K — следующее / предыдущее событие'), 'hotkeys hint shown');
+    // The queue of this run survives a reload of the page (sessionStorage).
+    await page.reload({waitUntil: 'domcontentloaded'});
+    await page.waitForSelector('#map-pane[data-state=ready]', {timeout: 30000});
+    await page.waitForTimeout(2 * POLL_SPAN_MS);
+    check((await page.locator('#events-list').textContent()).includes('Завершены · 3'), 'after a reload the queue keeps the closed events («Завершены · 3»)');
     await page.close();
   }
 

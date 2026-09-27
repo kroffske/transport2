@@ -85,7 +85,25 @@ let epoch = 1;
 // action returns a new queue.
 let queue = Q.createQueue(`live${epoch}`);
 const store = () => queue.store;
-const setQueue = next => { if (next && next !== queue) queue = next; };
+const setQueue = next => { if (next && next !== queue) { queue = next; saveQueue(); } };
+// The queue of the run on screen survives a page reload (sessionStorage, this tab only).
+let queueRunId = null;
+const queueKey = runId => `t7-queue:${runId}`;
+function saveQueue() {
+  if (!queueRunId) return;
+  try { sessionStorage.setItem(queueKey(queueRunId), Q.serialize(queue)); } catch { /* private mode: the queue lives in memory */ }
+}
+function restoreQueue() {
+  const runId = currentRun()?.run_id ?? null;
+  if (runId === queueRunId) return;
+  queueRunId = runId;
+  let saved = null;
+  try { saved = runId ? sessionStorage.getItem(queueKey(runId)) : null; } catch { saved = null; }
+  const restored = saved ? Q.deserialize(saved, {source: `run:${runId}`}) : null;
+  queue = restored ?? Q.createQueue(runId ? `run:${runId}` : `live${epoch}`);
+  queueWatched = Boolean(restored);
+  gpsMarks = loadMarks();
+}
 let queueWatched = false; // the first snapshot of a run only records what already exists (no toasts)
 let noteDraft = {id: null, text: ''};
 // v2 side panel tab (a per-viewer convenience) and the card's open menu.
@@ -1091,7 +1109,7 @@ function renderAttention() {
   box.dataset.level = eventLevel(top);
   const text = el('div', {className: 'attention-text', 'data-key': 'text'},
     el('span', {className: 'attention-title'}, 'Требует реакции'),
-    el('span', {}, `ТС ${top.tr_id} · ${delayText(top.last_s)} · с ${planText(top.opened_at) ?? clockText(top.opened_at)}`));
+    el('span', {}, `ТС ${top.tr_id} · ${delayText(top.last_s)} · с ${(planText(top.opened_at) ?? clockText(top.opened_at) ?? '').slice(0, 5)}`));
   const actions = el('div', {className: 'attention-actions', 'data-key': 'actions'},
     el('button', {type: 'button', 'data-key': 'attention-open', dataset: {action: 'choose', id: String(top.tr_id)}}, 'Показать'),
     el('button', {type: 'button', className: 'primary', 'data-key': 'attention-take', dataset: {action: 'take-event', id: top.id}}, 'Взять в работу', el('kbd', {}, 'W')));
@@ -1223,6 +1241,7 @@ function queueAction(fn) {
   const next = fn(queue);
   if (next === queue || !next) return false;
   queue = next;
+  saveQueue();
   cardMenu = null; bulkMenu = null;
   renderCard(); renderEvents(); renderAttention(); renderToasts(); renderList();
   return true;
@@ -1257,10 +1276,11 @@ function renderToasts() {
 // already exists; later new episodes get one toast each.
 function ingest() {
   if (!feed?.snapshot) return;
+  restoreQueue();
   let next = Q.observe(queue, snapshotRows(), {dataNow: dataNow(), fresh: isFresh(), wallS: wallNow()});
   if (!queueWatched) for (const toast of next.toasts) next = Q.dismissToast(next, toast.key);
   queueWatched = true;
-  queue = next;
+  setQueue(next);
 }
 
 // Header: where the data comes from and how fast it runs — all from `snapshot.run`.
@@ -1372,10 +1392,11 @@ function resetView() {
   selected = null; hovered = null; filter = 'all'; query = ''; $('search').value = '';
   pendingOverview = true;
   epoch += 1;
+  queueRunId = null; // the next snapshot restores or creates the new run's queue
   queue = Q.createQueue(`live${epoch}`);
   queueWatched = false;
   cardMenu = null; bulkMenu = null; endedOpen = false;
-  gpsMarks = loadMarks();
+  gpsMarks = new Set();
   noteDraft = {id: null, text: ''};
   contact = {id: null, result: null};
   clearRoute();
