@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import math
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from transport_backend.ingest import NDTPServer
 from transport_backend.orchestration import Orchestrator
 from transport_backend.run import RunRegistry
-from transport_backend.schedule import M_PER_DEG_LAT, Schedule
+from transport_backend.schedule import M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, Schedule
 from transport_backend.service import create_app
 from transport_backend.state import ClockMapping, Telemetry, TelemetryState
 from transport_ml.data import read_plan
@@ -178,3 +179,117 @@ def test_routes_http_waits_for_run_then_serves_only_run_vehicles(tmp_path):
         assert (route["off_route"], route["route_offset_m"]) == (None, None)  # no position yet
         row = client.get("/v1/vehicles").json()["vehicles"][0]
         assert {"heading", "off_route", "route_offset_m", "route_not_started"} <= set(row)
+
+
+# ------------------------------------------------ vehicle point on the window line
+
+def test_route_line_splits_at_projection_or_explains_why_not(world):
+    flow, state, now = world
+    fifty_north = LAT + 50 / M_PER_DEG_LAT
+    assert state.accept(_record("v", 1, "2026-01-06 06:29:50", 37.515, fifty_north, speed=20))
+    assert state.accept(_record("late", 2, "2026-01-06 06:29:50", 37.405, 55.8, request_id=3))
+    now[0] = DAY + timedelta(hours=6, minutes=30)
+    flow.snapshot()
+    view = flow.route("v")["route_line"]
+    assert view["split_reason"] == "on_route"
+    assert view["split"] == pytest.approx([37.515, LAT])
+    line = [[37.51, LAT], [37.52, LAT], [37.53, LAT], [37.54, LAT]]  # same as /v1/routes
+    assert view["line"] == line == flow.routes()["routes"][0]["line"]
+    assert view["passed"][:-1] == line[:1] and view["passed"][-1] == view["split"]
+    assert view["ahead"][0] == view["split"] and view["ahead"][1:] == line[1:]
+    # No position, and a vehicle whose planned line lies outside the window.
+    assert flow.route("none")["route_line"]["split_reason"] == "no_position"
+    late = flow.route("late")["route_line"]
+    assert late["split_reason"] == "no_segment" and late["split"] is None and late["line"] == []
+    assert late["nearest"] == pytest.approx([37.405, 55.8])  # on the whole-day line
+    # Far off the assignment: no split, only the nearest point for a leader line.
+    assert state.accept(_record("v", 1, "2026-01-06 06:30:10", 37.515, LAT + NORTH_1KM, request_id=4))
+    now[0] = DAY + timedelta(hours=6, minutes=30, seconds=11)
+    flow.snapshot()
+    off = flow.route("v")["route_line"]
+    assert off["split_reason"] == "off_route"
+    assert (off["passed"], off["ahead"], off["split"]) == ([], [], None)
+    assert off["nearest"] == pytest.approx([37.515, LAT])
+
+
+class _Unavailable:
+    def predict(self, request):
+        return {"applicability": "unavailable", "quality": "unavailable", "reason": "test",
+                "model_version": "t", "artifact_sha256": "t", "prediction_s": None}
+
+
+@pytest.fixture
+def line_world(tmp_path):
+    path = tmp_path / "plan.csv"
+    out_and_back = [("A", "06:20", 37.50), ("B", "06:30", 37.51), ("C", "06:40", 37.52),
+                    ("B2", "06:50", 37.51), ("A2", "07:00", 37.50), ("B3", "07:10", 37.51)]
+    rows = [f"{name},ob,2026-01-06 {time}:00,POINT ({lon} {LAT})" for name, time, lon in out_and_back]
+    # Stops every 2 minutes, 126 m apart, for a vehicle running 12 minutes late.
+    rows += [f"s{i},slow,{DAY + timedelta(hours=6, minutes=2 * i):%Y-%m-%d %H:%M:%S},"
+             f"POINT ({37.50 + 0.002 * i:.3f} {LAT})" for i in range(41)]
+    path.write_text("tt_action_item_id,tr_id,time_begin,geom\n" + "\n".join(rows) + "\n",
+                    encoding="utf-8")
+    units = {1: "ob", 2: "slow"}
+    state = TelemetryState(units, source_clock="dataset_wall", stale_after_s=3600)
+    for unit in units:
+        state.connected(unit, "s")
+    now = [DAY + timedelta(hours=6, minutes=25)]
+    run = RunRegistry("dataset_wall", units, mapping=ClockMapping(1_700_000_000, DAY),
+                      clock=lambda: now[0])
+    flow = Orchestrator(state, NDTPServer(state, run=run), Schedule(read_plan(path)), _Unavailable())
+    yield flow, state, now
+    flow.close()
+
+
+def test_out_and_back_line_splits_on_the_current_trip(line_world):
+    flow, state, now = line_world
+    assert state.accept(_record("ob", 1, "2026-01-06 06:24:50", 37.505, LAT, speed=20))
+    flow.snapshot()
+    outbound = flow.route("ob")["route_line"]
+    # 37.505 lies on A->B (06:20-06:30) and on B2->A2 (06:50-07:00); only the first is due.
+    assert outbound["split"] == pytest.approx([37.505, LAT])
+    assert outbound["passed"][:-1] == [[37.50, LAT]]
+    assert outbound["ahead"][1:] == [[37.51, LAT], [37.52, LAT], [37.51, LAT], [37.50, LAT], [37.51, LAT]]
+    assert state.accept(_record("ob", 1, "2026-01-06 06:54:50", 37.505, LAT, speed=20, request_id=3))
+    now[0] = DAY + timedelta(hours=6, minutes=55)
+    flow.snapshot()
+    inbound = flow.route("ob")["route_line"]
+    # Window now starts at C; B2->A2 and A2->B3 both cover 37.505: the one due now wins.
+    assert inbound["line"][0] == [37.52, LAT]
+    assert inbound["passed"][:-1] == [[37.52, LAT], [37.51, LAT]]
+    assert inbound["ahead"][1:] == [[37.50, LAT], [37.51, LAT]]
+
+
+def test_split_interval_follows_the_observed_delay(line_world):
+    flow, state, now = line_world
+    # Standing at s5 (planned 06:10) at 06:22: 12 minutes late.
+    assert state.accept(_record("slow", 2, "2026-01-06 06:22:00", 37.510, LAT, speed=0))
+    assert state.accept(_record("slow", 2, "2026-01-06 06:24:00", 37.511, LAT, speed=20, request_id=3))
+    flow.snapshot()
+    row = next(r for r in flow.snapshot()["vehicles"] if r["tr_id"] == "slow")
+    assert row["cur_dev_s"] == 720.0
+    view = flow.route("slow")["route_line"]
+    # s5->s6 (06:10-06:12) is outside [06:15, 06:45] but inside the delay-shifted interval.
+    assert view["split_reason"] == "on_route"
+    assert view["split"] == pytest.approx([37.511, LAT])
+    assert view["passed"] == [[37.510, LAT], view["split"]]
+
+
+def test_off_route_leader_exists_when_the_display_window_is_empty(world):
+    flow, state, now = world
+    # Like 130072: the assignment starts at 20:25, the vehicle is 1 km away at 06:30.
+    assert state.accept(_record("late", 2, "2026-01-06 06:29:50", 37.405, 55.8 - NORTH_1KM))
+    flow.snapshot()
+    row = _row(flow, "late")
+    view = flow.route("late")["route_line"]
+    assert view["line"] == [] and view["split_reason"] == "off_route"
+    assert view["off_route"] is row["off_route"] is True
+    assert view["route_offset_m"] == row["route_offset_m"] == 1000
+    assert view["nearest"] == pytest.approx([37.405, 55.8], abs=1e-6)
+    # The leader length is the reported offset.
+    position = (row["lon"], row["lat"])
+    dx = (view["nearest"][0] - position[0]) * M_PER_DEG_LON_EQUATOR * math.cos(math.radians(position[1]))
+    dy = (view["nearest"][1] - position[1]) * M_PER_DEG_LAT
+    assert math.hypot(dx, dy) == pytest.approx(view["route_offset_m"], abs=10)
+    none = flow.route("none")["route_line"]  # no plan and no position
+    assert (none["nearest"], none["off_route"], none["route_offset_m"]) == (None, None, None)

@@ -22,7 +22,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from transport_ml.data import TRAFFIC_COLUMNS
 
 from .ingest import NDTPServer
-from .schedule import Arrival, Schedule
+from .schedule import Arrival, Schedule, nearest_on_polyline
 from .state import TelemetryState
 
 # Display area of the bundled basemap (consumer/map/manifest.json "coverage").
@@ -34,6 +34,11 @@ ROUTE_AFTER_NOW_NO_TARGET = timedelta(minutes=30)
 # One display window for the planned-stop line, overview and selected vehicle alike.
 LINE_BEFORE_NOW = timedelta(minutes=15)
 LINE_AFTER_NOW = timedelta(minutes=45)
+# Where along the window line the vehicle is: only segments planned for
+# [now - 10 min, now + 20 min] (shifted by the observed delay) are candidates,
+# so an out-and-back line cannot snap onto the other trip.
+SPLIT_BEFORE_NOW = timedelta(minutes=10)
+SPLIT_AFTER_NOW = timedelta(minutes=20)
 HEADING_MIN_SPEED_KMH = 3.0
 HEADING_MAX_AGE_S = 120.0
 
@@ -274,7 +279,7 @@ class Orchestrator:
             low, high = now - LINE_BEFORE_NOW, now + LINE_AFTER_NOW
             routes = []
             for unit_id, tr_id in self.run.vehicles():
-                stops = [stop for stop in self.schedule.stops_between(tr_id, low, high) if _on_map(stop)]
+                stops = self._window_line(tr_id, now)
                 row = self._rows.get(tr_id, {})
                 routes.append({"tr_id": tr_id, "unit_id": unit_id,
                                "line": [[stop.lon, stop.lat] for stop in stops],
@@ -343,7 +348,51 @@ class Orchestrator:
                     "cur_dev_s": row["cur_dev_s"], "prediction_s": row["prediction_s"],
                     "prediction_updating": row["prediction_updating"],
                     "model_version": row["model_version"],
-                    "artifact_sha256": row["artifact_sha256"]}
+                    "artifact_sha256": row["artifact_sha256"],
+                    "route_line": self._route_line(tr_id, row, at)}
+
+    def _window_line(self, tr_id: str, now: datetime) -> list[Arrival]:
+        """Planned stops of the display window inside the map, in time order."""
+        return [stop for stop in self.schedule.stops_between(
+            tr_id, now - LINE_BEFORE_NOW, now + LINE_AFTER_NOW) if _on_map(stop)]
+
+    def _route_line(self, tr_id: str, row: dict, at: datetime) -> dict:
+        """Split the window line at the vehicle: dim passed part, bright part ahead.
+
+        The split is the projection of the last valid position onto the nearest
+        segment planned for ``[at - 10 min, at + 20 min]`` shifted back by
+        ``cur_dev_s`` (a late vehicle is where the plan was earlier). Off route,
+        without position or without such a segment there is no split.
+        """
+        stops = self._window_line(tr_id, at)
+        points = [(stop.lon, stop.lat) for stop in stops]
+        line = [[lon, lat] for lon, lat in points]
+        lon, lat = row["lon"], row["lat"]
+        # The leader goes to the whole-assignment line, as the off-route check does,
+        # so it exists even when the display window holds no stop.
+        nearest = (self.schedule.route_nearest(tr_id, float(lon), float(lat))
+                   if lon is not None and lat is not None else None)
+        view = {"line": line, "passed": [], "ahead": [], "split": None,
+                "nearest": [nearest[0], nearest[1]] if nearest else None,
+                "off_route": row["off_route"], "route_offset_m": row["route_offset_m"]}
+        if lon is None or lat is None:
+            return {**view, "split_reason": "no_position"}
+        if row["off_route"]:
+            return {**view, "split_reason": "off_route"}
+        center = at - timedelta(seconds=row["cur_dev_s"] or 0.0)
+        low, high = center - SPLIT_BEFORE_NOW, center + SPLIT_AFTER_NOW
+        candidates = [i for i in range(len(stops) - 1)
+                      if stops[i].time <= high and stops[i + 1].time >= low]
+        # Equal distances (the same street both ways) go to the segment closest in time.
+        candidates.sort(key=lambda i: abs((stops[i].time + (stops[i + 1].time - stops[i].time) / 2
+                                           - center).total_seconds()))
+        found = nearest_on_polyline(points, float(lon), float(lat), candidates)
+        if found is None:
+            return {**view, "split_reason": "no_segment"}
+        segment, split_lon, split_lat, _ = found
+        split = [split_lon, split_lat]
+        return {**view, "passed": line[:segment + 1] + [split], "ahead": [split] + line[segment + 1:],
+                "split": split, "split_reason": "on_route"}
 
     def _observe_accepted(self, count: int) -> None:
         if count > self._seen_accepted:

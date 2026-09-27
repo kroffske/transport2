@@ -71,12 +71,41 @@ class _PlanLine:
         delta = xy[1:] - xy[:-1]
         return cls(cos_lat, xy[:-1], delta, np.maximum((delta ** 2).sum(axis=1), 1e-9))
 
-    def distance_m(self, lon: float, lat: float) -> float:
-        point = np.array([lon * M_PER_DEG_LON_EQUATOR * self.cos_lat, lat * M_PER_DEG_LAT])
-        offset = point - self.start
-        share = np.clip((offset * self.delta).sum(axis=1) / self.length2, 0.0, 1.0)
-        nearest = self.start + share[:, None] * self.delta
-        return float(np.sqrt(((point - nearest) ** 2).sum(axis=1)).min())
+    def nearest(self, lon: float, lat: float) -> tuple[float, float, float]:
+        """Closest point of the line as ``(lon, lat, distance_m)``."""
+        scale = np.array([M_PER_DEG_LON_EQUATOR * self.cos_lat, M_PER_DEG_LAT])
+        point = np.array([lon, lat]) * scale
+        share = np.clip(((point - self.start) * self.delta).sum(axis=1) / self.length2, 0.0, 1.0)
+        candidates = self.start + share[:, None] * self.delta
+        distance = np.sqrt(((point - candidates) ** 2).sum(axis=1))
+        best = int(distance.argmin())
+        found = candidates[best] / scale
+        return float(found[0]), float(found[1]), float(distance[best])
+
+
+def nearest_on_polyline(points: list[tuple[float, float]], lon: float, lat: float,
+                        segments: list[int]) -> tuple[int, float, float, float] | None:
+    """Closest point to ``(lon, lat)`` on segments ``points[i] -> points[i + 1]``.
+
+    Returns ``(segment, lon, lat, distance_m)``, or ``None`` without segments.
+    Distances within 1 m are a tie, won by the segment listed first, so the
+    caller's order decides between overlapping out-and-back segments.
+    """
+    if not segments:
+        return None
+    cos_lat = math.cos(math.radians(lat))
+    scale = np.array([M_PER_DEG_LON_EQUATOR * cos_lat, M_PER_DEG_LAT])
+    xy = np.array(points, dtype=float) * scale
+    index = np.array(segments)
+    start, delta = xy[index], xy[index + 1] - xy[index]
+    point = np.array([lon, lat]) * scale
+    share = np.clip(((point - start) * delta).sum(axis=1)
+                    / np.maximum((delta ** 2).sum(axis=1), 1e-9), 0.0, 1.0)
+    nearest = start + share[:, None] * delta
+    distance = np.sqrt(((point - nearest) ** 2).sum(axis=1))
+    best = int(np.flatnonzero(distance <= distance.min() + 1.0)[0])
+    found = nearest[best] / scale
+    return int(index[best]), float(found[0]), float(found[1]), float(distance[best])
 
 
 class Schedule:
@@ -117,10 +146,15 @@ class Schedule:
         a spatial check ("does the vehicle drive where its assignment goes"),
         not a schedule-position check.
         """
+        nearest = self.route_nearest(tr_id, lon, lat)
+        return nearest[2] if nearest is not None else None
+
+    def route_nearest(self, tr_id: str, lon: float, lat: float) -> tuple[float, float, float] | None:
+        """Closest point ``(lon, lat, distance_m)`` of the whole-day planned-stop line."""
         line = self._lines.get(tr_id)
         if line is None or not (math.isfinite(lon) and math.isfinite(lat)):
             return None
-        return line.distance_m(lon, lat)
+        return line.nearest(lon, lat)
 
     def stops_between(self, tr_id: str, low: datetime, high: datetime) -> list[Arrival]:
         """Planned stops with ``low <= time <= high``, in plan (time) order."""
