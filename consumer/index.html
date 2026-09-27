@@ -12,12 +12,7 @@
   </div>
   <div id="data-status" class="data-status" role="status" aria-live="polite">Загрузка…</div>
   <div class="events">
-    <button type="button" id="events-toggle" class="events-toggle" aria-expanded="false" aria-controls="events-panel">События <b id="events-unread" class="events-unread" hidden>0</b></button>
-    <section id="events-panel" class="events-panel" aria-label="Центр событий" hidden>
-      <div class="events-head"><b>События</b><span id="events-summary"></span><button type="button" id="events-close" aria-label="Закрыть центр событий">×</button></div>
-      <div id="events-list" class="events-list"></div>
-      <small class="events-note">Событие — эпизод задержки &gt; 2 мин. Прочитано, «в работе» и «задержка закончилась» — разные состояния. Только в этом браузере и этом прогоне.</small>
-    </section>
+    <button type="button" id="events-toggle" class="events-toggle" aria-controls="events-panel">События <b id="events-unread" class="events-unread" hidden>0</b></button>
   </div>
   <details id="diagnostics" class="diagnostics"><summary>Диагностика</summary><dl id="diag-list"></dl></details>
 </header>
@@ -26,16 +21,28 @@
     <div id="map" aria-label="Карта Москвы, вид сверху"></div>
     <div id="map-state" class="map-state" role="status">Загрузка геоосновы…</div>
     <div id="attention" class="attention" role="status" aria-live="polite" hidden></div>
-    <button type="button" id="overview" class="overview" title="Показать все ТС прогона">Все ТС</button>
-    <button type="button" id="follow" class="overview follow" hidden></button>
+    <div class="map-tools">
+      <button type="button" id="follow" class="overview follow" hidden></button>
+      <button type="button" id="dim-nodata" class="map-tool dim-toggle" aria-pressed="true" title="ТС без прогноза — бледнее и без подписи на карте"><i class="switch" aria-hidden="true"><i></i></i>Приглушить без прогноза</button>
+      <button type="button" id="overview" class="overview" title="Показать все ТС прогона">Все ТС</button>
+    </div>
     <div id="toasts" class="toasts" aria-live="polite"></div>
     <div class="legend" aria-label="Условные обозначения">
       <div class="legend-row" id="legend-vehicles"><b>ТС</b><span><img class="legend-symbol" data-symbol="normal" alt="">≤ 2 мин</span><span><img class="legend-symbol" data-symbol="warning" alt="">&gt; 2 мин «!»</span><span><img class="legend-symbol" data-symbol="severe" alt="">≥ 5 мин «!!»</span><span><img class="legend-symbol" data-symbol="nodata" alt="">без прогноза</span><span><img class="legend-symbol" data-symbol="invalid" alt="">нет GPS «?»</span><span><img class="legend-symbol" data-symbol="selected" alt="">выбрано</span><span class="legend-help" id="legend-help" tabindex="0" role="note" aria-label="Пояснение к легенде" title="Цвет ТС — прогноз задержки у цели, не вероятность. Форма значка дублирует цвет: «!» и «!!» — задержка, серый пунктир — прогноза пока нет (обычно до выхода ТС на маршрут), «?» — последний кадр без валидного GPS, «≠» — вне маршрута наряда; треугольник у значка — направление движения. Линии — плановые маршруты нарядов, не GPS-треки; каждая сдвинута вправо по ходу движения, встречные направления идут рядом.">?</span></div>
       <div class="legend-row" id="legend-route" hidden><b>Маршрут</b><span><i class="line ahead"></i>впереди →</span><span><i class="line passed"></i>пройдено</span><span><i class="stop"></i>остановка</span><span><img class="legend-symbol" data-symbol="target" alt="">цель</span><span><i class="line leader"></i>вне маршрута</span></div>
     </div>
+    <div id="hotkeys" class="hotkeys" aria-label="Горячие клавиши"><span>J / K — следующее / предыдущее событие</span><span>W — взять</span><span>S — отложить 5 мин</span><span>C — закрыть</span><span>Esc — снять выбор</span></div>
   </section>
   <aside class="side">
-    <section class="list-panel" aria-label="Транспорт">
+    <div class="side-tabs" role="tablist" aria-label="Панель">
+      <button type="button" role="tab" id="tab-events" data-tab="events" aria-controls="events-panel">События <b id="events-count">0</b></button>
+      <button type="button" role="tab" id="tab-vehicles" data-tab="vehicles" aria-controls="list-panel">Транспорт <b id="vehicles-count">0</b></button>
+    </div>
+    <section id="events-panel" class="events-panel" aria-label="Очередь событий">
+      <div id="events-list" class="events-list"></div>
+      <div id="events-bulk" class="events-bulk" hidden></div>
+    </section>
+    <section class="list-panel" id="list-panel" aria-label="Транспорт">
       <div class="filters" role="group" aria-label="Фильтр">
         <button type="button" data-filter="all" aria-pressed="true">Все <b>0</b></button>
         <button type="button" data-filter="warning" aria-pressed="false">С предупреждениями <b>0</b></button>

@@ -16,6 +16,8 @@ const LABELS = {
   // Prediction freshness
   prediction_pending: 'прогноз обновляется для новой цели',
   prediction_held_previous_target: 'прогноз прошлой цели, новая цель считается',
+  // Dispatcher's own mark in the UI (not a Backend code): «Отметить: неисправен GPS».
+  gps_marked_faulty: 'GPS неисправен — отмечено диспетчером',
   prediction_waiting_new_telemetry: 'ожидается новая телеметрия для прогноза',
   prediction_behind_input: 'прогноз отстаёт от телеметрии', // legacy: replaced by `prediction_updating`
   prediction_aging: 'прогноз устарел',

@@ -1,7 +1,7 @@
 import * as maplibregl from 'maplibre-gl';
 import {PMTiles, Protocol} from 'pmtiles';
-import {NOTE_MAX, acknowledge, addNote, assess, countByFilter, createIncidentStore, findIncident, incidentCounts,
-  incidentForVehicle, isHeld, markRead, observeSnapshot, orderedIncidents, reopen, visibleRows} from './incidents.js';
+import {NOTE_MAX, assess, countByFilter, findIncident, incidentCounts, incidentForVehicle, isHeld, visibleRows} from './incidents.js';
+import * as Q from './event-queue.js';
 import {patchChildren, patchText} from './dom.js';
 import {placeLabels} from './map-labels.js';
 import {drawSymbol, headingLook, shapeOf, targetLook, vehicleLook} from './map-symbols.js';
@@ -44,6 +44,8 @@ const FILTER_LABEL = {all: 'Все', warning: 'С предупреждениям
 const NOT_ON_ROUTE_REASONS = new Set(['no_target_in_horizon']);
 const UPDATING_REASONS = new Set(['prediction_pending', 'prediction_waiting_new_telemetry', 'prediction_behind_input', 'prediction_held_previous_target']);
 function noForecastText(v) {
+  if (v.reason === 'gps_marked_faulty') return 'GPS неисправен — отмечено диспетчером';
+  if (v.gps_suspect === 'no_plan') return 'нет наряда — маршрута и прогноза нет';
   if (v.route_not_started === true || NOT_ON_ROUTE_REASONS.has(v.reason)) return 'прогноз появится, когда ТС выйдет на маршрут';
   if (v.prediction_state === 'updating' || v.prediction_updating === true || UPDATING_REASONS.has(v.reason)) return 'обновляется';
   return 'прогноза пока нет';
@@ -78,10 +80,25 @@ const runs = createRunTracker();
 // Local events and dispatcher actions of the run on screen. The epoch is part of every incident ID,
 // so a control left from a previous run can never act on an episode of the new one.
 let epoch = 1;
-let incidents = createIncidentStore(`live${epoch}`);
-let eventsOpen = false;
-let toasts = []; // [{id, timer}] — one per newly opened episode
+// The reaction queue (event-queue.js, v2) wraps the incident store: states «Требуют реакции / В
+// работе / Отложены / Завершены», SLA, snooze and close with a reason. It is immutable: every
+// action returns a new queue.
+let queue = Q.createQueue(`live${epoch}`);
+const store = () => queue.store;
+const setQueue = next => { if (next && next !== queue) queue = next; };
+let queueWatched = false; // the first snapshot of a run only records what already exists (no toasts)
 let noteDraft = {id: null, text: ''};
+// v2 side panel tab (a per-viewer convenience) and the card's open menu.
+const loadPref = (key, fallback) => { try { return sessionStorage.getItem(key) ?? fallback; } catch { return fallback; } };
+const savePref = (key, value) => { try { sessionStorage.setItem(key, value); } catch { /* private mode */ } };
+let sideTab = loadPref('t7-side-tab', 'events') === 'vehicles' ? 'vehicles' : 'events';
+let endedOpen = false; // «Завершены» expanded
+let cardMenu = null; // null | 'snooze' | 'close'
+let bulkMenu = null; // null | 'snooze' | 'close'
+let dimNoData = true; // «Приглушить без прогноза»
+// «Отметить: неисправен GPS» — the dispatcher's mark per vehicle, for this run in this browser.
+let gpsMarks = new Set();
+const GPS_MARK_REASON = 'gps_marked_faulty';
 let contact = {id: null, result: null}; // driver-contact preview: open incident and last copy outcome
 let build = null; // consumer /api/build: served-file hashes and build identity
 // Route context of the selected vehicle (consumer /api/route/{tr_id}).
@@ -97,7 +114,15 @@ let cardFor; // the vehicle the card's DOM was built for; another vehicle gets a
 let routesFeed = {status: 'idle', data: null, at: 0, inFlight: false};
 const ROUTES_MS = 10000;
 
-const snapshotRows = () => Array.isArray(feed?.snapshot?.vehicles) ? feed.snapshot.vehicles : [];
+// A vehicle the dispatcher marked «неисправен GPS» is shown as invalid GPS without a current
+// forecast: grey with «?», never a warning, with the mark as its reason.
+const rawRows = () => Array.isArray(feed?.snapshot?.vehicles) ? feed.snapshot.vehicles : [];
+const snapshotRows = () => (gpsMarks.size ? rawRows().map(v => (gpsMarks.has(String(v.tr_id))
+  ? {...v, location_valid: false, status: 'degraded', reason: GPS_MARK_REASON} : v)) : rawRows());
+// The queue's two clocks (event-queue.js): the reaction SLA runs on wall seconds (epoch, so it
+// survives a reload), history and snooze on the run's data clock.
+const wallNow = () => Date.now() / 1000;
+const dataNow = () => sourceClock() ?? undefined;
 const currentRun = () => feed?.snapshot?.run ?? null;
 // Values are current only while Backend answers.
 const isFresh = () => feed?.status === 'online';
@@ -311,7 +336,8 @@ function renderMapObjects() {
   }
   for (const {vehicle, assessment} of ordered) {
     if (headingOk(vehicle)) symbols.push(headingSymbol(vehicle));
-    symbols.push(vehicleSymbol(vehicle, assessment));
+    const quiet = dimNoData && assessment.level === 'nodata' && String(vehicle.tr_id) !== selected;
+    symbols.push({...vehicleSymbol(vehicle, assessment), opacity: quiet ? 0.45 : 1});
   }
   transportLayer.setSymbols(symbols);
   renderLabels(ordered);
@@ -380,6 +406,7 @@ function renderLabels(rows) {
     // reads as a failure and hides the warnings. The reason stays in the tooltip, list and card.
     const nodata = assessment.level === 'nodata';
     element.textContent = nodata ? id : `${id} · ${shortValue(vehicle, assessment, {short: true})}`;
+    element.classList.toggle('is-dimmed', nodata && dimNoData && id !== selected);
     element.title = nodata ? `${id} · ${runOver(currentRun()) ? 'прогон завершён' : shortValue(vehicle, assessment, {short: true})}` : '';
     marker.setLngLat([Number(vehicle.lon), Number(vehicle.lat)]);
   }
@@ -395,7 +422,7 @@ function layoutLabels() {
   if (!map || !(labels.size || stopLabels.size)) return;
   const canvas = map.getCanvas();
   const origin = canvas.getBoundingClientRect();
-  const obstacles = [...document.querySelectorAll('#map-pane .legend, #map-pane .attention:not([hidden]), #map-pane .overview, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right')]
+  const obstacles = [...document.querySelectorAll('#map-pane .legend, #map-pane .attention:not([hidden]), #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right')]
     .map(el => el.getBoundingClientRect())
     .filter(r => r.width && r.height)
     .map(r => ({x: r.x - origin.x, y: r.y - origin.y, width: r.width, height: r.height}));
@@ -453,7 +480,7 @@ function overview(animate = true) {
 
 // Show the selected vehicle together with its target, so the forecast's stop is on screen.
 // The map area not covered by panels drawn over it (banner, legend, buttons, toasts), in pane pixels.
-const OVERLAYS = '#map-pane .attention:not([hidden]), #map-pane .legend, #map-pane .overview:not([hidden]), #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right';
+const OVERLAYS = '#map-pane .attention:not([hidden]), #map-pane .legend, #map-pane .map-tools, #map-pane .toast, #map-pane .maplibregl-ctrl-bottom-right';
 function overlayRects() {
   const pane = $('map-pane').getBoundingClientRect();
   return [...document.querySelectorAll(OVERLAYS)].map(e => e.getBoundingClientRect()).filter(r => r.width && r.height)
@@ -502,9 +529,10 @@ function choose(id, focus) {
   const changed = next !== selected;
   selected = next;
   // Choosing an object is reading its event; it is not taking it into work.
-  const incident = selected ? incidentForVehicle(incidents, selected) : null;
-  if (incident?.unread) { markRead(incidents, incident.id); renderEvents(); }
-  if (changed) { clearRoute(); if (selected) loadRoute(); follow = Boolean(selected); }
+  const incident = selected ? incidentForVehicle(store(), selected) : null;
+  if (incident?.unread) { setQueue(Q.markRead(queue, incident.id)); }
+  if (changed) { clearRoute(); if (selected) loadRoute(); follow = Boolean(selected); cardMenu = null; }
+  renderEvents(); renderAttention(); renderToasts();
   renderList();
   renderCard();
   renderMapObjects();
@@ -577,7 +605,7 @@ const updatingText = v => `обновляется · возраст ${durationTe
 
 function rowNote(vehicle, assessment) {
   let note = LEVEL[assessment.level].label;
-  const incident = incidentForVehicle(incidents, vehicle.tr_id);
+  const incident = incidentForVehicle(store(), vehicle.tr_id);
   if (incident?.unread && incident.state !== 'resolved' && assessment.level !== 'nodata') note = `Новое · ${note.toLowerCase()}`;
   if (assessment.level === 'nodata') {
     note = capital(!isFresh() ? 'Backend недоступен' : runOver(currentRun()) ? 'прогон завершён'
@@ -772,22 +800,18 @@ function renderCard() {
     'маршрут и снимок берут цель и прогноз из одной строки Backend; ревизия связывает их');
   tech.append(details);
 
-  const incident = incidentForVehicle(incidents, v.tr_id);
-  const actions = document.createElement('div');
-  actions.className = 'card-actions';
-  if (incident && incident.state !== 'resolved') {
-    actions.append(el('button', {type: 'button', id: 'incident-action', className: 'primary', 'data-key': incident.id,
-      dataset: {workflow: incident.workflow, action: 'incident-workflow', id: incident.id}},
-    incident.workflow === 'in_work' ? 'Снять с работы' : 'Взять в работу'));
-  }
-  const show = el('button', {type: 'button', id: 'card-show', className: !incident || incident.state === 'resolved' ? 'primary' : null,
-    disabled: !(locationOk(v) && mapStatus === 'ready'), dataset: {action: 'focus'}}, 'Показать на карте');
-  actions.append(show);
+  // v2: the vehicle's event (status, SLA) and the dispatcher's actions sit in the sticky top.
+  const eventId = Q.eventForVehicle(queue, v.tr_id);
+  const view = eventId ? Q.eventView(queue, eventId, wallNow()) : null;
+  const incident = eventId ? findIncident(store(), eventId) : null;
+  top.append(...eventControls(view, v));
+  const notes = [];
   if (!locationOk(v) || !gpsValid(v)) {
-    actions.append(el('p', {className: 'card-note'}, locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
+    notes.push(el('p', {className: 'card-note', 'data-key': 'gps-note'}, gpsMarks.has(String(v.tr_id)) ? 'GPS неисправен — отмечено диспетчером; на карте последняя позиция, серая иконка с «?».'
+      : locationOk(v) ? 'Последний кадр без валидного GPS: на карте — последняя валидная позиция, серая иконка с «?».'
       : positionNote(v) === 'вне карты' ? 'Позиция вне области карты — объект на карте не показан.' : 'Валидной позиции нет — объект не показан на карте.'));
   }
-  const parts = [top, off, routeBlock(v), facts, incident ? incidentBlock(incident, v) : null, tech, actions].filter(Boolean);
+  const parts = [top, off, ...notes, stepsBlock(view, v), routeBlock(v), incident ? incidentBlock(incident, v) : null, facts, tech].filter(Boolean);
   // Another vehicle gets a fresh card; the same vehicle is patched in place, so focus, typing, the
   // scroll and a button being pressed all survive the poll.
   if (cardFor !== selected) { card.replaceChildren(...parts); cardFor = selected; card.scrollTop = 0; } else patchChildren(card, parts);
@@ -870,23 +894,77 @@ const incidentTitle = incident => `ТС ${incident.tr_id}`;
 const vehicleStateText = incident => (incident.vehicle_state === 'nodata' ? 'нет данных'
   : incident.vehicle_state === 'normal' ? 'задержка закончилась' : `прогноз ${delayText(incident.last_s)}`);
 
-// The object's event: lifecycle, dispatcher status, a plain-text note and the local history.
+// v2 card: the event row (status, number, since, peak, SLA badge) and the dispatcher's buttons,
+// with the snooze and close-reason menus under them.
+const WF_TEXT = {new: 'Новое', work: 'В работе', snoozed: 'Отложено', closed: 'Закрыто', ended: 'Завершено'};
+function eventControls(view, v) {
+  const out = [];
+  if (view) {
+    const wf = view.group === 'ended' && view.wf !== 'closed' ? 'ended' : view.wf;
+    out.push(el('div', {className: 'event-row', 'data-key': `ev:${view.id}`},
+      el('span', {className: 'incident-flow', dataset: {workflow: wf}}, WF_TEXT[wf] ?? wf),
+      el('span', {}, eventMeta(view)), view.group === 'ended' ? null : slaBadge(view.badge, {id: 'event-sla'})));
+  }
+  const can = view?.can ?? {};
+  const buttons = el('div', {className: 'card-buttons', 'data-key': `buttons:${view?.id ?? 'none'}`});
+  if (can.take) buttons.append(el('button', {type: 'button', id: 'incident-action', className: 'primary', dataset: {action: 'take-event', id: view.id}}, 'Взять в работу', el('kbd', {}, 'W')));
+  if (can.untake) buttons.append(el('button', {type: 'button', id: 'incident-action', dataset: {action: 'untake-event', id: view.id}}, 'Вернуть в новые'));
+  if (can.snooze) buttons.append(el('button', {type: 'button', id: 'snooze-open', 'aria-expanded': String(cardMenu === 'snooze'), dataset: {action: 'card-menu', menu: 'snooze'}}, 'Отложить ▾', el('kbd', {}, 'S')));
+  if (can.unsnooze) buttons.append(el('button', {type: 'button', id: 'unsnooze', dataset: {action: 'unsnooze-event', id: view.id}}, 'Снять напоминание'));
+  if (can.close) buttons.append(el('button', {type: 'button', id: 'close-open', 'aria-expanded': String(cardMenu === 'close'), dataset: {action: 'card-menu', menu: 'close'}}, 'Закрыть ▾', el('kbd', {}, 'C')));
+  buttons.append(el('button', {type: 'button', id: 'card-show', className: can.take ? null : 'primary',
+    disabled: !(locationOk(v) && mapStatus === 'ready'), dataset: {action: 'focus'}}, 'Показать на карте'));
+  out.push(buttons);
+  if (view && cardMenu === 'snooze' && can.snooze) {
+    out.push(el('div', {className: 'card-menu', id: 'snooze-menu', 'data-key': 'menu:snooze'}, 'Напомнить через (время данных)',
+      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', dataset: {action: 'snooze-event', id: view.id, minutes: String(m)}}, `${m} мин`))));
+  }
+  if (view && cardMenu === 'close' && can.close) {
+    out.push(el('div', {className: 'card-menu reasons', id: 'close-menu', 'data-key': 'menu:close'}, el('span', {}, 'Причина закрытия — попадёт в историю события'),
+      ...(view.close_reasons ?? Q.CLOSE_REASONS).map(r => el('button', {type: 'button', dataset: {action: 'close-event', id: view.id, reason: r}}, r))));
+  }
+  return out;
+}
+
+// «Шаги реакции» of an open event (a local checklist, recorded in its history), with the GPS mark
+// next to «Проверить позицию и GPS». Without an open event only the GPS mark is offered.
+function gpsMarkControls(v) {
+  const id = String(v.tr_id);
+  const marked = gpsMarks.has(id);
+  const suspect = ['no_fix', 'out_of_map', 'jump', 'far_from_route'].includes(v.gps_suspect) && v.gps_suspect_text ? v.gps_suspect_text : null;
+  return el('span', {className: 'gps-mark', 'data-key': `gps:${id}`},
+    suspect && !marked ? el('span', {className: 'gps-suspect', id: 'gps-suspect'}, `Похоже на сбой GPS: ${suspect}`) : null,
+    el('button', {type: 'button', id: 'gps-mark', dataset: {action: marked ? 'gps-unmark' : 'gps-mark', id}}, marked ? 'Снять отметку' : 'Отметить: неисправен GPS'));
+}
+function stepsBlock(view, v) {
+  const marked = gpsMarks.has(String(v.tr_id));
+  if (!view?.can?.steps) {
+    return el('div', {className: 'steps quiet', 'data-key': `steps:none:${v.tr_id}`},
+      marked ? el('p', {className: 'gps-marked'}, 'GPS неисправен — отмечено диспетчером') : null, gpsMarkControls(v));
+  }
+  const box = el('div', {className: 'steps', id: 'steps', 'data-key': `steps:${view.id}`},
+    el('div', {className: 'steps-head'}, el('b', {}, 'Шаги реакции'), el('span', {id: 'steps-progress'}, view.steps_progress)));
+  for (const step of view.steps) {
+    const input = el('input', {type: 'checkbox', dataset: {action: 'toggle-step', id: view.id, step: step.key}});
+    input.checked = step.done;
+    const hint = step.key !== 'gps' ? step.hint : marked ? 'GPS неисправен — отмечено диспетчером'
+      : !gpsValid(v) ? 'Последняя позиция недостоверна' : v.off_route === true ? 'Координаты не на маршруте наряда' : 'GPS обновляется · на маршруте';
+    const row = el('div', {className: 'step', dataset: {done: String(step.done), step: step.key}},
+      input, el('b', {}, step.title), el('small', {}, hint));
+    if (step.key === 'gps') row.append(gpsMarkControls(v));
+    box.append(row);
+  }
+  return box;
+}
+
+// «История события»: lifecycle and actions, a plain-text note, the driver-contact prototype.
 function incidentBlock(incident, vehicle) {
   const box = document.createElement('section');
   box.className = 'incident';
   box.dataset.state = incident.state;
   box.dataset.id = incident.id;
   box.dataset.key = incident.id;
-  const head = document.createElement('div');
-  head.className = 'incident-head';
-  const name = document.createElement('b'); name.textContent = `Событие №${incident.number}`;
-  const state = document.createElement('span'); state.className = 'incident-state'; state.dataset.state = incident.state; state.textContent = INCIDENT_STATE[incident.state];
-  const flow = document.createElement('span'); flow.className = 'incident-flow'; flow.dataset.workflow = incident.workflow; flow.textContent = WORKFLOW[incident.workflow];
-  head.append(name, state, flow);
-  const who = document.createElement('p');
-  who.className = 'incident-members';
-  who.textContent = `${incidentTitle(incident)} · ${vehicleStateText(incident)}`;
-
+  const head = el('div', {className: 'incident-head'}, el('b', {}, `История события №${incident.number}`));
   const form = document.createElement('form');
   form.className = 'note-form';
   const input = document.createElement('input');
@@ -901,7 +979,6 @@ function incidentBlock(incident, vehicle) {
   const add = document.createElement('button'); add.type = 'submit'; add.textContent = 'Добавить';
   form.append(input, add);
   form.dataset.id = incident.id;
-
   const history = document.createElement('ol');
   history.className = 'incident-history';
   history.setAttribute('aria-label', 'История события');
@@ -916,8 +993,8 @@ function incidentBlock(incident, vehicle) {
   }
   const scope = document.createElement('small');
   scope.className = 'incident-scope';
-  scope.textContent = 'Действия и заметки хранятся только в этом браузере и этом прогоне эмулятора; время — по часам данных.';
-  box.append(head, who, form, contactBlock(incident, vehicle), history, scope);
+  scope.textContent = 'Действия, шаги и заметки хранятся только в этом браузере и этом прогоне; время — по часам данных.';
+  box.append(head, history, form, contactBlock(incident, vehicle), scope);
   return box;
 }
 
@@ -969,8 +1046,6 @@ function contactBlock(incident, vehicle) {
 
 // One line over the map (L-5, H-2): the end of the run, else the first delay the dispatcher has not
 // opened and not taken into work; never a repeat of the card that is already open.
-const BANNER_HOLD_MS = 30000;
-let bannerLead = null;
 function renderAttention() {
   const box = $('attention');
   if (!feed?.snapshot || !snapshotRows().length) { box.hidden = true; return; }
@@ -993,138 +1068,199 @@ function renderAttention() {
     patchText(box, `Прогон ${runStateText(run)}. Прогнозы не обновляются — перезапустите прогон (README).`);
     return;
   }
-  const warnings = visibleRows(snapshotRows(), {filter: 'warning', fresh: true});
-  // Only real warnings are announced; vehicles without a forecast are not counted here (user decision).
-  if (!warnings.length) {
-    bannerLead = null;
-    box.dataset.level = 'normal';
-    patchText(box, 'Предупреждений нет');
+  // v2 attention bar: the event that most needs a reaction (overdue first), except the one whose
+  // card is open (L-5); otherwise a calm line. Vehicles without a forecast are never counted here.
+  const {needs, work, snoozed} = Q.groups(queue, wallNow());
+  const open = needs.filter(view => view.tr_id !== selected && findIncident(store(), view.id)?.vehicle_state === 'warning')
+    .sort((a, b) => (b.sla?.over ?? false) - (a.sla?.over ?? false) || (a.sla?.left_s ?? 0) - (b.sla?.left_s ?? 0) || a.number - b.number);
+  if (!open.length && needs.some(view => view.tr_id === selected)) {
+    // The only events waiting are open in the card: said without repeating the ID (L-5).
+    box.dataset.level = 'warning';
+    patchText(box, 'Требует реакции: событие открыто в карточке справа');
     return;
   }
-  const open = warnings.filter(({vehicle}) => String(vehicle.tr_id) !== selected
-    && incidentForVehicle(incidents, vehicle.tr_id)?.workflow !== 'in_work');
   if (!open.length) {
     box.dataset.level = 'normal';
-    patchText(box, `Все предупреждения открыты или в работе (${warnings.length}).`);
+    const next = snoozed.map(v => v.snooze_until_text).filter(Boolean).sort()[0];
+    const calm = [work.length ? `в работе ${work.length}` : null, snoozed.length ? `отложено ${snoozed.length}` : null,
+      next ? `напоминание в ${next}` : null].filter(Boolean);
+    patchText(box, calm.length ? `Предупреждений нет · ${calm.join(' · ')}` : 'Предупреждений нет');
     return;
   }
-  // The lead vehicle stays at least BANNER_HOLD_MS while it is still an open warning (D-3), so the
-  // banner does not flip between two vehicles whose forecasts cross every poll.
-  const now = performance.now();
-  const kept = bannerLead && now - bannerLead.since < BANNER_HOLD_MS ? open.find(({vehicle}) => String(vehicle.tr_id) === bannerLead.id) : null;
-  const lead = kept ?? open[0];
-  if (!bannerLead || bannerLead.id !== String(lead.vehicle.tr_id)) bannerLead = {id: String(lead.vehicle.tr_id), since: now};
-  const {vehicle, assessment} = lead;
-  box.dataset.level = assessment.level;
-  const title = el('span', {className: 'attention-title'}, incidentForVehicle(incidents, vehicle.tr_id)?.unread ? 'Новая задержка' : 'Задержка у цели');
-  const body = el('span', {}, `${vehicle.tr_id} · прогноз ${delayText(vehicle.prediction_s)}${open.length > 1 ? ` · ещё ${open.length - 1}` : ''}`);
-  const button = el('button', {type: 'button', 'data-key': 'attention-open', dataset: {action: 'choose', id: String(vehicle.tr_id)}}, 'Открыть');
-  patchChildren(box, [title, body, button]);
+  const [top] = open;
+  box.dataset.level = eventLevel(top);
+  const text = el('div', {className: 'attention-text', 'data-key': 'text'},
+    el('span', {className: 'attention-title'}, 'Требует реакции'),
+    el('span', {}, `ТС ${top.tr_id} · ${delayText(top.last_s)} · с ${planText(top.opened_at) ?? clockText(top.opened_at)}`));
+  const actions = el('div', {className: 'attention-actions', 'data-key': 'actions'},
+    el('button', {type: 'button', 'data-key': 'attention-open', dataset: {action: 'choose', id: String(top.tr_id)}}, 'Показать'),
+    el('button', {type: 'button', className: 'primary', 'data-key': 'attention-take', dataset: {action: 'take-event', id: top.id}}, 'Взять в работу', el('kbd', {}, 'W')));
+  const parts = [text, slaBadge(top.badge, {'data-key': 'sla'}), actions];
+  if (open.length > 1) parts.push(el('button', {type: 'button', className: 'more', 'data-key': 'more', dataset: {action: 'tab', tab: 'events'}}, `ещё ${open.length - 1} →`));
+  patchChildren(box, parts);
 }
 
-// ---- Event centre and toasts ---------------------------------------------------------------
+// ---- Reaction queue (v2), toasts --------------------------------------------------------------
+const eventLevel = view => (view.severe || view.last_s >= 300 ? 'severe' : 'warning');
+const slaBadge = (badge, extra = {}) => el('span', {className: 'sla', dataset: {tone: badge.tone}, ...extra}, badge.text);
+const eventMeta = view => [`№${view.number}`, `с ${planText(view.opened_at) ?? clockText(view.opened_at)}`, `пик ${delayText(view.peak_s)}`,
+  view.lost ? 'нет данных' : null, view.close_reason ? `закрыто: ${view.close_reason}` : null].filter(Boolean).join(' · ');
+const eventValue = view => (view.group === 'ended' ? `пик ${delayText(view.peak_s)}` : delayText(view.last_s));
+
+function queueItem(view) {
+  const current = findIncident(store(), view.id)?.tr_id === selected;
+  const item = el('div', {className: `event${current ? ' is-current' : ''}`, role: 'button', tabindex: '0', 'data-key': view.id,
+    dataset: {id: view.id, action: 'open-event', group: view.group, state: view.lifecycle, unread: String(view.unread), level: eventLevel(view)}});
+  const check = el('input', {type: 'checkbox', className: 'event-check', 'aria-label': `Выбрать событие ТС ${view.tr_id}`,
+    dataset: {action: 'check-event', id: view.id}});
+  check.checked = view.selected;
+  check.disabled = view.group === 'ended';
+  item.append(check, el('span', {className: 'event-title'}, `ТС ${view.tr_id}`), el('span', {className: 'event-value'}, eventValue(view)),
+    el('span', {className: 'event-meta'}, eventMeta(view)), slaBadge(view.badge));
+  if (view.sla) item.append(el('span', {className: 'sla-bar', dataset: {tone: view.badge.tone}, style: `width:${Math.round(view.sla.pct)}%`}));
+  return item;
+}
+
 function renderEvents() {
-  const counts = incidentCounts(incidents);
+  const all = Q.groups(queue, wallNow());
+  const {counts} = all;
+  const side = document.querySelector('.side');
+  side.dataset.tab = sideTab;
+  for (const tab of document.querySelectorAll('.side-tabs [data-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.tab === sideTab));
+  $('events-count').textContent = String(counts.open);
+  $('events-count').dataset.open = String(counts.needs);
+  $('vehicles-count').textContent = String(snapshotRows().length);
   const toggle = $('events-toggle');
-  toggle.setAttribute('aria-expanded', String(eventsOpen));
-  toggle.dataset.active = String(counts.active + counts.monitoring_lost);
+  toggle.dataset.tabOpen = String(sideTab === 'events');
+  toggle.dataset.active = String(counts.open);
   $('events-unread').textContent = String(counts.unread);
   $('events-unread').hidden = counts.unread === 0;
-  toggle.title = `Непрочитанных ${counts.unread} · активных ${counts.active} · мониторинг потерян ${counts.monitoring_lost} · закончились ${counts.resolved}`;
-  const panel = $('events-panel');
-  panel.hidden = !eventsOpen;
-  if (!eventsOpen) return;
-  $('events-summary').textContent = `Активных ${counts.active} · мониторинг потерян ${counts.monitoring_lost} · закончились ${counts.resolved}`;
-  const list = $('events-list');
-  const all = orderedIncidents(incidents);
-  if (!all.length) {
-    const empty = document.createElement('p');
-    empty.className = 'events-empty';
-    empty.textContent = `Событий нет. Событие открывается, когда прогноз задержки больше 2 мин${!isFresh() ? '; сейчас Backend недоступен и предупреждения не оцениваются' : ''}.`;
-    patchChildren(list, [empty]);
-    return;
+  toggle.title = `Требуют реакции ${counts.needs} · в работе ${counts.work} · отложены ${counts.snoozed} · завершены ${counts.ended}`;
+  const parts = [];
+  const group = (key, title, extra) => el('div', {className: 'queue-group', 'data-key': `g:${key}`, dataset: {group: key, count: String(counts[key])}},
+    el('span', {}, `${title} · ${counts[key]}`), extra);
+  const all2 = key => el('button', {type: 'button', dataset: {action: 'select-group', group: key}},
+    all[key].length && all[key].every(v => v.selected) ? 'снять выбор' : 'выбрать все');
+  parts.push(group('needs', Q.GROUP_TITLES.needs, all.needs.length > 1 ? all2('needs') : null));
+  if (!all.needs.length) {
+    parts.push(el('p', {className: 'events-empty', 'data-key': 'needs-empty'}, isFresh()
+      ? 'Новых событий нет. Событие открывается, когда прогноз задержки у цели больше 2 мин.'
+      : 'Backend недоступен — предупреждения сейчас не оцениваются.'));
   }
-  patchChildren(list, all.map(incident => {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'event';
-    item.dataset.id = incident.id;
-    item.dataset.key = incident.id;
-    item.dataset.action = 'open-event';
-    item.dataset.state = incident.state;
-    item.dataset.unread = String(incident.unread);
-    const title = document.createElement('span'); title.className = 'event-title'; title.textContent = incidentTitle(incident);
-    const state = document.createElement('span'); state.className = 'incident-state'; state.dataset.state = incident.state; state.textContent = INCIDENT_STATE[incident.state];
-    const who = document.createElement('span'); who.className = 'event-members'; who.textContent = vehicleStateText(incident);
-    const meta = document.createElement('span'); meta.className = 'event-meta';
-    meta.textContent = [`№${incident.number}`, `с ${clockText(incident.opened_at)}`, `пик ${delayText(incident.peak_s)}`, WORKFLOW[incident.workflow],
-      incident.notes.length ? `заметок ${incident.notes.length}` : null, incident.unread ? 'не прочитано' : null].filter(Boolean).join(' · ');
-    item.append(title, state, who, meta);
-    return item;
-  }));
+  parts.push(...all.needs.map(queueItem));
+  for (const key of ['work', 'snoozed']) {
+    if (!all[key].length) continue;
+    parts.push(group(key, Q.GROUP_TITLES[key], all[key].length > 1 ? all2(key) : null), ...all[key].map(queueItem));
+  }
+  if (all.ended.length) {
+    const head = group('ended', `${endedOpen ? '▾' : '▸'} ${Q.GROUP_TITLES.ended}${counts.ended_unread ? ` (непрочитано ${counts.ended_unread})` : ''}`,
+      counts.ended_unread ? el('button', {type: 'button', dataset: {action: 'read-ended'}}, 'прочитать все') : null);
+    head.dataset.action = 'toggle-ended';
+    parts.push(head);
+    if (endedOpen) parts.push(...all.ended.map(queueItem));
+  }
+  patchChildren($('events-list'), parts);
+  renderBulk(counts.selected);
+}
+
+function renderBulk(count) {
+  const box = $('events-bulk');
+  box.hidden = !count;
+  if (!count) { bulkMenu = null; patchChildren(box, []); return; }
+  const row = el('div', {className: 'bulk-row', 'data-key': 'row'}, el('b', {}, `Выбрано ${count}`),
+    el('button', {type: 'button', className: 'primary', dataset: {action: 'bulk-take'}}, 'Взять в работу'),
+    el('button', {type: 'button', dataset: {action: 'bulk-menu', menu: 'snooze'}}, 'Отложить ▾'),
+    el('button', {type: 'button', dataset: {action: 'bulk-menu', menu: 'close'}}, 'Закрыть ▾'),
+    el('button', {type: 'button', 'aria-label': 'Снять выбор', dataset: {action: 'bulk-clear'}}, '×'));
+  const parts = [row];
+  if (bulkMenu === 'snooze') {
+    parts.push(el('div', {className: 'bulk-row', 'data-key': 'snooze'}, 'Напомнить через',
+      ...Q.SNOOZE_MIN.map(m => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-snooze', minutes: String(m)}}, `${m} мин`))));
+  } else if (bulkMenu === 'close') {
+    parts.push(el('div', {className: 'bulk-row', 'data-key': 'close'},
+      ...Q.CLOSE_REASONS.map(r => el('button', {type: 'button', className: 'opt', dataset: {action: 'bulk-close', reason: r}}, r))));
+  }
+  patchChildren(box, parts);
+}
+
+function setTab(tab) {
+  sideTab = tab === 'vehicles' ? 'vehicles' : 'events';
+  savePref('t7-side-tab', sideTab);
+  renderEvents();
+}
+
+// GPS marks persist per run in this browser (sessionStorage); marking closes the vehicle's open
+// event with the reason, so it leaves «Требует реакции».
+const MARK_CLOSE_REASON = 'Неисправен GPS — отмечено диспетчером';
+const marksKey = () => `t7-gps-marks:${currentRun()?.run_id ?? 'none'}`;
+function loadMarks() {
+  try { const list = JSON.parse(sessionStorage.getItem(marksKey()) ?? '[]'); return new Set(Array.isArray(list) ? list.map(String) : []); } catch { return new Set(); }
+}
+function setGpsMark(id, on) {
+  if (!id) return;
+  if (on) gpsMarks.add(String(id)); else gpsMarks.delete(String(id));
+  try { sessionStorage.setItem(marksKey(), JSON.stringify([...gpsMarks])); } catch { /* private mode */ }
+  const eventId = Q.eventForVehicle(queue, id);
+  if (on && eventId && Q.eventView(queue, eventId, wallNow())?.can.close) closeEvent(eventId, MARK_CLOSE_REASON);
+  render();
 }
 
 // Go from an event to its vehicle.
 function openEvent(id) {
-  const incident = markRead(incidents, id);
+  const incident = findIncident(store(), id);
   if (!incident) return;
-  eventsOpen = false;
-  dismissToast(id);
+  setQueue(Q.markRead(queue, id));
   filter = 'all'; query = ''; $('search').value = '';
   choose(findRow(incident.tr_id) ? incident.tr_id : null, true);
   render();
 }
 
-function showToast(id) {
-  if (toasts.some(t => t.id === id)) return;
-  toasts.push({id, timer: setTimeout(() => dismissToast(id), TOAST_MS)});
-  toasts = toasts.slice(-TOAST_MAX);
-  renderToasts();
-}
+// The event of the vehicle whose card is open, if any.
+const currentEventId = () => (selected ? Q.eventForVehicle(queue, selected) : null);
 
-function dismissToast(id) {
-  const toast = toasts.find(t => t.id === id);
-  if (!toast) return;
-  clearTimeout(toast.timer);
-  toasts = toasts.filter(t => t !== toast);
-  renderToasts();
+// One dispatcher action on the queue, then everything that shows the queue is redrawn.
+function queueAction(fn) {
+  const next = fn(queue);
+  if (next === queue || !next) return false;
+  queue = next;
+  cardMenu = null; bulkMenu = null;
+  renderCard(); renderEvents(); renderAttention(); renderToasts(); renderList();
+  return true;
 }
+const takeEvent = id => queueAction(q => Q.take(q, id, dataNow()));
+const untakeEvent = id => queueAction(q => Q.untake(q, id, dataNow(), wallNow()));
+const snoozeEvent = (id, minutes) => queueAction(q => Q.snooze(q, id, minutes, dataNow()));
+const unsnoozeEvent = id => queueAction(q => Q.unsnooze(q, id, dataNow()));
+const closeEvent = (id, reason) => queueAction(q => Q.close(q, id, reason, dataNow()));
 
-function clearToasts() { for (const t of toasts) clearTimeout(t.timer); toasts = []; renderToasts(); }
+function dismissToast(key) { queueAction(q => Q.dismissToast(q, key)); }
 
 function renderToasts() {
-  // Only while the delay is current: not for the vehicle whose card is open, not once it ended or
-  // lost its data, and none after the run (E-1, H-2) — the banner and the event centre keep them.
-  const live = !runOver(currentRun());
-  patchChildren($('toasts'), toasts.map(({id}) => findIncident(incidents, id))
-    .filter(incident => live && incident && incident.tr_id !== selected && ['warning', 'severe'].includes(incident.vehicle_state)).map(incident => {
-    const {id} = incident;
-    const box = document.createElement('div');
-    box.className = 'toast';
-    box.dataset.id = id;
-    box.dataset.key = id;
-    box.setAttribute('role', 'status');
-    const title = document.createElement('b'); title.textContent = 'Новая задержка';
-    const body = document.createElement('span');
-    body.textContent = `${incidentTitle(incident)} · ${vehicleStateText(incident)}`;
-    const open = document.createElement('button'); open.type = 'button'; open.className = 'toast-open'; open.textContent = 'Открыть';
-    open.dataset.action = 'open-event'; open.dataset.id = id;
-    const close = document.createElement('button'); close.type = 'button'; close.className = 'toast-close'; close.textContent = '×';
-    close.setAttribute('aria-label', 'Скрыть уведомление');
-    close.dataset.action = 'dismiss-toast'; close.dataset.id = id;
-    box.append(title, body, open, close);
+  // Only for a current delay the dispatcher is not looking at, and none after the run (E-1, H-2);
+  // the queue keeps every event.
+  const live = !runOver(currentRun()) && isFresh();
+  const views = live ? Q.toastViews(queue, wallNow()) : [];
+  patchChildren($('toasts'), views.filter(({event}) => event && event.tr_id !== selected && event.group !== 'ended'
+    && ['warning', 'severe'].includes(findIncident(store(), event.id)?.vehicle_state)).slice(0, TOAST_MAX).map(({key, kind, event}) => {
+    const box = el('div', {className: 'toast', role: 'status', 'data-key': key, dataset: {id: event.id, key, kind, level: eventLevel(event)}});
+    box.append(el('b', {}, kind === 'remind' ? 'Напоминание' : 'Новое событие'),
+      el('span', {}, `ТС ${event.tr_id} · ${delayText(event.last_s)} · ${event.badge.text}`),
+      el('button', {type: 'button', className: 'toast-open', dataset: {action: 'open-event', id: event.id}}, 'Открыть'),
+      el('button', {type: 'button', className: 'toast-take', dataset: {action: 'take-event', id: event.id}}, 'Взять'),
+      el('button', {type: 'button', className: 'toast-close', 'aria-label': 'Скрыть уведомление', dataset: {action: 'dismiss-toast', key}}, '×'));
+    if (event.sla) box.append(el('span', {className: 'sla-bar', dataset: {tone: event.badge.tone}, style: `width:${Math.round(event.sla.pct)}%`}));
     return box;
   }));
 }
 
-// Feed a newly received snapshot into the local event store. The first snapshot of a store
-// only records what already exists; later new episodes get one toast each.
+// Feed a newly received snapshot into the queue. The first snapshot of a run only records what
+// already exists; later new episodes get one toast each.
 function ingest() {
   if (!feed?.snapshot) return;
-  const known = incidents.observed > 0;
-  const opened = observeSnapshot(incidents, snapshotRows(), {fresh: isFresh(), clock: sourceClock(), wallS: performance.now() / 1000});
-  // A toast only for a vehicle the dispatcher is not looking at (E-1).
-  if (known) for (const id of opened) if (findIncident(incidents, id)?.tr_id !== selected) showToast(id);
+  let next = Q.observe(queue, snapshotRows(), {dataNow: dataNow(), fresh: isFresh(), wallS: wallNow()});
+  if (!queueWatched) for (const toast of next.toasts) next = Q.dismissToast(next, toast.key);
+  queueWatched = true;
+  queue = next;
 }
 
 // Header: where the data comes from and how fast it runs — all from `snapshot.run`.
@@ -1193,7 +1329,7 @@ function renderDiagnostics() {
       + `${snap.ingest.rejected_no_run != null ? ` · до регистрации прогона ${snap.ingest.rejected_no_run}` : ''}`]);
   }
   if (snap?.processing) rows.push(['Вызовы ML', `успешно ${text(snap.processing.ml_succeeded)} · ошибок ${text(snap.processing.ml_failed)} · недоступно ${text(snap.processing.ml_unavailable)}`]);
-  const events = incidentCounts(incidents);
+  const events = incidentCounts(store());
   rows.push(['События (локально)', `активных ${events.active} · мониторинг потерян ${events.monitoring_lost} · закончились ${events.resolved}`]);
   rows.push(['Revision', text(snap?.revision)], ['Объектов в снимке', String(snapshotRows().length)],
     ['Геооснова', mapStatus === 'unavailable' ? `недоступна: ${mapReason}` : manifest ? `OSM · ${manifest.date} · ${manifest.coverage}` : 'загрузка…']);
@@ -1236,11 +1372,12 @@ function resetView() {
   selected = null; hovered = null; filter = 'all'; query = ''; $('search').value = '';
   pendingOverview = true;
   epoch += 1;
-  incidents = createIncidentStore(`live${epoch}`);
-  eventsOpen = false;
+  queue = Q.createQueue(`live${epoch}`);
+  queueWatched = false;
+  cardMenu = null; bulkMenu = null; endedOpen = false;
+  gpsMarks = loadMarks();
   noteDraft = {id: null, text: ''};
   contact = {id: null, result: null};
-  clearToasts();
   clearRoute();
   routesFeed = {status: 'idle', data: null, at: 0, inFlight: false}; // the next poll loads the new run's routes
 }
@@ -1303,25 +1440,53 @@ function onPanelClick(event) {
   else if (action === 'close-card') choose(null, false);
   else if (action === 'focus') focusSelected();
   else if (action === 'open-event') openEvent(id);
-  else if (action === 'dismiss-toast') dismissToast(id);
-  else if (action === 'incident-workflow') {
-    const incident = findIncident(incidents, id);
-    if (!incident) return;
-    if (incident.workflow === 'in_work') reopen(incidents, id, sourceClock());
-    else acknowledge(incidents, id, sourceClock());
-    renderCard(); renderEvents();
-  } else if (action === 'contact-open') {
-    if (!findIncident(incidents, id)) return;
+  else if (action === 'dismiss-toast') dismissToast(control.dataset.key);
+  else if (action === 'take-event') takeEvent(id);
+  else if (action === 'untake-event') untakeEvent(id);
+  else if (action === 'unsnooze-event') unsnoozeEvent(id);
+  else if (action === 'snooze-event') snoozeEvent(id, Number(control.dataset.minutes));
+  else if (action === 'close-event') closeEvent(id, control.dataset.reason);
+  else if (action === 'card-menu') { cardMenu = cardMenu === control.dataset.menu ? null : control.dataset.menu; renderCard(); }
+  else if (action === 'gps-mark' || action === 'gps-unmark') setGpsMark(id, action === 'gps-mark');
+  else if (action === 'tab') setTab(control.dataset.tab);
+  else if (action === 'select-group') queueAction(q => Q.selectGroup(q, control.dataset.group, wallNow()));
+  else if (action === 'toggle-ended') { endedOpen = !endedOpen; renderEvents(); }
+  else if (action === 'read-ended') queueAction(q => Q.markEndedRead(q));
+  else if (action === 'bulk-take') queueAction(q => Q.take(q, q.selection, dataNow()));
+  else if (action === 'bulk-menu') { bulkMenu = bulkMenu === control.dataset.menu ? null : control.dataset.menu; renderEvents(); }
+  else if (action === 'bulk-snooze') queueAction(q => Q.snooze(q, q.selection, Number(control.dataset.minutes), dataNow()));
+  else if (action === 'bulk-close') queueAction(q => Q.close(q, q.selection, control.dataset.reason, dataNow()));
+  else if (action === 'bulk-clear') queueAction(q => Q.clearSelection(q));
+  else if (action === 'contact-open') {
+    if (!findIncident(store(), id)) return;
     contact = {id, result: null}; renderCard(); $('contact-copy')?.focus();
   } else if (action === 'contact-close') {
     contact = {id: null, result: null}; renderCard(); $('contact-open')?.focus();
   } else if (action === 'contact-copy') copyContactText(id);
 }
-for (const panel of ['vehicles', 'card', 'attention', 'events-list', 'toasts']) $(panel).addEventListener('click', onPanelClick);
+for (const panel of ['vehicles', 'card', 'attention', 'events-list', 'events-bulk', 'toasts']) $(panel).addEventListener('click', onPanelClick);
+for (const tab of document.querySelectorAll('.side-tabs [data-tab]')) tab.addEventListener('click', () => setTab(tab.dataset.tab));
+$('events-list').addEventListener('change', event => {
+  if (event.target.dataset.action === 'check-event') queueAction(q => Q.toggleSelected(q, event.target.dataset.id));
+});
+$('events-list').addEventListener('keydown', event => {
+  const item = event.target.closest?.('.event');
+  if (item && (event.key === 'Enter' || event.key === ' ') && event.target === item) { event.preventDefault(); openEvent(item.dataset.id); }
+});
+$('dim-nodata').addEventListener('click', () => {
+  dimNoData = !dimNoData;
+  $('dim-nodata').setAttribute('aria-pressed', String(dimNoData));
+  renderMapObjects();
+});
 $('vehicles').addEventListener('mouseover', event => setHovered(event.target.closest?.('.vehicle')?.dataset.id ?? null));
 $('vehicles').addEventListener('mouseenter', () => { listHeld = true; });
 $('vehicles').addEventListener('mouseleave', () => { listHeld = false; setHovered(null); renderList(); });
 $('card').addEventListener('change', event => {
+  if (event.target.dataset.action === 'toggle-step') {
+    const {id, step} = event.target.dataset;
+    queueAction(q => Q.toggleStep(q, id, step, dataNow()));
+    return;
+  }
   if (event.target.id !== 'shift-after-target') return;
   shiftAfterTarget = event.target.checked;
   renderRouteLayers(); renderMapObjects(); renderCard();
@@ -1334,23 +1499,34 @@ $('card').addEventListener('submit', event => {
   if (!event.target.classList.contains('note-form')) return;
   event.preventDefault();
   const input = $('note-input');
-  if (!addNote(incidents, event.target.dataset.id, input?.value, sourceClock())) { input?.focus(); return; }
+  if (!queueAction(q => Q.addNote(q, event.target.dataset.id, input?.value, dataNow()))) { input?.focus(); return; }
   noteDraft = {id: null, text: ''};
-  renderCard(); renderEvents();
   $('note-input')?.focus();
 });
 $('clear-selection').addEventListener('click', () => choose(null, false));
 $('overview').addEventListener('click', () => { follow = false; overview(true); followSelected(); });
 $('follow').addEventListener('click', () => { follow = true; lastFollowAt = 0; focusSelected(); followSelected(); });
-// «События» and «Диагностика» never open together (L-4).
-$('events-toggle').addEventListener('click', () => { eventsOpen = !eventsOpen; if (eventsOpen) $('diagnostics').open = false; renderEvents(); });
-$('diagnostics').addEventListener('toggle', () => { if ($('diagnostics').open && eventsOpen) { eventsOpen = false; renderEvents(); } });
-$('events-close').addEventListener('click', () => { eventsOpen = false; renderEvents(); });
+// The header «События» opens the queue tab (v2: the queue replaces the dropdown).
+$('events-toggle').addEventListener('click', () => { $('diagnostics').open = false; setTab('events'); });
+// Hotkeys (v2): J/K next/previous event, W take, S snooze 5 min, C close (reason menu), Esc.
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || event.target.closest?.('input, textarea')) return;
-  if (eventsOpen) { eventsOpen = false; renderEvents(); } else if (selected) choose(null, false);
+  const typing = event.target.closest?.('textarea, select, input:not([type=checkbox]):not([type=radio])');
+  if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+  const current = currentEventId();
+  const view = current ? Q.eventView(queue, current, wallNow()) : null;
+  if (event.code === 'KeyJ' || event.code === 'KeyK') {
+    const next = Q.nextEvent(queue, current, event.code === 'KeyJ' ? 1 : -1, wallNow());
+    const incident = next ? findIncident(store(), next) : null;
+    if (incident) { event.preventDefault(); openEvent(next); }
+  } else if (event.code === 'KeyW' && view?.can.take) { event.preventDefault(); takeEvent(current); }
+  else if (event.code === 'KeyS' && view?.can.snooze) { event.preventDefault(); snoozeEvent(current, Q.SNOOZE_DEFAULT_MIN); }
+  else if (event.code === 'KeyC' && view?.can.close) { event.preventDefault(); cardMenu = 'close'; renderCard(); }
+  else if (event.key === 'Escape') {
+    if (cardMenu || bulkMenu) { cardMenu = null; bulkMenu = null; renderCard(); renderEvents(); } else if (selected) choose(null, false);
+  }
 });
-setInterval(() => { renderStatus(); if ($('diagnostics').open) renderDiagnostics(); }, 1000);
+// SLA badges count down every second between polls.
+setInterval(() => { renderStatus(); renderEvents(); renderAttention(); renderToasts(); if ($('diagnostics').open) renderDiagnostics(); }, 1000);
 
 // The served build is shown in diagnostics so a presenter can confirm the browser has the new bundle.
 fetch('/api/build', {cache: 'no-store'}).then(r => r.ok ? r.json() : null).then(payload => { build = payload && typeof payload === 'object' ? payload : null; })

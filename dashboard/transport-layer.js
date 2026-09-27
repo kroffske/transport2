@@ -25,6 +25,13 @@ export function createTransportLayer() {
     }
     return sprites.get(key);
   };
+  // One dimmed copy per material and opacity, reused across polls.
+  const fadedCache = new Map();
+  const faded = (base, opacity) => {
+    const key = `${base.id}|${opacity}`;
+    if (!fadedCache.has(key)) { const copy = base.clone(); copy.opacity = opacity; fadedCache.set(key, copy); }
+    return fadedCache.get(key);
+  };
   return {
     id: 'transport-three', type: 'custom', renderingMode: '3d',
     onAdd(map, gl) {
@@ -37,11 +44,13 @@ export function createTransportLayer() {
     },
     // symbols: [{lon, lat, look, rotation?}], drawn in order (later on top). `rotation` is degrees
     // clockwise from north, for a direction mark drawn as its own symbol; the bus icon stays upright.
+    // symbols: [{lon, lat, look, rotation?, opacity?}] — opacity < 1 draws a quiet (dimmed) symbol.
     setSymbols(symbols) {
       if (!this.scene) return;
       for (const mesh of this.meshes) this.scene.remove(mesh);
       this.meshes = symbols.map((symbol, index) => {
-        const {material, box} = sprite(symbol.look);
+        const {material: base, box} = sprite(symbol.look);
+        const material = symbol.opacity < 1 ? faded(base, symbol.opacity) : base;
         const mesh = new THREE.Mesh(plane, material);
         mesh.userData = {coord: maplibregl.MercatorCoordinate.fromLngLat([symbol.lon, symbol.lat], 0), box};
         mesh.rotation.z = ((symbol.rotation ?? 0) * Math.PI) / 180; // with the y flip below, positive turns clockwise on screen
