@@ -4,10 +4,10 @@ type: runbook
 status: active
 owner: transport2
 tags: [ndtp, docker, integration, emulator]
-updated: "2026-09-27T13:16:28Z"
-context: "changes=XL files=52 task=T-7"
-update_event: "sync"
-source_commit: "074ba94415b2"
+updated: "2026-09-27T16:46:22Z"
+context: "changes=L files=20"
+update_event: "user_request"
+source_commit: "50e3b1cde8db"
 description: "Единое демо: официальный эмулятор NDTP, которого драйвер кормит GPS из данных проекта → Backend → ML → consumer → карта. Запуск одной командой, настройки, lifecycle, семантика маршрута и прогноза, ограничения, troubleshooting и проверки."
 ---
 
@@ -26,7 +26,7 @@ traffic.csv ─► driver ─POST /api/config─► emulator ─NDTP─► backe
 
 ## Что нужно заранее
 
-Образ эмулятора и данные validate не хранятся в Git (пути и SHA-256 — в [README](../../README.md#быстрый-путь-для-жюри)); модель, карта и собранный интерфейс `consumer/static/` хранятся. Пути указаны от корня репозитория.
+В Git входят оба CSV для демо (`traffic.csv`, `schedule_plan.csv`), модель, карта и собранный интерфейс `consumer/static/`. Вручную нужен только образ эмулятора (расположение — в [README](../../README.md#быстрый-путь-для-жюри)). Пути указаны от корня репозитория.
 
 | Что | Где | Проверка |
 |---|---|---|

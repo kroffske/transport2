@@ -24,9 +24,11 @@ __pycache__/
 /consumer/map/*.pmtiles
 !/consumer/map/moscow.pmtiles
 
-# Полная официальная раздача хранится локально, но не попадает в Git.
+# В Git входят только два CSV для запуска демо; остальная раздача локальная.
 data/train/
 data/test/
-data/validate/
+data/validate/*
+!data/validate/traffic.csv
+!data/validate/schedule_plan.csv
 data/labels/
 data/emulator/*.tar

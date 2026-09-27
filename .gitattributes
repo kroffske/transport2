@@ -1,0 +1,3 @@
+# Сохраняем официальные CSV побайтно при clone на любой ОС.
+/data/validate/traffic.csv -text whitespace=cr-at-eol
+/data/validate/schedule_plan.csv -text whitespace=cr-at-eol

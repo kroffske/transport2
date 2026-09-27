@@ -4,10 +4,10 @@ type: note
 status: active
 owner: transport2
 tags: [provenance, repository]
-updated: "2026-09-25T18:38:17Z"
-source_commit: "unknown"
+updated: "2026-09-27T16:46:23Z"
+source_commit: "50e3b1cde8db"
 update_event: "user_request"
-context: "changes=unknown files=0 task=T-1 git=unavailable"
+context: "changes=L files=20"
 description: "Карта механического переноса, исключений и происхождения файлов."
 ---
 
@@ -24,7 +24,7 @@ description: "Карта механического переноса, исклю
 | `README.md` | `data/README.md` | Скопирован без изменений |
 | `train/` | `data/train/` | Скопирован без изменений, исключён из Git |
 | `test/` | `data/test/` | Скопирован без изменений, исключён из Git |
-| `validate/` | `data/validate/` | Скопирован без изменений, исключён из Git |
+| `validate/` | `data/validate/` | Скопирован без изменений; `traffic.csv` и `schedule_plan.csv` включены в Git для запуска демо, остальные файлы исключены |
 | `labels/` | `data/labels/` | Скопирован без изменений, исключён из Git |
 | `sample_submission.csv` | `data/sample_submission.csv` | Скопирован без изменений |
 | `docs/Emulator-and-Telematic-Packets-Specification.md` | `data/docs/Emulator-and-Telematic-Packets-Specification.md` | Скопирован без изменений; каноническая спецификация |
