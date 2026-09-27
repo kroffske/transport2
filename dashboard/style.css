@@ -203,6 +203,11 @@ body:has(.diagnostics[open]) .toasts { visibility: hidden; }
   .layout > .card[data-open=false] { display: none; }
 }
 @media (max-width: 1399px) { .layout { --queue-w: 320px; } }
+/* Narrow windows (< 900 px): a 420 px panel beside the queue would leave no map, so the open card
+   covers the whole layout width (map and queue); × closes it. The page never scrolls sideways. */
+@media (max-width: 899px) {
+  .layout > .card { z-index: 6; left: 0; right: 0; width: auto; border-left: 0; }
+}
 /* Panels drawn over the map keep clear of the card panel (0 px when the card is a column). */
 .map-pane .map-tools { right: calc(14px + var(--card-overlay)); }
 .map-pane .toasts { right: calc(56px + var(--card-overlay)); }
