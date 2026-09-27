@@ -16,7 +16,7 @@ REFRESH: locus task sync-index
 | T-6 | feature | [Длительный поток NDTP и интерактивная карта задерж](T-6-2026-09-26-ndtp/task.md) | doing | p1 | codex | ░░░░░░░░ 0/8<br>☐ D01 — основной экран и проверенный base…<br>☐ D02A — повторяемый интерфейсный сценари…<br>+6 more… | Запущен native Pi workflow transport-live, run 20260926-163549-febd; task artif… |
 | T-7 | feature | [Единое демо: официальный эмулятор → ML → карта с м](T-7-2026-09-27-ml/task.md) | doing | p1 | claude | █████░░░░░ 7/13<br>☐ Road-first карта и символы (agent B, по…<br>☐ Документация и финальная matrix (agent …<br>+4 more… | 21:30 MSK: W14–W16 + UI v2 done and in main (last product commit 5e07f00). Fina… |
 | T-12 | research | [UX/UI-ревью диспетчерского дашборда: карточка авто](T-12-2026-09-27-ux-ui/task.md) | planned | p1 | claude | ░░░░░ 0/5<br>☐ Живой проход и скриншоты.<br>☐ Сверка сборки и реализации прогноза.<br>+3 more… |  |
-| T-20 | feature | [Демо: явный горизонт прогноза 10–15 мин и полное о](T-20-2026-09-27-10-15/task.md) | planned | p1 | claude | ░░░░ 0/4<br>☐ Горизонт прогноза на экране.<br>☐ Доказательство требования 10–15 мин.<br>+2 more… |  |
+| T-20 | feature | [Демо: явный горизонт прогноза 10–15 мин и полное о](T-20-2026-09-27-10-15/task.md) | planned | p1 | claude | ███░ 3/4<br>☐ Полное окно демо и скорость. | 22:35 PR kroffske/transport2#3 → main 0d8856d: строка «Прогноз на N мин вперёд … |
 | T-8 | feature | [Пакет сдачи формы и долговечные доказательства C1/](T-8-2026-09-27-c1-c3/task.md) | planned | p0 | claude | ░░░░░ 0/5<br>☐ C1 в форме (сейчас, до 18:30).<br>☐ Внешние файлы в README (сейчас, передат…<br>+3 more… | 21:30 MSK: form text final (docs/submission-form.md, links to main), clean clon… |
 
 ### Waiting / inactive (4)
@@ -47,4 +47,4 @@ REFRESH: locus task sync-index
 
 _`_archive/`: 4 closed tasks total_
 
-_Generated: 2026-09-27T19:14:17.446Z_
+_Generated: 2026-09-27T20:02:33.729Z_
